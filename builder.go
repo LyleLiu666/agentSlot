@@ -1,0 +1,301 @@
+package agentslot
+
+import (
+	"errors"
+	"fmt"
+	"reflect"
+	"strings"
+	"sync"
+)
+
+var (
+	// ErrBuilderFrozen means a successful build has made further mutation invalid.
+	ErrBuilderFrozen = errors.New("agentslot: builder is frozen")
+	// ErrInvalidModule means a module is nil or has an invalid ID.
+	ErrInvalidModule = errors.New("agentslot: invalid module")
+	// ErrDuplicateModule means two installed modules use the same ID.
+	ErrDuplicateModule = errors.New("agentslot: duplicate module")
+	// ErrRegistrationClosed means a module retained and reused its Registrar.
+	ErrRegistrationClosed = errors.New("agentslot: registration is closed")
+	// ErrInvalidContribution means a contribution is nil or carries a nil value.
+	ErrInvalidContribution = errors.New("agentslot: invalid contribution")
+	// ErrInvalidKey means a ManySlot contribution has an invalid key.
+	ErrInvalidKey = errors.New("agentslot: invalid contribution key")
+	// ErrSlotConflict means one slot ID was declared with different kinds or value types.
+	ErrSlotConflict = errors.New("agentslot: conflicting slot definition")
+	// ErrSlotOccupied means a OneSlot already has a contribution.
+	ErrSlotOccupied = errors.New("agentslot: one slot is already occupied")
+	// ErrDuplicateKey means a ManySlot already contains the contribution key.
+	ErrDuplicateKey = errors.New("agentslot: duplicate contribution key")
+	// ErrRequirementUnsatisfied means a build profile's minimum cardinality was not met.
+	ErrRequirementUnsatisfied = errors.New("agentslot: requirement is unsatisfied")
+)
+
+// Module is a registration and lifecycle ownership envelope. Its Register
+// method contributes implementations to typed slots; Module itself does not
+// identify the component ecosystem.
+type Module interface {
+	ID() string
+	Register(Registrar) error
+}
+
+// Registrar accepts contributions during one Module.Register call.
+// It becomes invalid when that call returns.
+type Registrar interface {
+	Contribute(...Contribution) error
+}
+
+type registeredValue struct {
+	owner string
+	key   string
+	value any
+}
+
+type slotRecord struct {
+	spec   slotSpec
+	values []registeredValue
+}
+
+type registryState struct {
+	byID map[string]*slotRecord
+}
+
+func newRegistryState() registryState {
+	return registryState{byID: make(map[string]*slotRecord)}
+}
+
+func (s registryState) clone() registryState {
+	cloned := newRegistryState()
+	for id, record := range s.byID {
+		values := make([]registeredValue, len(record.values))
+		copy(values, record.values)
+		cloned.byID[id] = &slotRecord{spec: record.spec, values: values}
+	}
+	return cloned
+}
+
+type installedModule struct {
+	id     string
+	module Module
+}
+
+// Builder transactionally installs modules and freezes them into a Plan.
+type Builder struct {
+	mu      sync.Mutex
+	state   registryState
+	modules []installedModule
+	frozen  bool
+}
+
+// NewBuilder returns an empty mutable composition builder.
+func NewBuilder() *Builder {
+	return &Builder{state: newRegistryState()}
+}
+
+// Install registers all contributions from module as one transaction.
+func (b *Builder) Install(module Module) error {
+	if isNil(module) {
+		return fmt.Errorf("%w: nil", ErrInvalidModule)
+	}
+	id := module.ID()
+	if id == "" || strings.TrimSpace(id) != id {
+		return fmt.Errorf("%w: ID %q must be non-empty without surrounding whitespace", ErrInvalidModule, id)
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.frozen {
+		return ErrBuilderFrozen
+	}
+	for _, installed := range b.modules {
+		if installed.id == id {
+			return fmt.Errorf("%w: %q", ErrDuplicateModule, id)
+		}
+	}
+
+	working := b.state.clone()
+	registration := &registration{owner: id, state: &working, open: true}
+	registerErr := module.Register(registration)
+	registration.open = false
+	if registerErr == nil {
+		registerErr = registration.failed
+	}
+	if registerErr != nil {
+		return fmt.Errorf("register module %q: %w", id, registerErr)
+	}
+
+	b.state = working
+	b.modules = append(b.modules, installedModule{id: id, module: module})
+	return nil
+}
+
+type registration struct {
+	owner  string
+	state  *registryState
+	open   bool
+	failed error
+}
+
+func (r *registration) Contribute(contributions ...Contribution) error {
+	if !r.open {
+		return ErrRegistrationClosed
+	}
+	if r.failed != nil {
+		return r.failed
+	}
+	for _, contribution := range contributions {
+		if err := r.apply(contribution); err != nil {
+			r.failed = err
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *registration) apply(contribution Contribution) error {
+	if isNil(contribution) {
+		return fmt.Errorf("%w: nil", ErrInvalidContribution)
+	}
+	data := contribution.contributionData()
+	if isNil(data.value) {
+		return fmt.Errorf("%w: slot %q has a nil value", ErrInvalidContribution, data.spec.id)
+	}
+	if data.spec.kind == manyKind && (data.key == "" || strings.TrimSpace(data.key) != data.key) {
+		return fmt.Errorf("%w: slot %q key %q must be non-empty without surrounding whitespace", ErrInvalidKey, data.spec.id, data.key)
+	}
+
+	record, exists := r.state.byID[data.spec.id]
+	if exists && (record.spec.kind != data.spec.kind || record.spec.valueType != data.spec.valueType) {
+		return fmt.Errorf(
+			"%w: %q is %s[%s], contribution declares %s[%s]",
+			ErrSlotConflict,
+			data.spec.id,
+			record.spec.kind,
+			record.spec.valueType,
+			data.spec.kind,
+			data.spec.valueType,
+		)
+	}
+	if !exists {
+		record = &slotRecord{spec: data.spec}
+		r.state.byID[data.spec.id] = record
+	}
+
+	switch data.spec.kind {
+	case oneKind:
+		if len(record.values) != 0 {
+			return fmt.Errorf("%w: slot %q is provided by module %q", ErrSlotOccupied, data.spec.id, record.values[0].owner)
+		}
+	case manyKind:
+		for _, registered := range record.values {
+			if registered.key == data.key {
+				return fmt.Errorf("%w: slot %q key %q is provided by module %q", ErrDuplicateKey, data.spec.id, data.key, registered.owner)
+			}
+		}
+	case chainKind:
+		// Registration order is the chain order.
+	default:
+		return fmt.Errorf("%w: slot %q has unknown kind", ErrInvalidContribution, data.spec.id)
+	}
+
+	record.values = append(record.values, registeredValue{owner: r.owner, key: data.key, value: data.value})
+	return nil
+}
+
+func isNil(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
+}
+
+// Requirement sets the minimum number of contributions for one slot in a
+// particular build profile.
+type Requirement struct {
+	spec    slotSpec
+	minimum int
+}
+
+// RequireOne makes a OneSlot mandatory for a build profile.
+func RequireOne[T any](slot OneSlot[T]) Requirement {
+	return Requirement{spec: slot.spec, minimum: 1}
+}
+
+// RequireMany sets a minimum contribution count for a ManySlot.
+func RequireMany[T any](slot ManySlot[T], minimum int) Requirement {
+	if minimum < 1 {
+		panic("agentslot: RequireMany minimum must be positive")
+	}
+	return Requirement{spec: slot.spec, minimum: minimum}
+}
+
+// RequireChain sets a minimum contribution count for a ChainSlot.
+func RequireChain[T any](slot ChainSlot[T], minimum int) Requirement {
+	if minimum < 1 {
+		panic("agentslot: RequireChain minimum must be positive")
+	}
+	return Requirement{spec: slot.spec, minimum: minimum}
+}
+
+// Plan is an immutable set of resolved components and installed modules.
+type Plan struct {
+	state   registryState
+	modules []installedModule
+
+	startMu        sync.Mutex
+	startAttempted bool
+}
+
+// Build validates requirements and freezes the builder after success.
+// A failed build remains mutable so missing components can be installed.
+func (b *Builder) Build(requirements ...Requirement) (*Plan, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.frozen {
+		return nil, ErrBuilderFrozen
+	}
+	for _, requirement := range requirements {
+		record := b.state.byID[requirement.spec.id]
+		count := 0
+		if record != nil {
+			if record.spec.kind != requirement.spec.kind || record.spec.valueType != requirement.spec.valueType {
+				return nil, fmt.Errorf("%w: requirement for slot %q conflicts with its installed definition", ErrSlotConflict, requirement.spec.id)
+			}
+			count = len(record.values)
+		}
+		if count < requirement.minimum {
+			return nil, fmt.Errorf(
+				"%w: slot %q requires at least %d contribution(s), got %d",
+				ErrRequirementUnsatisfied,
+				requirement.spec.id,
+				requirement.minimum,
+				count,
+			)
+		}
+	}
+
+	b.frozen = true
+	modules := make([]installedModule, len(b.modules))
+	copy(modules, b.modules)
+	return &Plan{state: b.state.clone(), modules: modules}, nil
+}
+
+func (p *Plan) find(spec slotSpec) (*slotRecord, bool) {
+	if p == nil {
+		panic("agentslot: nil Plan")
+	}
+	record, ok := p.state.byID[spec.id]
+	if !ok {
+		return nil, false
+	}
+	if record.spec.kind != spec.kind || record.spec.valueType != spec.valueType {
+		panic(fmt.Sprintf("agentslot: slot %q was resolved with a conflicting definition", spec.id))
+	}
+	return record, true
+}
