@@ -2,7 +2,15 @@
 
 ## Purpose
 
-AgentSlot defines how independently developed agent components are registered, validated, resolved, started, and stopped. It does not define how an agent reasons, calls a model, executes a tool, stores a session, or renders a UI.
+AgentSlot defines both the standard map of independently replaceable agent
+components and the generic protocol by which those components are registered,
+validated, resolved, started, and stopped. The composition core does not
+implement how an agent reasons, calls a model, executes a tool, stores history,
+or renders a UI. AgentSlot-owned leaf contract packages standardize those
+boundaries only as their portability is proven.
+
+The authoritative inventory of boundaries, Slot IDs, cardinality, profile
+requirements, and maturity is the [Standard Component Map](../COMPONENT_MAP.md).
 
 The central distinction is:
 
@@ -124,7 +132,11 @@ AgentSlot composition core
 
 The core must remain usable without an LLM SDK, tool SDK, database, UI framework, or wire protocol.
 
-Standard component contracts will be introduced in leaf packages after real adapters establish common behavior. An adapter may depend on both the contract package and an external SDK; the core never imports the adapter.
+Standard component contracts are introduced in AgentSlot-owned leaf packages
+after real implementations establish common behavior. An adapter may depend on
+both the contract package and an external SDK; the core never imports the
+adapter. Previous-generation SDK interfaces provide evidence and compatibility
+paths, but they do not replace the standard component map.
 
 ## Interface admission rule
 
@@ -148,13 +160,16 @@ The composition API is ready for a stable release only after:
 
 Until those proofs exist, keep domain contracts outside the core and keep the plan schema at `v0`.
 
-## Deferred capabilities
+## Current implementation frontier
 
-The first foundation intentionally defers:
+The published composition foundation currently defers implementation of:
 
 - hierarchical scopes and per-session generations;
 - configuration schemas and secret resolution;
 - out-of-process discovery or loading;
-- standard model, tool, state, policy, and presentation method contracts.
+- the mapped standard domain method contracts and their conformance suites.
 
-These are added only when a real adapter needs them. Dependency order controls lifecycle; registration order continues to control `Many` enumeration and `Chain` semantics.
+These are implemented in the order and maturity process defined by the
+[Standard Component Map](../COMPONENT_MAP.md). Dependency order controls
+lifecycle; registration order continues to control `Many` enumeration and
+`Chain` semantics.

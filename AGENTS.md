@@ -4,7 +4,14 @@ AgentSlot exists to reduce composition entropy across agent projects. Keep the c
 
 ## Governing objective
 
-AgentSlot does not surpass another harness by accumulating dozens of interfaces. That would reproduce the structural entropy this project exists to remove. It succeeds by making **component ecosystems, cardinality, dependencies, lifecycle, and the final assembled plan explicit, inspectable, and exportable while keeping the core small**. Reject additions that increase API surface without making one of those properties clearer or mechanically enforceable.
+AgentSlot's primary architectural asset is its standard component interface
+map: it tells agent developers which responsibilities can be implemented and
+replaced independently. Its score is the quality and proven portability of
+those component ecosystems, not the raw number of interfaces. Keep the generic
+composition core small while making **component boundaries, cardinality,
+dependencies, lifecycle, conformance maturity, and the final assembled plan
+explicit, inspectable, and exportable**. Reject additions that increase API
+surface without clarifying or mechanically enforcing one of those properties.
 
 ## Non-negotiable design rules
 
@@ -13,7 +20,12 @@ AgentSlot does not surpass another harness by accumulating dozens of interfaces.
 - `Plan.Describe()` may expose IDs, kinds, types, keys, ownership, requirements, and order. It must never expose component values, configurations, credentials, or other secrets.
 - Keep the composition core free of product, provider, UI, storage, and transport dependencies.
 - Keep core documentation product-neutral. Describe capability roles here; document named framework migrations and adapters in their consuming repositories.
-- Do not add a standard domain interface from one implementation. Require two independent implementations, one real consumer, and a conformance suite.
+- Keep `COMPONENT_MAP.md` as the authoritative inventory and maturity scorecard
+  for standard Slot ecosystems. Do not describe a mapped responsibility as an
+  implemented interface.
+- Do not call a standard domain interface proven from one implementation.
+  Require two independent implementations, one real consumer, and a
+  conformance suite to reach proven maturity.
 - Keep profile requirements explicit. Do not silently select a loop, provider, tool, policy arbiter, or execution environment.
 - Registration is transactional. Startup failure rolls back in reverse order. Shutdown attempts every started module.
 - Prefer compile-time typing. Reflection is limited to internal slot-definition identity checks.

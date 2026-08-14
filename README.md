@@ -2,15 +2,26 @@
 
 Typed component slots and deterministic composition for agent systems.
 
+> **Start with the [AgentSlot Standard Component Map](COMPONENT_MAP.md).** It is
+> the authoritative inventory of customizable agent components, their Slot
+> IDs, cardinality, profile requirements, and implementation maturity.
+
 > A module unifies registration and lifecycle. A slot defines the component ecosystem, interface, cardinality, and ordering rule.
 
 An agent loop and a tool are not interchangeable plugins. A runnable profile normally needs exactly one selected loop, while it can accept many tools. AgentSlot makes that difference explicit and validates the assembled system before startup.
 
 ## Status
 
-AgentSlot is a pre-1.0 foundation. Tagged releases are consumable through Go modules, while the standard model, tool, session, policy, and presentation interfaces remain deliberately outside the core until their admission evidence exists. Every published tag is immutable; compatible fixes and additions receive a new semantic version.
+AgentSlot is a pre-1.0 foundation. Tagged releases are consumable through Go
+modules. The composition core works today; the standard domain interface map is
+normative, while its method-level contracts are being admitted in evidence-led
+stages. Every published tag is immutable; compatible fixes and additions
+receive a new semantic version.
 
-The project will not surpass mature harnesses by accumulating interfaces. Its target is smaller and stricter: component ecosystems, cardinality, dependencies, lifecycle, and the final assembled plan must all be explicit, inspectable, and exportable.
+The project's architectural result is the quality of its component map, not a
+large interface count. Each accepted ecosystem must have a clear boundary,
+cardinality, dependency model, lifecycle, conformance suite, and inspectable
+place in the final assembled plan.
 
 ## Core model
 
@@ -42,6 +53,10 @@ var (
 	ToolSlot      = agentslot.Many[Tool]("tool")
 )
 ```
+
+These declarations are application-local examples. The maturity of
+AgentSlot-owned standard domain contracts is tracked separately in the
+[component map](COMPONENT_MAP.md).
 
 Modules then contribute implementations:
 
@@ -158,32 +173,40 @@ Constructors may be retried after a failed build, so they must not start
 goroutines, open listeners, or acquire non-repeatable resources. Those effects
 belong to module lifecycle methods after a plan has been built successfully.
 
-## Intended standard component families
+## Standard component map
 
-The following ecosystem classification is the design target. Method-level contracts will be admitted only after independent implementations prove the common semantics.
+The [AgentSlot Standard Component Map](COMPONENT_MAP.md) is the source of truth
+for the agent architecture. It currently maps runtime, model, tools, context,
+history, memory, execution, policy, multi-agent workflow, gateway, billing, and
+operations ecosystems.
 
-| Family | Typical cardinality |
-| --- | --- |
-| Agent driver / loop | one selected implementation |
-| Model provider | many keyed providers; explicit selection |
-| Tool / skill / command | many keyed implementations |
-| Execution environment | one selected world per runtime scope |
-| Context and state | scoped stores and ordered context contributors |
-| Policy and human interaction | ordered policy contributors plus one final arbiter |
-| Subagent and workflow | many providers plus one scheduler per scope |
-| Presentation and external protocol | many keyed adapters |
+A runnable standard LLM agent requires exactly one agent loop, exactly one
+session manager, at least one model provider, and at least one interaction
+entrypoint. Tools and persistent history are optional globally; stricter
+profiles may require them.
 
-A proposed standard interface must have at least two independent implementations, one real consumer, and a conformance suite. Until then it stays in an adapter or experimental package. This rule prevents a universal API from becoming either a lowest-common-denominator wrapper or a collection of product-specific assumptions.
+Mapping a Slot and standardizing its Go method contract are different maturity
+steps. A proposed method-level interface needs two independent implementations,
+one branch-free real consumer, and a conformance suite before it is described
+as proven portable. The map records this evidence instead of hiding unfinished
+coverage behind a family name.
 
-## Relationship to runtime SDKs
+## Relationship to previous-generation SDKs
 
-AgentSlot is not another agent runtime SDK:
+AgentSlot defines the portable component boundaries and, as evidence permits,
+the standard domain contracts. Existing runtime, tool, session, memory, and
+gateway SDKs remain valuable implementation sources and compatibility targets:
 
-- Runtime SDKs own loop execution and runtime types. An adapter can expose a runner through an AgentSlot driver slot.
-- Domain SDKs for tools, sessions, memory, and gateways own their behavior. They can contribute implementations without being absorbed into this module.
-- Frameworks and applications choose a profile, install modules, and own product defaults.
+- an SDK can expose several independent AgentSlot components while preserving
+  its existing assembly API;
+- current products can keep iterating while additive adapters support new
+  AgentSlot assemblies;
+- provider- and product-specific behavior stays in the SDK or adapter rather
+  than leaking into the generic composition core.
 
-The dependency direction stays one-way: AgentSlot core imports no product or SDK. Adapters import AgentSlot and the SDK they connect.
+The core imports no product or SDK. Adapters depend on AgentSlot and the SDK
+they connect; applications select a profile, modules, configuration, and
+defaults.
 
 ## Development
 
