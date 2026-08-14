@@ -7,6 +7,12 @@ Typed component slots and deterministic composition for agent systems.
 > authoritative inventory of customizable agent components, their Slot IDs,
 > cardinality, profile requirements, and implementation maturity.
 
+> **Implementation roadmap:**
+> [AgentSlot 组件接口标准化路线图（中文）](ROADMAP.zh-CN.md). It defines the
+> business outcomes, admission rules, reference-agent layers, implementation
+> order, and release gate for turning mapped responsibilities into proven
+> component ecosystems.
+
 > A module unifies registration and lifecycle. A slot defines the component ecosystem, interface, cardinality, and ordering rule.
 
 An agent loop and a tool are not interchangeable plugins. A runnable profile normally needs exactly one selected loop, while it can accept many tools. AgentSlot makes that difference explicit and validates the assembled system before startup.
