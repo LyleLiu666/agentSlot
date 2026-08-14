@@ -22,6 +22,7 @@ Current repository reality:
 | Inventory | Count |
 | --- | ---: |
 | Mapped standard component ecosystems | 40 |
+| Standardized domain vocabularies | 2 |
 | Contracted AgentSlot-owned domain interfaces | 0 |
 | Conformant component ecosystems | 0 |
 | Proven component ecosystems | 0 |
@@ -126,6 +127,19 @@ profile.
 | `model.catalog` | `ModelCatalog` | `Many` | optional | Describes available models and their declared capabilities without exposing credentials. | Mapped |
 | `model.middleware` | `ModelMiddleware` | `Chain` | optional | Applies observable request/response concerns without changing provider identity. | Mapped |
 
+AgentSlot fixes the finite model vocabulary in the
+[`model` package](model):
+
+- input and output modalities are exactly `text`, `image`, and `audio`;
+- every selected model declares input and output modality sets separately;
+- tool calling is a separate capability because it is an action, not a media
+  modality.
+
+Provider wire blocks, model IDs, context limits, rate limits, media transport,
+and vendor-specific features remain implementation declarations. Adding a new
+standard modality is an explicit future standard revision, not a free-form
+string accepted by current adapters.
+
 OpenAI Chat Compatible is a required official adapter, not the standard
 contract itself. The provider-neutral contract must not force Anthropic,
 OpenAI Responses, local inference, or future protocols into OpenAI-specific
@@ -139,6 +153,20 @@ wire objects.
 | `skill` | `Skill` | `Many` | optional | Supplies discoverable instructions, resources, or component bundles without pretending natural-language keyword matching is semantic routing. | Mapped |
 | `tool.middleware` | `ToolMiddleware` | `Chain` | optional | Wraps invocation for policy, telemetry, normalization, or recovery. | Mapped |
 | `tool.output-store` | `ToolOutputStore` | `One` | optional | Stores oversized or binary tool results and returns stable references. | Mapped |
+
+The [`tool` package](tool) fixes the portable tool-call vocabulary:
+
+- every model-facing tool definition has a self-contained JSON Schema Draft
+  2020-12 input schema;
+- the schema root is a closed object (`type: object` and
+  `additionalProperties: false`), while internal references remain available;
+- tool-call arguments are JSON instance values and must validate against that
+  schema before invocation;
+- call ID, tool name, and argument values are distinct from the schema.
+
+This subset can be used as an OpenAPI 3.1 Schema Object, but a tool is not
+required to be an HTTP API. Provider adapters may declare smaller supported
+keyword and size limits; they may not reinterpret the standard schema.
 
 Common file read/write/edit and controlled shell execution belong in an
 official optional component pack. They must remain disableable, and their risk

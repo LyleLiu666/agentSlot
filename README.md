@@ -192,6 +192,12 @@ one branch-free real consumer, and a conformance suite before it is described
 as proven portable. The map records this evidence instead of hiding unfinished
 coverage behind a family name.
 
+The first fixed domain vocabularies are available in the [`model`](model) and
+[`tool`](tool) leaf packages: model input/output modalities are text, image, and
+audio; model-facing tool inputs use self-contained JSON Schema Draft 2020-12.
+These stable value types do not imply that the complete `ModelProvider` or
+`Tool` component interfaces have reached contracted maturity.
+
 ## Relationship to previous-generation SDKs
 
 AgentSlot defines the portable component boundaries and, as evidence permits,

@@ -20,6 +20,10 @@ surface without clarifying or mechanically enforcing one of those properties.
 - `Plan.Describe()` may expose IDs, kinds, types, keys, ownership, requirements, and order. It must never expose component values, configurations, credentials, or other secrets.
 - Keep the composition core free of product, provider, UI, storage, and transport dependencies.
 - Keep core documentation product-neutral. Describe capability roles here; document named framework migrations and adapters in their consuming repositories.
+- Fix finite, cross-provider semantic vocabulary in AgentSlot leaf packages;
+  keep provider wire formats, configuration, limits, and product policy in
+  implementations and adapters. Do not make stable semantics configurable to
+  avoid an architectural decision.
 - Keep `COMPONENT_MAP.md` as the authoritative inventory and maturity scorecard
   for standard Slot ecosystems. Do not describe a mapped responsibility as an
   implemented interface.

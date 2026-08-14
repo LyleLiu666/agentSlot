@@ -138,6 +138,28 @@ both the contract package and an external SDK; the core never imports the
 adapter. Previous-generation SDK interfaces provide evidence and compatibility
 paths, but they do not replace the standard component map.
 
+## Standardization boundary
+
+AgentSlot deliberately fixes a small semantic vocabulary when all of the
+following are true:
+
+1. the concept has the same meaning across independent implementations;
+2. adapters cannot interoperate if every implementation names or shapes it
+   differently;
+3. the useful set is finite and changes much more slowly than providers or
+   products;
+4. a future addition can be made as an explicit standard revision.
+
+Model media modality is one such boundary: `text`, `image`, and `audio` are
+standard values, while provider wire blocks and model IDs are not. Tool input
+is another: JSON Schema Draft 2020-12 is standard, while provider-specific
+keyword and size limits are not.
+
+Replaceable behavior, policy, storage, transport, and provider implementation
+remain Slot components. Stable semantics are not made configurable merely to
+avoid making an architectural decision; volatile implementation details are
+not frozen merely because one SDK already chose a representation.
+
 ## Interface admission rule
 
 A method-level component contract becomes standard only when all of the following exist:

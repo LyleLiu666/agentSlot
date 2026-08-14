@@ -21,6 +21,7 @@
 | 资产 | 数量 |
 | --- | ---: |
 | 已映射的标准组件生态位 | 40 |
+| 已标准化的领域词汇 | 2 |
 | 已定义契约的 AgentSlot 自有领域接口 | 0 |
 | 通过一致性验证的组件生态位 | 0 |
 | 已由独立实现证明的组件生态位 | 0 |
@@ -115,6 +116,16 @@ flowchart LR
 | `model.catalog` | `ModelCatalog` | `Many` | 可选 | 描述可用模型及其声明能力，但不暴露凭证。 | 已映射 |
 | `model.middleware` | `ModelMiddleware` | `Chain` | 可选 | 在不改变 Provider 身份的前提下处理可观察的请求/响应横切逻辑。 | 已映射 |
 
+AgentSlot 已在 [`model` 包](model)中固定以下有限领域词汇：
+
+- 输入和输出模态严格限定为 `text`、`image`、`audio`；
+- 每个选中的模型必须分别声明输入模态集合和输出模态集合；
+- 工具调用是独立能力，因为它是操作，不是媒体模态。
+
+Provider 网络数据块、模型 ID、上下文限制、频率限制、媒体传输方式和供应商专属
+能力，继续由具体实现声明。未来如果增加新的标准模态，必须明确升级标准；当前
+适配器不能通过接受任意字符串偷偷扩展模态。
+
 OpenAI Chat Compatible 是必须提供的官方适配器，不是标准契约本身。供应商
 无关契约不能强迫 Anthropic、OpenAI Responses、本地推理或未来协议使用
 OpenAI 专属的网络数据结构。
@@ -127,6 +138,19 @@ OpenAI 专属的网络数据结构。
 | `skill` | `Skill` | `Many` | 可选 | 提供可发现的指令、资源或组件包，不能用自然语言关键字匹配冒充语义路由。 | 已映射 |
 | `tool.middleware` | `ToolMiddleware` | `Chain` | 可选 | 为调用过程增加策略、遥测、标准化或恢复处理。 | 已映射 |
 | `tool.output-store` | `ToolOutputStore` | `One` | 可选 | 存储超大或二进制工具结果，并返回稳定引用。 | 已映射 |
+
+[`tool` 包](tool)已经固定可移植的工具调用词汇：
+
+- 每个面向模型的工具定义都必须提供自包含的 JSON Schema Draft 2020-12
+  输入 Schema；
+- Schema 顶层必须是封闭对象（`type: object` 且
+  `additionalProperties: false`），允许使用内部引用；
+- 工具调用参数是 JSON 实例值，执行前必须通过对应 Schema 校验；
+- Call ID、工具名、参数值与 Schema 是四项不同的数据。
+
+该子集可以直接作为 OpenAPI 3.1 Schema Object 使用，但不能因此要求工具必须
+是 HTTP API。Provider 适配器可以声明自己支持的更小关键字子集和大小限制，
+但不能重新解释标准 Schema。
 
 通用文件读取、写入、编辑以及受控 Shell 执行，应放在官方可选组件包中。
 这些能力必须可以关闭；风险决策必须通过策略/审批组件完成，不能检查具体 UI
