@@ -8,7 +8,7 @@ An agent loop and a tool are not interchangeable plugins. A runnable profile nor
 
 ## Status
 
-AgentSlot is a pre-release foundation. The composition core works and is tested; standard model, tool, session, policy, and presentation interfaces are not frozen yet. Public compatibility starts only with the first tagged release.
+AgentSlot is a pre-1.0 foundation. Tagged releases are consumable through Go modules, while the standard model, tool, session, policy, and presentation interfaces remain deliberately outside the core until their admission evidence exists. Every published tag is immutable; compatible fixes and additions receive a new semantic version.
 
 The project will not surpass mature harnesses by accumulating interfaces. Its target is smaller and stricter: component ecosystems, cardinality, dependencies, lifecycle, and the final assembled plan must all be explicit, inspectable, and exportable.
 
@@ -16,6 +16,7 @@ The project will not surpass mature harnesses by accumulating interfaces. Its ta
 
 | Concept | Meaning |
 | --- | --- |
+| `Application` | Named root host that automatically mounts its module list and provides standard build, start, and run entry points. |
 | `Module` | Registration and lifecycle owner. A module may contribute to several slots. |
 | `One[T]` | Zero or one implementation. A profile can require exactly one with `RequireOne`. |
 | `Many[T]` | Zero or more implementations with unique keys, such as tools or model providers. |
@@ -86,17 +87,40 @@ have been validated. Their resolver can read only the owning module's declared
 requirements and closes when the constructor returns. Constructors prepare
 components; lifecycle resources still belong in `Start` and `Stop`.
 
-The product chooses the required profile:
+Every product declares its name, module list, and required profile through the
+same application entry:
 
 ```go
-builder := agentslot.NewBuilder()
-_ = builder.Install(bundle)
-
-plan, err := builder.Build(
+application := agentslot.NewApplication(
+	"my-agent",
+	[]agentslot.Module{
+		runnerModule,
+		modelModule,
+		shellToolModule,
+	},
 	agentslot.RequireOne(AgentLoopSlot),
 	agentslot.RequireMany(ToolSlot, 1),
 )
+
+plan, err := application.Build()
+runtime, err := application.Start(ctx)
+defer runtime.Stop(shutdownCtx)
+
+loop, _ := agentslot.Get(plan, AgentLoopSlot)
 ```
+
+`Application.Start` also calls `Build` automatically when the caller does not
+need a separate inspection step. `Application.Run` starts a service-style
+application, waits for context cancellation, and shuts it down. Every product
+therefore uses the same `Build`, `Start`, and `Stop` control flow; only its name,
+modules, configuration, and profile differ. `Builder` remains the lower-level
+composition primitive used by the application host.
+
+The module list is explicit, but mounting it is automatic during `Build`.
+AgentSlot does not scan packages or use `init()` side effects. Declared
+constructors automatically receive the slot contributions they depend on, so a
+tool module can join the selected loop without a product-level bootstrap
+function wiring the concrete tool into the concrete loop.
 
 A module can declare dependencies without naming their implementation modules:
 
@@ -123,6 +147,7 @@ See the complete runnable [basic example](examples/basic/main.go).
 - A successful build freezes the builder; a failed build can be corrected and retried.
 - Build-time constructors resolve only declared slot dependencies; failed
   construction does not publish a plan or freeze the builder.
+- `Application.Start` builds automatically when `Build` was not called explicitly.
 - Modules start in stable dependency order; independent modules retain installation precedence.
 - A failed start stops every previously started module in reverse order.
 - Normal shutdown attempts every started module in reverse order and joins their errors.

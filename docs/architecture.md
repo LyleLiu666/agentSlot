@@ -6,6 +6,7 @@ AgentSlot defines how independently developed agent components are registered, v
 
 The central distinction is:
 
+- An **application** is the root host that selects a profile and mounts modules.
 - A **module** owns registration and lifecycle.
 - A **slot** owns one component interface and its composition rules.
 
@@ -13,13 +14,15 @@ One module may provide a model provider, several tools, and a hook. Those contri
 
 ## Composition states
 
-1. `Builder` is mutable and accepts modules.
+1. `Application` declares one name, module list, and profile. `Build`
+   automatically mounts that list into its internal mutable `Builder`.
 2. Each `Module.Register` call works against an isolated registry copy.
 3. `Build` validates profile requirements and every module's optional `RequiredSlots` declaration.
 4. Slot providers create dependency edges; a stable topological sort rejects cycles before construction or startup.
 5. Deferred contributions are constructed in dependency order through a resolver limited to the owning module's declared requirements.
 6. Successful build returns an immutable `Plan` and freezes the builder.
-7. `Plan.Start` creates one `Runtime` and starts lifecycle-aware modules in dependency order.
+7. `Application.Start` builds when needed, then delegates to `Plan.Start`.
+   `Plan.Start` creates one `Runtime` and starts lifecycle-aware modules in dependency order.
 8. `Runtime.Stop` releases them in reverse order.
 
 A failed module registration never leaks partial contributions. A failed
@@ -28,7 +31,31 @@ partially materialized plan. Constructors can therefore run again on a later
 build attempt and must remain free of lifecycle side effects. A failed start
 rolls back only modules whose `Start` completed successfully.
 
-The current scope unit is one plan. A product creates a separate builder and plan for each independently owned runtime or session. Hierarchical inheritance is deferred until real products prove that separate plans plus explicit parent inputs are insufficient.
+The current scope unit is one plan. A product creates a separate application
+(or lower-level builder and plan) for each independently owned runtime or
+session. Hierarchical inheritance is deferred until real products prove that
+separate plans plus explicit parent inputs are insufficient.
+
+## Application host
+
+`Application` is deliberately a thin owner of module selection, build, and
+startup. It does not add another registry beside the plan:
+
+- `NewApplication` copies the named product's complete module list and profile.
+- `Build` automatically installs every declared module and all of its contributions.
+- `Build` is idempotent after success and returns the same immutable plan.
+- `Start` automatically builds, then starts the plan once.
+- `Run` treats context cancellation as a normal shutdown request.
+- `Runtime.Plan` exposes the exact plan owned by the running application.
+
+There is no package scan, global self-registration, hidden field injection, or
+runtime service locator. Every product uses the same `Build`, `Start`, and
+`Stop` entry points; only its name, declared modules, configuration, and profile
+differ. Automatic mounting means both that `Build` installs the declared module
+list and that explicit build-time constructors receive the contributions named
+by `RequiredSlots`. Importing a package alone never changes the application.
+This keeps the host convenient while preserving a complete, inspectable
+assembly before any lifecycle side effect begins.
 
 ## Slot kinds
 

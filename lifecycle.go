@@ -27,6 +27,7 @@ type activeModule struct {
 // Runtime owns the successfully started module lifecycles for one Plan.
 type Runtime struct {
 	mu      sync.Mutex
+	plan    *Plan
 	active  []activeModule
 	stopped bool
 	stopErr error
@@ -61,7 +62,15 @@ func (p *Plan) Start(ctx context.Context) (*Runtime, error) {
 		}
 		active = append(active, activeModule{id: installed.id, lifecycle: lifecycle})
 	}
-	return &Runtime{active: active}, nil
+	return &Runtime{plan: p, active: active}, nil
+}
+
+// Plan returns the immutable assembled plan owned by this runtime.
+func (r *Runtime) Plan() *Plan {
+	if r == nil {
+		return nil
+	}
+	return r.plan
 }
 
 func rollbackStart(ctx context.Context, active []activeModule, failedID string, startErr error) error {
