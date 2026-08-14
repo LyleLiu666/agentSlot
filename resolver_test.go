@@ -1,0 +1,213 @@
+package agentslot_test
+
+import (
+	"errors"
+	"reflect"
+	"testing"
+
+	agentslot "github.com/LyleLiu666/agentSlot"
+)
+
+func TestConstructorsResolveOnlyDeclaredDependenciesDuringBuild(t *testing.T) {
+	model := agentslot.Many[string]("model")
+	tools := agentslot.Many[string]("tool")
+	hooks := agentslot.Chain[string]("hook")
+	store := agentslot.One[string]("store")
+	driver := agentslot.One[string]("driver")
+
+	builder := agentslot.NewBuilder()
+	consumer := &dependentModule{
+		testModule: testModule{
+			id: "driver",
+			contributions: []agentslot.Contribution{
+				agentslot.SetWith(driver, func(resolver agentslot.Resolver) (string, error) {
+					selected, err := agentslot.ResolveKey(resolver, model, "selected")
+					if err != nil {
+						return "", err
+					}
+					resolvedTools, err := agentslot.ResolveMany(resolver, tools)
+					if err != nil {
+						return "", err
+					}
+					resolvedHooks, err := agentslot.ResolveChain(resolver, hooks)
+					if err != nil {
+						return "", err
+					}
+					resolvedStore, err := agentslot.ResolveOne(resolver, store)
+					if err != nil {
+						return "", err
+					}
+					return selected + ":" + resolvedTools[0].Value + ":" + resolvedHooks[0] + ":" + resolvedStore, nil
+				}),
+			},
+		},
+		requirements: []agentslot.Requirement{
+			agentslot.RequireKey(model, "selected"),
+			agentslot.RequireMany(tools, 1),
+			agentslot.RequireChain(hooks, 1),
+			agentslot.RequireOne(store),
+		},
+	}
+	for _, module := range []agentslot.Module{
+		consumer,
+		testModule{id: "model", contributions: []agentslot.Contribution{agentslot.AddWith(model, "selected", func(agentslot.Resolver) (string, error) { return "model", nil })}},
+		testModule{id: "tool", contributions: []agentslot.Contribution{agentslot.AddWith(tools, "echo", func(agentslot.Resolver) (string, error) { return "echo", nil })}},
+		testModule{id: "hook", contributions: []agentslot.Contribution{agentslot.AppendWith(hooks, func(agentslot.Resolver) (string, error) { return "audit", nil })}},
+		testModule{id: "store", contributions: []agentslot.Contribution{agentslot.Set(store, "memory")}},
+	} {
+		if err := builder.Install(module); err != nil {
+			t.Fatalf("install %s: %v", module.ID(), err)
+		}
+	}
+
+	plan, err := builder.Build(agentslot.RequireOne(driver))
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	got, ok := agentslot.Get(plan, driver)
+	if !ok || got != "model:echo:audit:memory" {
+		t.Fatalf("driver = %q, %v", got, ok)
+	}
+}
+
+func TestConstructorCannotResolveUndeclaredSlot(t *testing.T) {
+	model := agentslot.One[string]("model")
+	driver := agentslot.One[string]("driver")
+	builder := agentslot.NewBuilder()
+	for _, module := range []agentslot.Module{
+		testModule{id: "model", contributions: []agentslot.Contribution{agentslot.Set(model, "model")}},
+		testModule{id: "driver", contributions: []agentslot.Contribution{
+			agentslot.SetWith(driver, func(resolver agentslot.Resolver) (string, error) {
+				return agentslot.ResolveOne(resolver, model)
+			}),
+		}},
+	} {
+		if err := builder.Install(module); err != nil {
+			t.Fatalf("install %s: %v", module.ID(), err)
+		}
+	}
+
+	_, err := builder.Build()
+	if !errors.Is(err, agentslot.ErrDependencyUndeclared) {
+		t.Fatalf("Build() error = %v, want ErrDependencyUndeclared", err)
+	}
+}
+
+func TestResolverClosesAfterConstructorReturns(t *testing.T) {
+	value := agentslot.One[string]("value")
+	built := agentslot.One[string]("built")
+	var retained agentslot.Resolver
+	builder := agentslot.NewBuilder()
+	for _, module := range []agentslot.Module{
+		testModule{id: "value", contributions: []agentslot.Contribution{agentslot.Set(value, "value")}},
+		&dependentModule{
+			testModule: testModule{id: "built", contributions: []agentslot.Contribution{
+				agentslot.SetWith(built, func(resolver agentslot.Resolver) (string, error) {
+					retained = resolver
+					return agentslot.ResolveOne(resolver, value)
+				}),
+			}},
+			requirements: []agentslot.Requirement{agentslot.RequireOne(value)},
+		},
+	} {
+		if err := builder.Install(module); err != nil {
+			t.Fatalf("install %s: %v", module.ID(), err)
+		}
+	}
+	if _, err := builder.Build(); err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if _, err := agentslot.ResolveOne(retained, value); !errors.Is(err, agentslot.ErrResolverClosed) {
+		t.Fatalf("ResolveOne() after Build error = %v, want ErrResolverClosed", err)
+	}
+}
+
+func TestConstructorFailureDoesNotFreezeBuilderOrPublishValues(t *testing.T) {
+	dependency := agentslot.One[string]("dependency")
+	built := agentslot.One[string]("built")
+	wantErr := errors.New("construction failed")
+	attempts := 0
+	builder := agentslot.NewBuilder()
+	if err := builder.Install(&dependentModule{
+		testModule: testModule{id: "built", contributions: []agentslot.Contribution{
+			agentslot.SetWith(built, func(resolver agentslot.Resolver) (string, error) {
+				attempts++
+				if _, err := agentslot.ResolveOne(resolver, dependency); err != nil {
+					return "", err
+				}
+				if attempts == 1 {
+					return "", wantErr
+				}
+				return "ready", nil
+			}),
+		}},
+		requirements: []agentslot.Requirement{agentslot.RequireOne(dependency)},
+	}); err != nil {
+		t.Fatalf("install built: %v", err)
+	}
+	if err := builder.Install(testModule{id: "dependency", contributions: []agentslot.Contribution{agentslot.Set(dependency, "value")}}); err != nil {
+		t.Fatalf("install dependency: %v", err)
+	}
+	if _, err := builder.Build(); !errors.Is(err, wantErr) {
+		t.Fatalf("first Build() error = %v, want construction failure", err)
+	}
+	if err := builder.Install(testModule{id: "repair.marker"}); err != nil {
+		t.Fatalf("install after failed build: %v", err)
+	}
+	plan, err := builder.Build()
+	if err != nil {
+		t.Fatalf("second build: %v", err)
+	}
+	if got, ok := agentslot.Get(plan, built); !ok || got != "ready" {
+		t.Fatalf("built = %q, %v", got, ok)
+	}
+	if attempts != 2 {
+		t.Fatalf("constructor attempts = %d, want 2", attempts)
+	}
+}
+
+func TestConstructorRejectsNilComponent(t *testing.T) {
+	type component interface{ Value() string }
+	slot := agentslot.One[component]("component")
+	builder := agentslot.NewBuilder()
+	if err := builder.Install(testModule{id: "component", contributions: []agentslot.Contribution{
+		agentslot.SetWith(slot, func(agentslot.Resolver) (component, error) { return nil, nil }),
+	}}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	_, err := builder.Build()
+	if !errors.Is(err, agentslot.ErrInvalidContribution) {
+		t.Fatalf("Build() error = %v, want ErrInvalidContribution", err)
+	}
+}
+
+func TestResolvedManyIsACopy(t *testing.T) {
+	values := agentslot.Many[string]("values")
+	built := agentslot.One[[]agentslot.Named[string]]("built")
+	builder := agentslot.NewBuilder()
+	consumer := &dependentModule{
+		testModule: testModule{id: "consumer", contributions: []agentslot.Contribution{
+			agentslot.SetWith(built, func(resolver agentslot.Resolver) ([]agentslot.Named[string], error) {
+				return agentslot.ResolveMany(resolver, values)
+			}),
+		}},
+		requirements: []agentslot.Requirement{agentslot.RequireMany(values, 1)},
+	}
+	for _, module := range []agentslot.Module{
+		consumer,
+		testModule{id: "values", contributions: []agentslot.Contribution{agentslot.Add(values, "one", "value")}},
+	} {
+		if err := builder.Install(module); err != nil {
+			t.Fatalf("install %s: %v", module.ID(), err)
+		}
+	}
+	plan, err := builder.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	got, _ := agentslot.Get(plan, built)
+	got[0].Value = "mutated"
+	if resolved := agentslot.All(plan, values); !reflect.DeepEqual(resolved, []agentslot.Named[string]{{Key: "one", Value: "value"}}) {
+		t.Fatalf("values = %#v", resolved)
+	}
+}

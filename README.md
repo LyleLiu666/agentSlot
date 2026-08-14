@@ -54,6 +54,38 @@ func (m Bundle) Register(r agentslot.Registrar) error {
 }
 ```
 
+When one contribution must be constructed from other installed components,
+use a build-time constructor instead of manually assembling it before
+`Build`:
+
+```go
+func (m RunnerModule) Register(r agentslot.Registrar) error {
+	return r.Contribute(agentslot.SetWith(AgentLoopSlot, func(resolver agentslot.Resolver) (AgentLoop, error) {
+		model, err := agentslot.ResolveKey(resolver, ModelSlot, m.modelKey)
+		if err != nil {
+			return nil, err
+		}
+		tools, err := agentslot.ResolveMany(resolver, ToolSlot)
+		if err != nil {
+			return nil, err
+		}
+		return NewAgentLoop(model, tools), nil
+	}))
+}
+
+func (m RunnerModule) RequiredSlots() []agentslot.Requirement {
+	return []agentslot.Requirement{
+		agentslot.RequireKey(ModelSlot, m.modelKey),
+		agentslot.RequireMany(ToolSlot, 1),
+	}
+}
+```
+
+`SetWith`, `AddWith`, and `AppendWith` run only after requirements and cycles
+have been validated. Their resolver can read only the owning module's declared
+requirements and closes when the constructor returns. Constructors prepare
+components; lifecycle resources still belong in `Start` and `Stop`.
+
 The product chooses the required profile:
 
 ```go
@@ -77,7 +109,11 @@ func (m RunnerModule) RequiredSlots() []agentslot.Requirement {
 }
 ```
 
-`Build` validates these requirements, rejects dependency cycles, and computes a stable lifecycle order. `plan.Describe()` exposes that order, slot kinds, Go value types, contribution owners, keys, module requirements, and profile requirements without serializing component values.
+`Build` validates these requirements, rejects dependency cycles, constructs
+deferred contributions in dependency order, and computes a stable lifecycle
+order. `plan.Describe()` exposes that order, slot kinds, Go value types,
+contribution owners, keys, module requirements, and profile requirements
+without serializing component values.
 
 See the complete runnable [basic example](examples/basic/main.go).
 
@@ -85,11 +121,17 @@ See the complete runnable [basic example](examples/basic/main.go).
 
 - One module registration is transactional: one rejected contribution discards all contributions from that module.
 - A successful build freezes the builder; a failed build can be corrected and retried.
+- Build-time constructors resolve only declared slot dependencies; failed
+  construction does not publish a plan or freeze the builder.
 - Modules start in stable dependency order; independent modules retain installation precedence.
 - A failed start stops every previously started module in reverse order.
 - Normal shutdown attempts every started module in reverse order and joins their errors.
 
 For module dependencies, `RequireOne` depends on the sole provider, `RequireKey` depends only on the named provider, and `RequireMany` or `RequireChain` depends on every contribution visible in that slot. Product-only profile requirements validate cardinality but do not add lifecycle edges.
+
+Constructors may be retried after a failed build, so they must not start
+goroutines, open listeners, or acquire non-repeatable resources. Those effects
+belong to module lifecycle methods after a plan has been built successfully.
 
 ## Intended standard component families
 

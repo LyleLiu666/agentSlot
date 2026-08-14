@@ -16,12 +16,17 @@ One module may provide a model provider, several tools, and a hook. Those contri
 1. `Builder` is mutable and accepts modules.
 2. Each `Module.Register` call works against an isolated registry copy.
 3. `Build` validates profile requirements and every module's optional `RequiredSlots` declaration.
-4. Slot providers create lifecycle dependency edges; a stable topological sort rejects cycles before startup.
-5. Successful build returns an immutable `Plan` and freezes the builder.
-6. `Plan.Start` creates one `Runtime` and starts lifecycle-aware modules in dependency order.
-7. `Runtime.Stop` releases them in reverse order.
+4. Slot providers create dependency edges; a stable topological sort rejects cycles before construction or startup.
+5. Deferred contributions are constructed in dependency order through a resolver limited to the owning module's declared requirements.
+6. Successful build returns an immutable `Plan` and freezes the builder.
+7. `Plan.Start` creates one `Runtime` and starts lifecycle-aware modules in dependency order.
+8. `Runtime.Stop` releases them in reverse order.
 
-A failed module registration never leaks partial contributions. A failed build does not freeze the builder. A failed start rolls back only modules whose `Start` completed successfully.
+A failed module registration never leaks partial contributions. A failed
+build, including constructor failure, does not freeze the builder or publish a
+partially materialized plan. Constructors can therefore run again on a later
+build attempt and must remain free of lifecycle side effects. A failed start
+rolls back only modules whose `Start` completed successfully.
 
 The current scope unit is one plan. A product creates a separate builder and plan for each independently owned runtime or session. Hierarchical inheritance is deferred until real products prove that separate plans plus explicit parent inputs are insufficient.
 
@@ -58,7 +63,19 @@ Modules optionally implement `SlotRequirer`. Requirements name slots, not provid
 
 Independent modules retain installation precedence. Missing providers, invalid requirements, and cycles fail during `Build`; no lifecycle method has run at that point.
 
-Requirements do not perform dependency injection. Go constructors still receive their dependencies explicitly; `RequiredSlots` makes those relationships auditable and determines lifecycle order without introducing a hidden service locator.
+Requirements do not silently inject fields. Ordinary Go constructors can
+still receive dependencies explicitly. When the provider module may be chosen
+only after installation, `SetWith`, `AddWith`, and `AppendWith` register an
+explicit build-time constructor. Its `Resolver` can resolve only dependencies
+listed by that module's `RequiredSlots`, and only for the duration of the
+constructor call. This keeps construction auditable and prevents the resolver
+from becoming a hidden runtime service locator.
+
+Construction follows the same stable topological order used by lifecycle.
+Each dependency contribution must be fully materialized before a consumer can
+resolve it. Constructor functions prepare component values only; goroutines,
+listeners, locks, and other non-repeatable resources belong to `Start` and
+`Stop` because a failed build may retry construction.
 
 ## Plan description
 

@@ -25,7 +25,9 @@ func TestPlanDescriptionIsDeterministicAndOmitsComponentValues(t *testing.T) {
 	bundle := testModule{
 		id: "bundle",
 		contributions: []agentslot.Contribution{
-			agentslot.Set(loop, "SECRET-LOOP-VALUE"),
+			agentslot.SetWith(loop, func(agentslot.Resolver) (string, error) {
+				return "SECRET-LOOP-VALUE", nil
+			}),
 			agentslot.Add(tools, "shell", "SECRET-TOOL-VALUE"),
 			agentslot.Append(hooks, "SECRET-HOOK-VALUE"),
 		},

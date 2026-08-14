@@ -91,9 +91,10 @@ type Contribution interface {
 }
 
 type contributionData struct {
-	spec  slotSpec
-	key   string
-	value any
+	spec        slotSpec
+	key         string
+	value       any
+	constructor constructorFunc
 }
 
 func (c contributionData) contributionData() contributionData { return c }
@@ -111,6 +112,25 @@ func Add[T any](slot ManySlot[T], key string, value T) Contribution {
 // Append prepares an ordered contribution to a ChainSlot.
 func Append[T any](slot ChainSlot[T], value T) Contribution {
 	return contributionData{spec: slot.spec, value: value}
+}
+
+// SetWith prepares a OneSlot contribution whose value is constructed during
+// Build. The constructor can resolve only slots declared by its owning
+// module's RequiredSlots method.
+func SetWith[T any](slot OneSlot[T], constructor func(Resolver) (T, error)) Contribution {
+	return contributionData{spec: slot.spec, constructor: wrapConstructor(constructor)}
+}
+
+// AddWith prepares a keyed ManySlot contribution whose value is constructed
+// during Build.
+func AddWith[T any](slot ManySlot[T], key string, constructor func(Resolver) (T, error)) Contribution {
+	return contributionData{spec: slot.spec, key: key, constructor: wrapConstructor(constructor)}
+}
+
+// AppendWith prepares a ChainSlot contribution whose value is constructed
+// during Build.
+func AppendWith[T any](slot ChainSlot[T], constructor func(Resolver) (T, error)) Contribution {
+	return contributionData{spec: slot.spec, constructor: wrapConstructor(constructor)}
 }
 
 // Named is one keyed value resolved from a ManySlot.

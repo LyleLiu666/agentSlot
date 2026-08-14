@@ -33,6 +33,15 @@ var (
 	ErrRequirementUnsatisfied = errors.New("agentslot: requirement is unsatisfied")
 	// ErrDependencyCycle means slot requirements create a module lifecycle cycle.
 	ErrDependencyCycle = errors.New("agentslot: module dependency cycle")
+	// ErrDependencyUndeclared means a constructor tried to resolve a slot that
+	// its owning module did not declare through RequiredSlots.
+	ErrDependencyUndeclared = errors.New("agentslot: dependency is not declared")
+	// ErrResolverClosed means a build-scoped Resolver was retained and used
+	// outside the constructor call that received it.
+	ErrResolverClosed = errors.New("agentslot: resolver is closed")
+	// ErrDependencyNotReady means a constructor tried to resolve a component
+	// whose own constructor has not completed.
+	ErrDependencyNotReady = errors.New("agentslot: dependency is not ready")
 )
 
 // Module is a registration and lifecycle ownership envelope. Its Register
@@ -56,9 +65,11 @@ type Registrar interface {
 }
 
 type registeredValue struct {
-	owner string
-	key   string
-	value any
+	owner       string
+	key         string
+	value       any
+	constructor constructorFunc
+	ordinal     uint64
 }
 
 type slotRecord struct {
@@ -67,7 +78,8 @@ type slotRecord struct {
 }
 
 type registryState struct {
-	byID map[string]*slotRecord
+	byID        map[string]*slotRecord
+	nextOrdinal uint64
 }
 
 func newRegistryState() registryState {
@@ -76,6 +88,7 @@ func newRegistryState() registryState {
 
 func (s registryState) clone() registryState {
 	cloned := newRegistryState()
+	cloned.nextOrdinal = s.nextOrdinal
 	for id, record := range s.byID {
 		values := make([]registeredValue, len(record.values))
 		copy(values, record.values)
@@ -168,8 +181,11 @@ func (r *registration) apply(contribution Contribution) error {
 		return fmt.Errorf("%w: nil", ErrInvalidContribution)
 	}
 	data := contribution.contributionData()
-	if isNil(data.value) {
+	if data.constructor == nil && isNil(data.value) {
 		return fmt.Errorf("%w: slot %q has a nil value", ErrInvalidContribution, data.spec.id)
+	}
+	if data.constructor != nil && !isNil(data.value) {
+		return fmt.Errorf("%w: slot %q cannot have both a value and constructor", ErrInvalidContribution, data.spec.id)
 	}
 	if data.spec.kind == manyKind && (data.key == "" || strings.TrimSpace(data.key) != data.key) {
 		return fmt.Errorf("%w: slot %q key %q must be non-empty without surrounding whitespace", ErrInvalidKey, data.spec.id, data.key)
@@ -209,7 +225,14 @@ func (r *registration) apply(contribution Contribution) error {
 		return fmt.Errorf("%w: slot %q has unknown kind", ErrInvalidContribution, data.spec.id)
 	}
 
-	record.values = append(record.values, registeredValue{owner: r.owner, key: data.key, value: data.value})
+	r.state.nextOrdinal++
+	record.values = append(record.values, registeredValue{
+		owner:       r.owner,
+		key:         data.key,
+		value:       data.value,
+		constructor: data.constructor,
+		ordinal:     r.state.nextOrdinal,
+	})
 	return nil
 }
 
@@ -284,9 +307,13 @@ func (b *Builder) Build(requirements ...Requirement) (*Plan, error) {
 	if err != nil {
 		return nil, err
 	}
+	state := b.state.clone()
+	if err := materializeConstructors(&state, modules); err != nil {
+		return nil, err
+	}
 
 	b.frozen = true
-	return &Plan{state: b.state.clone(), modules: modules, profile: profile}, nil
+	return &Plan{state: state, modules: modules, profile: profile}, nil
 }
 
 func (p *Plan) find(spec slotSpec) (*slotRecord, bool) {
