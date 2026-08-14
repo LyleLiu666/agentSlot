@@ -108,13 +108,13 @@ The following ecosystem classification is the design target. Method-level contra
 
 A proposed standard interface must have at least two independent implementations, one real consumer, and a conformance suite. Until then it stays in an adapter or experimental package. This rule prevents a universal API from becoming either a lowest-common-denominator wrapper or a collection of product-specific assumptions.
 
-## Relationship to existing SDKs
+## Relationship to runtime SDKs
 
 AgentSlot is not another agent runtime SDK:
 
-- `agentsdk` owns loop execution and runtime types. An adapter can expose one of its runners through an AgentSlot driver slot.
-- `toolSdk`, `sessionSdk`, `memorySdk`, and `gatewaySdk` own their domain behavior. They can contribute implementations without being absorbed into this module.
-- Product repositories such as `lyleCode` choose a profile, install modules, and own product defaults.
+- Runtime SDKs own loop execution and runtime types. An adapter can expose a runner through an AgentSlot driver slot.
+- Domain SDKs for tools, sessions, memory, and gateways own their behavior. They can contribute implementations without being absorbed into this module.
+- Frameworks and applications choose a profile, install modules, and own product defaults.
 
 The dependency direction stays one-way: AgentSlot core imports no product or SDK. Adapters import AgentSlot and the SDK they connect.
 

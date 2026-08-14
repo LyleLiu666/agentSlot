@@ -12,6 +12,7 @@ AgentSlot does not surpass another harness by accumulating dozens of interfaces.
 - Express module dependencies against typed slots, never concrete module IDs. Build must reject missing providers and cycles before startup.
 - `Plan.Describe()` may expose IDs, kinds, types, keys, ownership, requirements, and order. It must never expose component values, configurations, credentials, or other secrets.
 - Keep the composition core free of product, provider, UI, storage, and transport dependencies.
+- Keep core documentation product-neutral. Describe capability roles here; document named framework migrations and adapters in their consuming repositories.
 - Do not add a standard domain interface from one implementation. Require two independent implementations, one real consumer, and a conformance suite.
 - Keep profile requirements explicit. Do not silently select a loop, provider, tool, policy arbiter, or execution environment.
 - Registration is transactional. Startup failure rolls back in reverse order. Shutdown attempts every started module.
