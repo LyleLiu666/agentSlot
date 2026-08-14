@@ -34,6 +34,7 @@ func (t namedTool) Name() string { return string(t) }
 type staticModule struct {
 	id            string
 	contributions []agentslot.Contribution
+	requirements  []agentslot.Requirement
 }
 
 func (m staticModule) ID() string { return m.id }
@@ -42,17 +43,32 @@ func (m staticModule) Register(registrar agentslot.Registrar) error {
 	return registrar.Contribute(m.contributions...)
 }
 
+func (m staticModule) RequiredSlots() []agentslot.Requirement {
+	return m.requirements
+}
+
 func main() {
 	builder := agentslot.NewBuilder()
-	if err := builder.Install(staticModule{
-		id: "basic.bundle",
-		contributions: []agentslot.Contribution{
-			agentslot.Set(agentLoopSlot, agentLoop(echoLoop{})),
-			agentslot.Add(toolSlot, "shell", tool(namedTool("shell"))),
-			agentslot.Add(toolSlot, "files", tool(namedTool("files"))),
+	for _, module := range []agentslot.Module{
+		staticModule{
+			id: "basic.application",
+			requirements: []agentslot.Requirement{
+				agentslot.RequireOne(agentLoopSlot),
+				agentslot.RequireKey(toolSlot, "shell"),
+			},
 		},
-	}); err != nil {
-		log.Fatal(err)
+		staticModule{
+			id: "basic.bundle",
+			contributions: []agentslot.Contribution{
+				agentslot.Set(agentLoopSlot, agentLoop(echoLoop{})),
+				agentslot.Add(toolSlot, "shell", tool(namedTool("shell"))),
+				agentslot.Add(toolSlot, "files", tool(namedTool("files"))),
+			},
+		},
+	} {
+		if err := builder.Install(module); err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	plan, err := builder.Build(

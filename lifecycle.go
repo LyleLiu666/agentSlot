@@ -32,8 +32,9 @@ type Runtime struct {
 	stopErr error
 }
 
-// Start starts lifecycle-aware modules in installation order. Each Plan allows
-// one startup attempt because modules may own non-repeatable resources.
+// Start starts lifecycle-aware modules in the dependency order computed by
+// Build. Each Plan allows one startup attempt because modules may own
+// non-repeatable resources.
 func (p *Plan) Start(ctx context.Context) (*Runtime, error) {
 	if p == nil {
 		panic("agentslot: nil Plan")

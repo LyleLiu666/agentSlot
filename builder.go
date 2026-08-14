@@ -27,8 +27,12 @@ var (
 	ErrSlotOccupied = errors.New("agentslot: one slot is already occupied")
 	// ErrDuplicateKey means a ManySlot already contains the contribution key.
 	ErrDuplicateKey = errors.New("agentslot: duplicate contribution key")
+	// ErrInvalidRequirement means a slot requirement has invalid cardinality or key data.
+	ErrInvalidRequirement = errors.New("agentslot: invalid requirement")
 	// ErrRequirementUnsatisfied means a build profile's minimum cardinality was not met.
 	ErrRequirementUnsatisfied = errors.New("agentslot: requirement is unsatisfied")
+	// ErrDependencyCycle means slot requirements create a module lifecycle cycle.
+	ErrDependencyCycle = errors.New("agentslot: module dependency cycle")
 )
 
 // Module is a registration and lifecycle ownership envelope. Its Register
@@ -37,6 +41,12 @@ var (
 type Module interface {
 	ID() string
 	Register(Registrar) error
+}
+
+// SlotRequirer is an optional Module capability. Required slots are validated
+// at build time, and their provider modules start before the requiring module.
+type SlotRequirer interface {
+	RequiredSlots() []Requirement
 }
 
 // Registrar accepts contributions during one Module.Register call.
@@ -75,8 +85,9 @@ func (s registryState) clone() registryState {
 }
 
 type installedModule struct {
-	id     string
-	module Module
+	id           string
+	module       Module
+	requirements []Requirement
 }
 
 // Builder transactionally installs modules and freezes them into a Plan.
@@ -215,31 +226,33 @@ func isNil(value any) bool {
 	}
 }
 
-// Requirement sets the minimum number of contributions for one slot in a
-// particular build profile.
+// Requirement selects a slot cardinality or key for a build profile or module
+// dependency declaration.
 type Requirement struct {
 	spec    slotSpec
+	key     string
+	keyed   bool
 	minimum int
 }
 
-// RequireOne makes a OneSlot mandatory for a build profile.
+// RequireOne requires the contribution to a OneSlot.
 func RequireOne[T any](slot OneSlot[T]) Requirement {
 	return Requirement{spec: slot.spec, minimum: 1}
 }
 
-// RequireMany sets a minimum contribution count for a ManySlot.
+// RequireMany requires a minimum contribution count from a ManySlot.
 func RequireMany[T any](slot ManySlot[T], minimum int) Requirement {
-	if minimum < 1 {
-		panic("agentslot: RequireMany minimum must be positive")
-	}
 	return Requirement{spec: slot.spec, minimum: minimum}
 }
 
-// RequireChain sets a minimum contribution count for a ChainSlot.
+// RequireKey requires one named contribution from a ManySlot. Module
+// dependencies created from it target only the selected provider.
+func RequireKey[T any](slot ManySlot[T], key string) Requirement {
+	return Requirement{spec: slot.spec, key: key, keyed: true, minimum: 1}
+}
+
+// RequireChain requires a minimum contribution count from a ChainSlot.
 func RequireChain[T any](slot ChainSlot[T], minimum int) Requirement {
-	if minimum < 1 {
-		panic("agentslot: RequireChain minimum must be positive")
-	}
 	return Requirement{spec: slot.spec, minimum: minimum}
 }
 
@@ -247,6 +260,7 @@ func RequireChain[T any](slot ChainSlot[T], minimum int) Requirement {
 type Plan struct {
 	state   registryState
 	modules []installedModule
+	profile []Requirement
 
 	startMu        sync.Mutex
 	startAttempted bool
@@ -260,30 +274,19 @@ func (b *Builder) Build(requirements ...Requirement) (*Plan, error) {
 	if b.frozen {
 		return nil, ErrBuilderFrozen
 	}
-	for _, requirement := range requirements {
-		record := b.state.byID[requirement.spec.id]
-		count := 0
-		if record != nil {
-			if record.spec.kind != requirement.spec.kind || record.spec.valueType != requirement.spec.valueType {
-				return nil, fmt.Errorf("%w: requirement for slot %q conflicts with its installed definition", ErrSlotConflict, requirement.spec.id)
-			}
-			count = len(record.values)
+	profile := append([]Requirement(nil), requirements...)
+	for _, requirement := range profile {
+		if _, err := resolveRequirement(b.state, requirement); err != nil {
+			return nil, err
 		}
-		if count < requirement.minimum {
-			return nil, fmt.Errorf(
-				"%w: slot %q requires at least %d contribution(s), got %d",
-				ErrRequirementUnsatisfied,
-				requirement.spec.id,
-				requirement.minimum,
-				count,
-			)
-		}
+	}
+	modules, err := orderModules(b.state, b.modules)
+	if err != nil {
+		return nil, err
 	}
 
 	b.frozen = true
-	modules := make([]installedModule, len(b.modules))
-	copy(modules, b.modules)
-	return &Plan{state: b.state.clone(), modules: modules}, nil
+	return &Plan{state: b.state.clone(), modules: modules, profile: profile}, nil
 }
 
 func (p *Plan) find(spec slotSpec) (*slotRecord, bool) {

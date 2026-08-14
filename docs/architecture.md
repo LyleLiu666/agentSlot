@@ -15,12 +15,15 @@ One module may provide a model provider, several tools, and a hook. Those contri
 
 1. `Builder` is mutable and accepts modules.
 2. Each `Module.Register` call works against an isolated registry copy.
-3. `Build` validates profile requirements.
-4. Successful build returns an immutable `Plan` and freezes the builder.
-5. `Plan.Start` creates one `Runtime` and starts lifecycle-aware modules.
-6. `Runtime.Stop` releases them in reverse order.
+3. `Build` validates profile requirements and every module's optional `RequiredSlots` declaration.
+4. Slot providers create lifecycle dependency edges; a stable topological sort rejects cycles before startup.
+5. Successful build returns an immutable `Plan` and freezes the builder.
+6. `Plan.Start` creates one `Runtime` and starts lifecycle-aware modules in dependency order.
+7. `Runtime.Stop` releases them in reverse order.
 
 A failed module registration never leaks partial contributions. A failed build does not freeze the builder. A failed start rolls back only modules whose `Start` completed successfully.
+
+The current scope unit is one plan. A product creates a separate builder and plan for each independently owned runtime or session. Hierarchical inheritance is deferred until real products prove that separate plans plus explicit parent inputs are insufficient.
 
 ## Slot kinds
 
@@ -36,11 +39,30 @@ Use it for a selected agent loop, policy arbiter, scheduler, or execution enviro
 
 Use it for tools, model providers, protocol adapters, and named stores.
 
+`RequireKey` selects one named provider. `RequireMany` means the consumer observes the whole registry, so its lifecycle follows every current provider.
+
 ### Chain
 
 `Chain[T]` allows ordered values. Installation order is semantic and is preserved by the plan.
 
 Use it only when every contributor participates in an explicit pipeline, such as hooks, policy checks, or prompt contributors. Do not use it as an unordered registry.
+
+## Dependency rules
+
+Modules optionally implement `SlotRequirer`. Requirements name slots, not provider modules:
+
+- `RequireOne` adds an edge from the sole provider.
+- `RequireKey` adds an edge from the selected keyed provider.
+- `RequireMany` and `RequireChain` add edges from every registered contributor.
+- A module's contribution can satisfy its own requirement without creating a self-edge.
+
+Independent modules retain installation precedence. Missing providers, invalid requirements, and cycles fail during `Build`; no lifecycle method has run at that point.
+
+Requirements do not perform dependency injection. Go constructors still receive their dependencies explicitly; `RequiredSlots` makes those relationships auditable and determines lifecycle order without introducing a hidden service locator.
+
+## Plan description
+
+`Plan.Describe()` returns the versioned `agentslot.plan/v0` format. It lists modules in lifecycle start order and slots in lexical ID order. Contributions contain only module ownership and optional keys. Component values and configuration are intentionally absent so the description can be logged or exported without serializing implementations or leaking credentials.
 
 ## Package layers
 
@@ -71,15 +93,24 @@ A method-level component contract becomes standard only when all of the followin
 
 This keeps unstable provider and product details out of the universal layer.
 
+## Stable release gate
+
+The composition API is ready for a stable release only after:
+
+1. At least two independent SDK ecosystems declare real slots over their existing interfaces.
+2. One assembled product can exchange implementations through those slots without branching on concrete provider types.
+3. Shared conformance tests verify registration, requirements, lifecycle, and exported plan descriptions.
+4. The evidence either proves that one plan per scope is sufficient or justifies a minimal parent-plan mechanism.
+
+Until those proofs exist, keep domain contracts outside the core and keep the plan schema at `v0`.
+
 ## Deferred capabilities
 
 The first foundation intentionally defers:
 
 - hierarchical scopes and per-session generations;
-- dependency graphs and automatic topological ordering;
 - configuration schemas and secret resolution;
 - out-of-process discovery or loading;
-- standard model, tool, state, policy, and presentation method contracts;
-- machine-readable plan export.
+- standard model, tool, state, policy, and presentation method contracts.
 
-These are added only when a real adapter needs them. Installation order is the current explicit lifecycle order.
+These are added only when a real adapter needs them. Dependency order controls lifecycle; registration order continues to control `Many` enumeration and `Chain` semantics.
