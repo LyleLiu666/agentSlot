@@ -23,6 +23,8 @@ surface without clarifying or mechanically enforcing one of those properties.
 - Keep `COMPONENT_MAP.md` as the authoritative inventory and maturity scorecard
   for standard Slot ecosystems. Do not describe a mapped responsibility as an
   implemented interface.
+- Keep `COMPONENT_MAP.md` and `COMPONENT_MAP.zh-CN.md` semantically synchronized
+  in every component-map change.
 - Do not call a standard domain interface proven from one implementation.
   Require two independent implementations, one real consumer, and a
   conformance suite to reach proven maturity.

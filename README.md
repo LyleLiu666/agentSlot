@@ -2,9 +2,10 @@
 
 Typed component slots and deterministic composition for agent systems.
 
-> **Start with the [AgentSlot Standard Component Map](COMPONENT_MAP.md).** It is
-> the authoritative inventory of customizable agent components, their Slot
-> IDs, cardinality, profile requirements, and implementation maturity.
+> **Start with the AgentSlot Standard Component Map:**
+> [English](COMPONENT_MAP.md) | [简体中文](COMPONENT_MAP.zh-CN.md). It is the
+> authoritative inventory of customizable agent components, their Slot IDs,
+> cardinality, profile requirements, and implementation maturity.
 
 > A module unifies registration and lifecycle. A slot defines the component ecosystem, interface, cardinality, and ordering rule.
 

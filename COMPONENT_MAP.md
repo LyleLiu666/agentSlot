@@ -1,5 +1,7 @@
 # AgentSlot Standard Component Map
 
+[English](COMPONENT_MAP.md) | [简体中文](COMPONENT_MAP.zh-CN.md)
+
 This document is the authoritative map of the customization seams in a
 composable LLM agent. It is a primary AgentSlot asset, not a list of whatever
 interfaces happen to exist in one implementation.
