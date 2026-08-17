@@ -1,5 +1,10 @@
 # AgentSlot 组件接口标准化路线图
 
+Session 运行模型的确定结论见
+[Agent 设计的架构讨论](docs/agent-architecture-discussion.zh-CN.md)，可执行代码顺序见
+[StandardAgentLoop 实施计划](docs/standard-agent-loop-implementation-plan.zh-CN.md)。
+路线图只安排成熟度推进，不把尚未实现的设计写成已经交付。
+
 ## 1. 我们要解决什么问题
 
 今天开发一个 Agent，团队往往要重复处理模型接入、工具调用、Session、历史、
@@ -39,7 +44,8 @@ Module 只是组件注册和生命周期的载体，不代表一个新的组件�
 
 至少需要：
 
-- 一个 `AgentLoop`：决定一次任务如何执行；
+- 一个 `AgentLoopFactory`：为每个已打开的 Session 创建独立 `AgentLoop`，由
+  每个 Loop 决定该 Session 的任务如何执行；
 - 一个 `SessionManager`：提供稳定的 Session 身份；
 - 至少一个 `Entrypoint`：接收输入并返回结果，例如 TUI、Web、桌面端或 ACP。
 
@@ -60,6 +66,21 @@ Tool 和持久化 History 不作为所有 Agent 的强制要求：
 底层 `agentslot.NewApplication` 保持通用，不偷偷加入业务要求。标准 Profile 由
 专门的上层入口提供，开发者可以清楚看到自己选择了哪套启动规则。
 
+### 多 Workspace、多 Session 运行模型
+
+一个 Application Plan 只装配并启动一次应用级组件，可以同时服务多个 Workspace
+和 Session。`agent.loop` Slot 保存应用级 Factory，不保存共享的有状态 Loop：
+
+- SessionManager 先创建或打开 Session，Factory 再为它创建独立 Loop；
+- 同一 Session 同时最多一个活跃 Run，不同 Session 可以并行；
+- Session 明确提供 History、Context、Queue 三个业务视图；
+- Queue 持久化尚未进入 Context 的 normal、steer 和 held 消息；
+- RunJournal 保存进行中工具调用的恢复证据，不直接进入 History/Context；
+- 应用级 Gateway 通过稳定身份路由，不为每个 Session 重复创建。
+
+Gateway 是否取代 `interaction.entrypoint` 成为 Profile 必需项仍待商榷。本节不改变
+当前 Profile 基数，也不新增或改名任何 Slot。
+
 ## 4. 当前地图如何演进
 
 当前中英文组件地图中的 40 个生态位是正式基线。在完成逐项评审之前，不用一张
@@ -73,6 +94,10 @@ Tool 和持久化 History 不作为所有 Agent 的强制要求：
 - Policy 负责作出风险判断，Approval 负责完成人工审批，两者不能合成一个接口；
 - Trace 和 Metric 是不同的运维数据，不能因为经常一起使用就合成一个 Sink；
 - Gateway 的接入、身份、路由和投递可以独立替换，不能只保留出站投递；
+- `agent.loop` 安装 `AgentLoopFactory`，一个 Application Plan 服务多个 Session，
+  每个 Session 由 Factory 创建一个隔离 Loop；
+- Session 的 History、Context、Queue 和 RunJournal 必须按不同修改规则建模，
+  即使具体存储实现把它们放在同一个事务数据库中；
 - Interrupt、Steer、Retry 等控制命令不只来自 Gateway。它们作为
   `control.inbox` 候选能力单独评审，不直接塞进 Gateway；
 - Skill、Model Middleware、Tool Middleware 是否继续作为独立 Slot，要通过真实
@@ -137,7 +162,7 @@ Catalog 展示整个行业地图；`Plan.Describe()` 展示某个应用实际装
 组件能够替换，不仅要求方法名一致，还要求它们对核心业务对象有相同理解。第一批
 接口开始前，要先固定最小共同语言：
 
-- Agent、Session、Run、Turn、Message 和 ToolCall 的稳定身份；
+- Agent、Workspace、Session、Run、Step、Turn、Message 和 ToolCall 的稳定身份；
 - 文本、图片、音频、工具调用和工具结果；
 - 模型停止原因、用量、错误和取消；
 - Agent、Turn、Message、Tool、Retry、Compaction 等事件；
@@ -152,6 +177,13 @@ History 的“严格追加”必须成为可以验证的合同，而不是一句
 - 一批记录要么全部追加成功，要么全部失败；
 - 多个入口同时写入时能够发现尾位置冲突；
 - 重试同一次写入不会制造重复历史。
+
+Session 的其他视图也必须有可验证合同：
+
+- Context 是版本化派生视图，压缩只能创建新版本，不能改写 History；
+- Queue 使用 expected revision/CAS，消息被认领后不得原地编辑或删除；
+- 正常完成自动 FIFO 消费 normal，取消、错误和重启后一律 paused；
+- RunJournal 在工具执行前记录 pending 意图，崩溃后未知结果不得自动重跑。
 
 ## 8. 默认组件只减少重复劳动，不替开发者做隐蔽决定
 
@@ -172,10 +204,10 @@ AgentSlot 禁止反射扫描、`init()` 自动注册和隐藏的全局组件容�
 
 ### 第一层：最小对话 Agent
 
-- Provider 无关的基础 Loop；
+- Provider 无关的 `AgentLoopFactory` 和每 Session 一个基础 Loop；
 - 无密钥确定性 Provider，用于自动化测试；
 - 正式的 OpenAI Chat Compatible 配置入口；
-- 内存 SessionManager；
+- 支持多 Session 隔离的内存 SessionManager/SessionStore；
 - 一个最小交互入口；
 - Tool 为零也能完成任务。
 
@@ -187,6 +219,7 @@ AgentSlot 禁止反射扫描、`init()` 自动注册和隐藏的全局组件容�
 - Context Source 和 Compactor；
 - Policy Guard 与 Approval Service；
 - Steering、Follow-up 和内部重试。
+- 持久化 Queue、paused/Resume 状态和 RunJournal 崩溃恢复；
 
 ### 第三层：编程 Agent 示例包
 
@@ -212,22 +245,27 @@ AgentSlot 参考这些行为，不复制 pi 的类型、聚合 Session 或产品
 
 ### 阶段 1：建立共同语言
 
-- 完成身份、消息、内容、事件、停止原因、用量、错误和引用类型；
+- 完成 Agent、Workspace、Session、Run、Step、Message、ToolCall 身份，以及
+  History、Context、Queue、RunJournal 的状态与事件类型；
 - 保持模型模态和工具 JSON Schema 规则；
 - 用两个 Provider 协议和两个 Session/History 实现校验这些类型没有偏向单一 SDK。
 
 ### 阶段 2：跑通标准 LLM Agent
 
-- 完成 AgentLoop、SessionManager、ModelProvider 和 Entrypoint；
+- 完成 AgentLoopFactory、每 Session 一个 AgentLoop、SessionManager、ModelProvider
+  和 Entrypoint；
 - 完成无密钥确定性链路和真实 OpenAI Chat Compatible 入口；
-- 验证零 Tool、取消、错误、流式事件和多 Session 隔离；
+- 验证一个 Application Plan 下的零 Tool、取消、错误、流式事件和多 Session 隔离；
+- 验证同一 Session 只有一个活跃 Run，正常完成自动 FIFO，取消、错误和重启后 paused；
 - 提供极简交互入口，但不把文件和 Shell 工具作为标准 Agent 的必需能力。
 
 ### 阶段 3：完成第一批可扩展能力
 
 - 完成 Tool、Events、History、Context、Policy 和 Approval；
+- 完成持久化 Queue、RunJournal、Context 版本与完整 History 查询；
 - 验证 StandardLoop 更换 Provider、Tool、Session、History、Entrypoint 和 Policy
   时没有具体类型分支；
+- 验证工具 call/result 配对、未知副作用恢复和跨 Session 文件版本冲突；
 - 加入工具 Agent 和编程 Agent 示例包。
 
 ### 阶段 4：逐域扩展

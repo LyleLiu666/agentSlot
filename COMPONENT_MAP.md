@@ -40,15 +40,16 @@ when its assembled plan contains all four of these component ecosystems:
 
 | Slot ID | Standard contract | Kind | Required cardinality | Responsibility |
 | --- | --- | --- | --- | --- |
-| `agent.loop` | `AgentLoop` | `One` | exactly 1 | Owns turn execution, model/tool iteration, retry, continuation, and stop policy. |
+| `agent.loop` | `AgentLoopFactory` | `One` | exactly 1 | Provides a factory that creates one isolated AgentLoop for each opened Session; the per-session Loop owns turn execution, model/tool iteration, retry, continuation, and stop policy. |
 | `session.manager` | `SessionManager` | `One` | exactly 1 | Creates or resolves stable session identity and owns session lifecycle. |
 | `model.provider` | `ModelProvider` | `Many` | at least 1 | Executes model requests behind provider-neutral agent semantics. |
 | `interaction.entrypoint` | `Entrypoint` | `Many` | at least 1 | Accepts user or caller input and exposes agent output through TUI, Web, desktop, HTTP, ACP, or another protocol. |
 
 These are assembly requirements, not permission for a hidden runtime
-coordinator. `AgentLoop` remains the sole owner of loop semantics. Entrypoints
-invoke the loop through its standard contract; they do not reimplement its
-tool/model control flow.
+coordinator. `agent.loop` installs one `AgentLoopFactory`; the factory creates
+one isolated `AgentLoop` for each opened Session. The per-session Loop remains
+the sole owner of loop semantics. Entrypoints invoke the Loop through its
+standard contract; they do not reimplement its tool/model control flow.
 
 `ModelProvider` is mandatory because a plan that can start but cannot produce a
 model response is not a runnable LLM agent. The standard contract must remain
@@ -70,7 +71,8 @@ specific tool set without making that requirement universal.
 ```mermaid
 flowchart LR
     E["Entrypoint (1..n)"] --> S["SessionManager (1)"]
-    E --> L["AgentLoop (1)"]
+    E --> F["AgentLoopFactory (1)"]
+    F --> L["AgentLoop per Session"]
     L --> M["ModelProvider (1..n)"]
     L -. "optional" .-> T["Tools and skills"]
     L -. "optional" .-> C["Context, history, and memory"]
@@ -106,12 +108,13 @@ Slots, and several modules may contribute to one `Many` or `Chain` Slot.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `agent.loop` | `AgentLoop` | `One` | globally required | Runs one agent request and owns all loop-control decisions. | Mapped |
+| `agent.loop` | `AgentLoopFactory` | `One` | globally required | Creates one isolated AgentLoop per opened Session; that Loop runs requests and owns loop-control decisions. | Mapped |
 | `session.manager` | `SessionManager` | `One` | globally required | Resolves stable session identity and session lifecycle without absorbing history storage. | Mapped |
 | `interaction.entrypoint` | `Entrypoint` | `Many` | globally requires at least 1 | Connects a caller-facing protocol or UI to sessions and the agent loop. | Mapped |
 | `runtime.observer` | `RuntimeObserver` | `Chain` | optional | Observes typed agent, turn, message, tool, retry, and lifecycle events without controlling the loop. | Mapped |
 
-`AgentLoop` implementations can differ radically: general assistants, coding
+The `AgentLoopFactory` method-level contract is a design baseline, not a
+contracted or proven public interface. `AgentLoop` implementations can differ radically: general assistants, coding
 agents, research loops, deterministic workflow agents, or remote-agent
 bridges. If an implementation hides its own external model service and cannot
 use `model.provider`, it is not conformant to the standard LLM agent profile;
@@ -122,7 +125,7 @@ profile.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `model.provider` | `ModelProvider` | `Many` | globally requires at least 1 | Provides streaming/non-streaming generation, tool calls, stop reasons, usage, and capability reporting. | Mapped |
+| `model.provider` | `ModelProvider` | `Many` | globally requires at least 1 | Streams model output, tool calls, stop reasons, usage, and capability reporting behind provider-neutral semantics; non-streaming responses are Gateway aggregation. | Mapped |
 | `model.selector` | `ModelSelector` | `One` | optional; conditional for dynamic routing | Selects a provider/model using explicit request and policy inputs. | Mapped |
 | `model.catalog` | `ModelCatalog` | `Many` | optional | Describes available models and their declared capabilities without exposing credentials. | Mapped |
 | `model.middleware` | `ModelMiddleware` | `Chain` | optional | Applies observable request/response concerns without changing provider identity. | Mapped |
@@ -176,7 +179,7 @@ decisions must use policy/approval components rather than concrete UI checks.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `history.store` | `HistoryStore` | `One` | optional | Persists the published conversation and run event log as an append-only sequence. | Mapped |
+| `history.store` | `HistoryStore` | `One` | optional | Persists published conversation and run facts as an append-only sequence; Queue, Context, and RunJournal remain separate responsibilities under review. | Mapped |
 | `context.source` | `ContextSource` | `Chain` | optional | Contributes ordered context for a model turn. | Mapped |
 | `context.compactor` | `ContextCompactor` | `One` | optional | Produces a smaller derived context without rewriting published history. | Mapped |
 | `memory.store` | `MemoryStore` | `Many` | optional | Reads and writes durable recall outside the authoritative conversation history. | Mapped |
@@ -187,6 +190,8 @@ Terminology is strict:
 - A **session** is stable identity and lifecycle.
 - **History** is the ordered record already published to a user or model.
 - **Context** is the derived input assembled for the next model call.
+- **Queue** is the durable set of normal, steer, and held messages not yet in Context.
+- **RunJournal** records in-flight execution and tool recovery evidence, not model context.
 - **Memory** is durable recall selected for possible future use.
 - A **checkpoint** is resumable runtime state.
 

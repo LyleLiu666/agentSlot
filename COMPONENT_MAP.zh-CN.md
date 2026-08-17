@@ -38,14 +38,15 @@
 
 | Slot ID | 标准契约 | 类型 | 必需基数 | 职责 |
 | --- | --- | --- | --- | --- |
-| `agent.loop` | `AgentLoop` | `One` | 恰好 1 个 | 负责轮次执行、模型/工具迭代、重试、继续和停止策略。 |
+| `agent.loop` | `AgentLoopFactory` | `One` | 恰好 1 个 | 提供 Factory，为每个已打开的 Session 创建独立 AgentLoop；每个 Loop 负责轮次执行、模型/工具迭代、重试、继续和停止策略。 |
 | `session.manager` | `SessionManager` | `One` | 恰好 1 个 | 创建或解析稳定的 Session 身份，并管理 Session 生命周期。 |
 | `model.provider` | `ModelProvider` | `Many` | 至少 1 个 | 以供应商无关的 Agent 语义执行模型请求。 |
 | `interaction.entrypoint` | `Entrypoint` | `Many` | 至少 1 个 | 通过 TUI、Web、桌面端、HTTP、ACP 或其他协议接收输入并呈现 Agent 输出。 |
 
-这些是装配要求，不是引入隐藏运行时协调器的借口。`AgentLoop` 始终是循环
-语义的唯一所有者。Entrypoint 通过标准契约调用 Loop，不能重新实现模型和
-工具的控制流程。
+这些是装配要求，不是引入隐藏运行时协调器的借口。`agent.loop` 安装一个
+`AgentLoopFactory`，由它为每个已打开的 Session 创建独立 `AgentLoop`。每个
+Session 的 Loop 始终是循环语义的唯一所有者。Entrypoint 通过标准契约调用
+Loop，不能重新实现模型和工具的控制流程。
 
 `ModelProvider` 必须存在，因为一个虽然能启动、却不能生成模型响应的计划，
 不能算可运行的 LLM Agent。标准契约必须保持供应商无关。AgentSlot 将提供
@@ -63,7 +64,8 @@ Tools 有意不进入全局最低基数。纯对话 Agent 可以在没有工具�
 ```mermaid
 flowchart LR
     E["Entrypoint（1..n）"] --> S["SessionManager（1）"]
-    E --> L["AgentLoop（1）"]
+    E --> F["AgentLoopFactory（1）"]
+    F --> L["每个 Session 一个 AgentLoop"]
     L --> M["ModelProvider（1..n）"]
     L -. "可选" .-> T["工具与技能"]
     L -. "可选" .-> C["上下文、历史与记忆"]
@@ -97,12 +99,13 @@ flowchart LR
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `agent.loop` | `AgentLoop` | `One` | 全局必需 | 执行一次 Agent 请求，并负责所有循环控制决策。 | 已映射 |
+| `agent.loop` | `AgentLoopFactory` | `One` | 全局必需 | 为每个已打开的 Session 创建独立 AgentLoop；每个 Loop 执行请求并负责循环控制决策。 | 已映射 |
 | `session.manager` | `SessionManager` | `One` | 全局必需 | 解析稳定的 Session 身份并管理其生命周期，但不吞并历史存储职责。 | 已映射 |
 | `interaction.entrypoint` | `Entrypoint` | `Many` | 全局至少 1 个 | 把面向调用方的协议或 UI 与 Session、AgentLoop 连接起来。 | 已映射 |
 | `runtime.observer` | `RuntimeObserver` | `Chain` | 可选 | 观察 Agent、轮次、消息、工具、重试和生命周期事件，但不控制 Loop。 | 已映射 |
 
-`AgentLoop` 的实现可以截然不同，例如通用助手、编程 Agent、研究 Agent、
+`AgentLoopFactory` 的方法级契约目前只是设计基线，还不是已定义契约或已证明的
+公开接口。`AgentLoop` 的实现可以截然不同，例如通用助手、编程 Agent、研究 Agent、
 确定性工作流 Agent 或远程 Agent 桥接器。如果某个实现隐藏了自己的外部模型
 服务，无法使用 `model.provider`，它就不符合标准 LLM Agent Profile；但仍可在
 另一个明确的 Profile 下使用底层组装核心。
@@ -111,7 +114,7 @@ flowchart LR
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `model.provider` | `ModelProvider` | `Many` | 全局至少 1 个 | 提供流式/非流式生成、工具调用、停止原因、用量和能力声明。 | 已映射 |
+| `model.provider` | `ModelProvider` | `Many` | 全局至少 1 个 | 以供应商无关语义流式输出模型内容、工具调用、停止原因、用量和能力；非流式响应由 Gateway 聚合。 | 已映射 |
 | `model.selector` | `ModelSelector` | `One` | 可选；动态路由时按条件要求 | 根据明确的请求和策略输入选择 Provider/模型。 | 已映射 |
 | `model.catalog` | `ModelCatalog` | `Many` | 可选 | 描述可用模型及其声明能力，但不暴露凭证。 | 已映射 |
 | `model.middleware` | `ModelMiddleware` | `Chain` | 可选 | 在不改变 Provider 身份的前提下处理可观察的请求/响应横切逻辑。 | 已映射 |
@@ -160,7 +163,7 @@ OpenAI 专属的网络数据结构。
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `history.store` | `HistoryStore` | `One` | 可选 | 以仅追加序列持久化已发布的对话和运行事件日志。 | 已映射 |
+| `history.store` | `HistoryStore` | `One` | 可选 | 以仅追加序列持久化已发布的对话和运行事实；Queue、Context 与 RunJournal 仍是待评审的独立职责。 | 已映射 |
 | `context.source` | `ContextSource` | `Chain` | 可选 | 为一次模型调用按顺序提供上下文。 | 已映射 |
 | `context.compactor` | `ContextCompactor` | `One` | 可选 | 在不改写已发布历史的前提下生成更小的派生上下文。 | 已映射 |
 | `memory.store` | `MemoryStore` | `Many` | 可选 | 读写权威对话历史之外的持久化召回信息。 | 已映射 |
@@ -171,6 +174,8 @@ OpenAI 专属的网络数据结构。
 - **Session** 是稳定身份和生命周期。
 - **History** 是已经向用户或模型发布过的有序记录。
 - **Context** 是为下一次模型调用组装出的派生输入。
+- **Queue** 是尚未进入 Context 的持久化 normal、steer 和 held 消息集合。
+- **RunJournal** 记录进行中的执行和工具恢复证据，不进入模型 Context。
 - **Memory** 是可能在未来被选中使用的持久化召回信息。
 - **Checkpoint** 是可以恢复的运行时状态。
 

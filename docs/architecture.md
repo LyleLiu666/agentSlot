@@ -39,10 +39,31 @@ partially materialized plan. Constructors can therefore run again on a later
 build attempt and must remain free of lifecycle side effects. A failed start
 rolls back only modules whose `Start` completed successfully.
 
-The current scope unit is one plan. A product creates a separate application
-(or lower-level builder and plan) for each independently owned runtime or
-session. Hierarchical inheritance is deferred until real products prove that
-separate plans plus explicit parent inputs are insufficient.
+An Application Plan is the application scope, not a Session scope. One plan can
+serve many Workspaces and Sessions. The `agent.loop` Slot installs an
+`AgentLoopFactory`; after a SessionManager opens a Session, the Factory creates
+one isolated Loop for that Session. Hierarchical Workspace or Session
+inheritance is still deferred, but it must not be modelled as repeated Plans.
+
+The Plan owns application-level lifecycle components such as the Factory,
+Provider adapters, shared Gateway, and SessionStore services. A per-Session
+Loop is a runtime child created after `Plan.Start`; closing that child releases
+its in-memory execution state without deleting the Session or its durable
+views.
+
+## Session-scoped runtime
+
+The runtime boundary below the Plan is explicit:
+
+1. `SessionManager` creates or opens a stable Session and performs recovery.
+2. `AgentLoopFactory.Open` receives the already-open Session and an immutable
+   AgentDefinition snapshot.
+3. The resulting Loop owns exactly one Session and at most one active Run.
+4. Different Sessions receive different Loop objects and may run concurrently.
+5. History, Context, Queue, and RunJournal are Session views coordinated by an
+   atomic SessionStore transaction; the Loop does not create or fork Sessions.
+6. Gateway is shared by the Application and routes commands/events using
+   `AgentID + WorkspaceID + SessionID + RunID`, without exposing Loop objects.
 
 ## Application host
 
@@ -71,7 +92,7 @@ assembly before any lifecycle side effect begins.
 
 `One[T]` allows zero or one value. Optionality and uniqueness are separate rules: the slot enforces uniqueness, while the selected product profile decides whether the value is required.
 
-Use it for a selected agent loop, policy arbiter, scheduler, or execution environment.
+Use it for a selected agent loop factory, policy arbiter, scheduler, or execution environment.
 
 ### Many
 
@@ -178,7 +199,9 @@ The composition API is ready for a stable release only after:
 1. At least two independent SDK ecosystems declare real slots over their existing interfaces.
 2. One assembled product can exchange implementations through those slots without branching on concrete provider types.
 3. Shared conformance tests verify registration, requirements, lifecycle, and exported plan descriptions.
-4. The evidence either proves that one plan per scope is sufficient or justifies a minimal parent-plan mechanism.
+4. The evidence proves that one application plan can safely serve multiple
+   Session-scoped Loop generations, or justifies a minimal parent-plan
+   mechanism without duplicating application components.
 
 Until those proofs exist, keep domain contracts outside the core and keep the plan schema at `v0`.
 
@@ -186,7 +209,7 @@ Until those proofs exist, keep domain contracts outside the core and keep the pl
 
 The published composition foundation currently defers implementation of:
 
-- hierarchical scopes and per-session generations;
+- the Session-scoped runtime objects and their standard domain method contracts;
 - configuration schemas and secret resolution;
 - out-of-process discovery or loading;
 - the mapped standard domain method contracts and their conformance suites.
