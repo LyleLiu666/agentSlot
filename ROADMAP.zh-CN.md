@@ -2,7 +2,7 @@
 
 Session 运行模型的确定结论见
 [Agent 设计的架构讨论](docs/agent-architecture-discussion.zh-CN.md)，可执行代码顺序见
-[StandardAgentLoop 实施计划](docs/standard-agent-loop-implementation-plan.zh-CN.md)。
+[AgentRuntime 与标准 Slot 实施计划](docs/agent-runtime-standard-slots-implementation-plan.zh-CN.md)。
 路线图只安排成熟度推进，不把尚未实现的设计写成已经交付。
 
 ## 1. 我们要解决什么问题
@@ -36,58 +36,66 @@ AgentSlot 的完整交付由五部分组成：
 成绩按已经证明可替换的标准组件计算，不按接口、文件或 Module 数量计算。
 Module 只是组件注册和生命周期的载体，不代表一个新的组件生态位。
 
-## 3. 两种运行 Profile（启动规则）
+## 3. 通用装配与标准 LLM Agent（启动规则）
 
-“能运行的 Agent Host”和“标准 LLM Agent”不是同一个概念，本路线图将两者分开：
+“AgentSlot 通用装配核心”和“标准 LLM Agent Profile”不是同一个概念，本路线图将
+两者分开：
 
-### 通用 Agent Host
+### 通用装配应用
 
-至少需要：
+底层 `agentslot.NewApplication` 只要求应用显式给出名称、Module 和自己的 Profile。
+它提供统一的 `Build`、`Start`、`Run` 和 `Stop`，但不偷偷加入 Agent 领域要求。
+因此确定性工作流、远程桥接器和非 LLM 程序仍可使用通用核心，自行声明本地 Slot。
 
-- 一个 `AgentLoopFactory`：为需要执行的 Session 按需创建独立 `AgentLoop`，由
-  每个 Loop 在执行期间驱动该 Session 的 Run 和 Step；
-- 一个 `SessionManager`：提供稳定的 Session 身份、持久状态和命令句柄；
-- 至少一个 `Entrypoint`：接收输入并返回结果，例如 TUI、Web、桌面端或 ACP。
-
-这种 Host 可以运行确定性工作流、远程 Agent 桥接器或其他不直接调用模型的 Loop。
+通用核心不提供可替换的标准循环。项目若需要与标准 LLM Agent 完全不同的循环，
+可以定义项目本地 Slot 和明确的非标准 Profile，但不能把它登记为 `agent.loop` 标准
+生态位。
 
 ### 标准 LLM Agent
 
-在通用 Host 基础上，还必须至少安装一个 `ModelProvider`。AgentSlot 自带的参考
-Agent、LAS 的标准装配和所有对外宣称的 LLM Agent 都必须遵守这项要求。
+标准 Profile 必须安装：
 
-Tool 和持久化 History 不作为所有 Agent 的强制要求：
+- 一个 `SessionManager`；
+- 一个 `SessionStore`；
+- 一个 `ModelExecutor`；
+- 至少一个 `Entrypoint`。
+
+`AgentRuntime` 和内部循环由框架提供，不是 Slot。`ModelProvider`、Tool、Context
+组件和 AgentHook 全局可选；如果某个 ModelExecutor 需要本地 Provider 集合，由它
+通过 Slot 依赖显式声明。
+
+Tool 不作为所有 Agent 的强制要求：
 
 - 没有 Tool 的 Agent 仍能正常对话；
-- 没有 History 的 Agent 可以完成单次任务；
-- 需要多轮连续对话的 Profile 应安装内存或持久化 History；
+- SessionStore 可以是内存实现，但仍必须满足 History、Context、Queue、RunJournal
+  和原子 revision/CAS 合同；
 - 编程、运维等 Profile 可以明确要求一组 Tool 和相应 Policy。
-
-底层 `agentslot.NewApplication` 保持通用，不偷偷加入业务要求。标准 Profile 由
-专门的上层入口提供，开发者可以清楚看到自己选择了哪套启动规则。
 
 ### 多 Workspace、多 Session 运行模型
 
 一个 Application Plan 只装配并启动一次应用级组件，可以同时服务多个 Workspace
-和 Session。`agent.loop` Slot 保存应用级 Factory，不保存共享的有状态 Loop：
+和 Session：
 
-- SessionManager 先创建或打开 Session；Session 取得执行权后再请求 Factory 创建独立 Loop；
-- 打开或浏览 Session 不创建 Loop；新 FollowUp 或显式 Resume 才触发按需创建；
-- 同一 Session 同时最多一个活跃 Loop 和 Run，不同 Session 可以并行；
+- 浏览或列出 Session 不创建 Runtime；CreateSession/ResumeSession 成功时立即初始化
+  一个绑定该 Session 的 AgentRuntime；
+- 同一进程、同一 SessionID 只有一个 Runtime；并发 resume 返回同一实例；
+- Runtime idle 时常驻，只在显式 Close 或应用停止时释放；Close 不删除 Session；
+- 同一 Session 同时最多一个活跃 Run，不同 Session 可以并行；
 - Session 明确提供 History、Context、Queue 三个业务视图；
-- FollowUp、Steer、Queue 修改、Cancel 和 Resume 进入长期 Session 命令接口，不进入短生命周期 Loop API；
+- Runtime 提供 Send、Steer、RunPending、Queue 修改、Cancel、WhenIdle 和 Close；
+- Resume 只表示从存储恢复 Session，不再兼任“继续执行”；
 - Queue 持久化尚未进入 Context 的 normal、steer 和 held 消息；
 - History 是唯一、有序、append-only 的事实账本；Context 才投影合法模型协议；
 - RunJournal 只保存进行中工具调用的恢复证据，不成为第二份对话账本；
 - 正常完成可以 FIFO 自动处理下一条 normal；取消、错误和重启回到 idle，但不自动消费旧 Queue；
 - 应用级 Gateway 通过稳定身份路由，不为每个 Session 重复创建。
 
-Gateway 是否取代 `interaction.entrypoint` 成为 Profile 必需项仍待商榷。本节不改变
-当前 Profile 基数，也不新增或改名任何 Slot。
+Gateway 是否取代 `interaction.entrypoint` 成为 Profile 必需项仍待商榷；当前仍由
+Entrypoint 表达最小接入要求。
 
 ## 4. 当前地图如何演进
 
-当前中英文组件地图中的 40 个生态位是正式基线。在完成逐项评审之前，不用一张
+当前中英文组件地图中的 41 个生态位是正式基线。在完成逐项评审之前，不用一张
 新表直接覆盖它，也不为了追求数量随意增加或删除 Slot。
 
 以下规则已经确定：
@@ -98,8 +106,12 @@ Gateway 是否取代 `interaction.entrypoint` 成为 Profile 必需项仍待商�
 - Policy 负责作出风险判断，Approval 负责完成人工审批，两者不能合成一个接口；
 - Trace 和 Metric 是不同的运维数据，不能因为经常一起使用就合成一个 Sink；
 - Gateway 的接入、身份、路由和投递可以独立替换，不能只保留出站投递；
-- `agent.loop` 安装 `AgentLoopFactory`，一个 Application Plan 服务多个 Session，
-  每个活跃执行的 Session 由 Factory 按需创建一个隔离 Loop；
+- 标准 `agent.loop` 已删除，因为固定 AgentRuntime 不是开发者可替换的生态位；
+- `session.manager` 与 `session.store` 分离，前者管理 Session 生命周期，后者负责完整
+  Session 聚合的持久化和原子事务；
+- `model.executor` 是标准必需 `One` Slot，`model.provider` 是由具体 Executor
+  选择性依赖的可选 `Many` Slot；
+- `agent.hook` 是可选 `Chain` Slot，只允许受控 proposal 和提交后观察；
 - Session 的 History、Context、Queue 和 RunJournal 必须按不同修改规则建模，
   即使具体存储实现把它们放在同一个事务数据库中；
 - Interrupt、Steer、Retry 等控制命令不只来自 Gateway。它们作为
@@ -213,8 +225,8 @@ AgentSlot 禁止反射扫描、`init()` 自动注册和隐藏的全局组件容�
 
 ### 第一层：最小对话 Agent
 
-- Provider 无关的 `AgentLoopFactory` 和按活跃执行 Session 创建的基础 Loop；
-- 无密钥确定性 Provider，用于自动化测试；
+- 框架固定的 AgentRuntime，以及 Send/Steer/RunPending/Cancel/WhenIdle/Close；
+- 无密钥确定性 ModelExecutor，用于自动化测试；
 - 正式的 OpenAI Chat Compatible 配置入口；
 - 支持多 Session 隔离的内存 SessionManager/SessionStore；
 - 一个最小交互入口；
@@ -227,8 +239,8 @@ AgentSlot 禁止反射扫描、`init()` 自动注册和隐藏的全局组件容�
 - 内存严格追加 History；
 - Context Source 和 Compactor；
 - Policy Guard 与 Approval Service；
-- Steering、Follow-up 和内部重试。
-- 持久化 Queue、Resume 命令和 RunJournal 崩溃恢复；
+- Steer、Send、RunPending 和 ModelExecutor 内部重试；
+- 持久化 Queue、Session 恢复和 RunJournal 崩溃恢复；
 
 ### 第三层：编程 Agent 示例包
 
@@ -239,7 +251,7 @@ AgentSlot 禁止反射扫描、`init()` 自动注册和隐藏的全局组件容�
 
 [pi agent loop](https://github.com/badlogic/pi-mono/blob/main/packages/agent/src/agent-loop.ts)
 和 [coding-agent SDK](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/sdk.md)
-已经证明工具循环、Steering、Follow-up、流式事件和上下文处理是有效的行为分层。
+已经证明工具循环、Steering、追加输入、流式事件和上下文处理是有效的行为分层。
 AgentSlot 参考这些行为，不复制 pi 的类型、聚合 Session 或产品目录结构。
 
 ## 10. 实施顺序
@@ -249,7 +261,7 @@ AgentSlot 参考这些行为，不复制 pi 的类型、聚合 Session 或产品
 - 建立 ComponentCatalog；
 - 从 Catalog 生成中英文地图；
 - 建立防漂移测试；
-- 所有现有 40 项先保持 `mapped`，不虚报接口完成度；
+- 所有现有 41 项先保持 `mapped`，不虚报接口完成度；
 - 对每项 Slot 增删改记录业务理由和兼容影响。
 
 ### 阶段 1：建立共同语言
@@ -257,30 +269,39 @@ AgentSlot 参考这些行为，不复制 pi 的类型、聚合 Session 或产品
 - 完成 Agent、Workspace、Session、Run、Step、Message、ToolCall 身份，以及
   History、Context、Queue、RunJournal 的状态与事件类型；
 - 保持模型模态和工具 JSON Schema 规则；
-- 用两个 Provider 协议和两个 Session/History 实现校验这些类型没有偏向单一 SDK。
+- 声明 `session.manager`、`session.store`、`model.executor`、`agent.hook` 及第一批
+  关联 typed Slot，并用红测试固定基数、依赖和错误语义；
+- 只提供最小假实现证明装配，不实现完整 AgentRuntime，不打 tag、不发布；
+- 接口批次通过评审后，才进入 Runtime 实现。
 
-### 阶段 2：跑通标准 LLM Agent
+### 阶段 2：先证明 Session 合同
 
-- 完成 AgentLoopFactory、按需 AgentLoop、SessionManager、ModelProvider
-  和 Entrypoint；
-- 完成无密钥确定性链路和真实 OpenAI Chat Compatible 入口；
-- 验证一个 Application Plan 下的零 Tool、取消、错误、流式事件和多 Session 隔离；
-- 验证打开 Session 不创建 Loop、同一 Session 只有一个活跃 Loop/Run、正常完成自动
-  FIFO，取消、错误和重启后回到 idle 且不自动消费旧 Queue；
-- 提供极简交互入口，但不把文件和 Shell 工具作为标准 Agent 的必需能力。
+- 完成内存 SessionStore 与 SessionManager；
+- 验证 append-only、revision/CAS、幂等和跨 History/Context/Queue/RunJournal 的原子边界；
+- 验证 create、resume、完整 fork、摘要启动和崩溃恢复；
+- 验证浏览不创建 Runtime，并发 resume 的单实例语义不制造半成品。
 
-### 阶段 3：完成第一批可扩展能力
+### 阶段 3：跑通固定 AgentRuntime
+
+- 实现框架 AgentRuntime，不新增 Runtime Slot、Host 或公开 Factory；
+- 完成 ModelExecutor、Entrypoint、无密钥确定性链路和真实 OpenAI Chat Compatible 入口；
+- 验证 idle/running/closed、Send、Steer、RunPending、Cancel、WhenIdle 和 Close；
+- 验证一个 Application Plan 下的零 Tool、流式事件、多 Session 隔离和 Runtime idle 常驻；
+- 验证正常完成自动 FIFO，取消、错误和重启后回到 idle 且不自动消费旧 Queue。
+
+### 阶段 4：完成第一批可扩展能力
 
 - 完成 Tool、Events、History、Context、Policy 和 Approval；
 - 完成持久化 Queue、RunJournal、Context 版本与完整 History 查询；
-- 验证 StandardLoop 更换 Provider、Tool、Session、History、Entrypoint 和 Policy
+- 验证固定 Runtime 更换 ModelExecutor、Provider、Tool、SessionManager、SessionStore、
+  Context、Hook、Entrypoint 和 Policy
   时没有具体类型分支；
 - 验证工具 call 事实与 Journal pending 同事务、result 后续唯一终结、未知副作用恢复和跨 Session 文件版本冲突；
-- 验证 ModelExecutor 管理 Provider-specific 物理尝试和 AttemptID，Loop 不包含供应商恢复分支；
+- 验证 ModelExecutor 管理 Provider-specific 物理尝试和 AttemptID，Runtime 不包含供应商恢复分支；
 - 验证替换 ContextCompactor 不受默认“最近三条”算法限制，但仍满足协议和 Token 硬上限；
 - 加入工具 Agent 和编程 Agent 示例包。
 
-### 阶段 4：逐域扩展
+### 阶段 5：逐域扩展
 
 - Environment、Artifact 和 Credential；
 - Memory、Checkpoint、Workflow 和多 Agent；
@@ -290,7 +311,7 @@ AgentSlot 参考这些行为，不复制 pi 的类型、聚合 Session 或产品
 每个阶段只按已经取得的成熟度记分，不因为写了空接口、空 Module 或示例文件就
 算完成。
 
-### 阶段 5：真实生态迁移
+### 阶段 6：真实生态迁移
 
 - 旧 SDK 通过新增 `adapters/agentslot` 暴露拆分后的组件；
 - 保留旧 SDK 原有装配入口，不要求 lyleCode 同步迁移；

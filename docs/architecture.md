@@ -40,33 +40,37 @@ build attempt and must remain free of lifecycle side effects. A failed start
 rolls back only modules whose `Start` completed successfully.
 
 An Application Plan is the application scope, not a Session scope. One plan can
-serve many Workspaces and Sessions. The `agent.loop` Slot installs an
-`AgentLoopFactory`; after a Session receives FollowUp or Resume and atomically
-claims execution, the Factory creates one isolated Loop on demand. Opening or
-browsing a Session does not create a Loop. Hierarchical Workspace or Session
-inheritance is still deferred, but it must not be modelled as repeated Plans.
+serve many Workspaces and Sessions. It owns shared components such as
+SessionManager, SessionStore, ModelExecutor, optional Provider adapters, Tools,
+Context components, Hooks, and Gateway services. Hierarchical Workspace or
+Session inheritance is still deferred, but it must not be modelled as repeated
+Plans.
 
-The Plan owns application-level lifecycle components such as the Factory,
-Provider adapters, shared Gateway, and SessionStore services. A per-Session
-Loop is a runtime child created only during active execution after `Plan.Start`;
-closing that child releases its in-memory execution state without deleting the
-Session or its durable views.
+`AgentRuntime` is fixed framework behavior below the started Plan, not a Slot.
+Explicitly creating or resuming a Session initializes one Runtime bound to that
+Session; listing or viewing Sessions does not. The Runtime remains resident
+while idle and is released only by explicit Close or application shutdown.
+Closing it never deletes the Session or its durable views.
 
 ## Session-scoped runtime
 
 The runtime boundary below the Plan is explicit:
 
-1. `SessionManager` creates or opens a stable Session and performs recovery.
-2. The Session durably owns History, Context, Queue, RunJournal, and the
-   FollowUp, Steer, Queue-mutation, Cancel, and Resume command entry points.
-3. New FollowUp or explicit Resume atomically claims execution and asks
-   `AgentLoopFactory.Create` for a Loop using an immutable AgentDefinition snapshot.
-4. The resulting Loop binds exactly one Session; the same Session has at most
-   one active Loop and Run, while different Sessions may run concurrently.
-5. Loop reclamation never changes Session correctness. Immediate reclamation
-   or a short idle grace period is an implementation optimization.
+1. `SessionManager` creates, resumes, fully forks, or summary-starts a stable
+   Session and performs recovery through the replaceable `SessionStore`.
+2. The Session aggregate durably owns History, Context, Queue, RunJournal, and
+   revision/CAS transaction state.
+3. Successful `CreateSession` or `ResumeSession` initializes one AgentRuntime
+   with an immutable AgentConfig snapshot and the components selected by Plan.
+4. The same process and SessionID have one Runtime; concurrent resume calls
+   converge on it. The Session has at most one active Run, while different
+   Sessions may run concurrently.
+5. Runtime commands are `Send`, `Steer`, `RunPending`, Queue mutations,
+   `Cancel`, `WhenIdle`, queries, and `Close`. Resume only means restoring a
+   Session; it is not an execution command.
 6. Gateway is shared by the Application and routes commands/events using
-   `AgentID + WorkspaceID + SessionID + RunID`, without exposing Loop objects.
+   `AgentID + WorkspaceID + SessionID + RunID`, without exposing Runtime objects
+   over RPC.
 
 ## Application host
 
@@ -95,7 +99,9 @@ assembly before any lifecycle side effect begins.
 
 `One[T]` allows zero or one value. Optionality and uniqueness are separate rules: the slot enforces uniqueness, while the selected product profile decides whether the value is required.
 
-Use it for a selected agent loop factory, policy arbiter, scheduler, or execution environment.
+Use it for a selected SessionManager, SessionStore, ModelExecutor, policy
+arbiter, scheduler, or execution environment. Framework-owned AgentRuntime is
+not represented by `One[T]` because it is not replaceable.
 
 ### Many
 
@@ -145,16 +151,21 @@ listeners, locks, and other non-repeatable resources belong to `Start` and
 The intended dependency direction is:
 
 ```text
-products and profiles
-        |
-adapters and implementations
-        |
-standard component contracts
-        |
-AgentSlot composition core
+             products and profiles
+                /          \
+fixed AgentRuntime          entrypoints, adapters, implementations
+                \          /
+          standard component contracts
+                       |
+          AgentSlot composition core
 ```
 
 The core must remain usable without an LLM SDK, tool SDK, database, UI framework, or wire protocol.
+
+The fixed Runtime layer depends on standard contracts and the generic core; the
+generic core does not import AgentRuntime. This preserves a product-neutral
+composition package while still giving conforming LLM Agent projects one loop,
+one command vocabulary, and one set of transaction invariants.
 
 Standard component contracts are introduced in AgentSlot-owned leaf packages
 after real implementations establish common behavior. An adapter may depend on
@@ -203,8 +214,8 @@ The composition API is ready for a stable release only after:
 2. One assembled product can exchange implementations through those slots without branching on concrete provider types.
 3. Shared conformance tests verify registration, requirements, lifecycle, and exported plan descriptions.
 4. The evidence proves that one application plan can safely serve multiple
-   Session-scoped Loop generations, or justifies a minimal parent-plan
-   mechanism without duplicating application components.
+   isolated per-Session AgentRuntime instances without duplicating
+   application-level components.
 
 Until those proofs exist, keep domain contracts outside the core and keep the plan schema at `v0`.
 

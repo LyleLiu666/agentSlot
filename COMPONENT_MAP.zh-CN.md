@@ -20,7 +20,7 @@
 
 | 资产 | 数量 |
 | --- | ---: |
-| 已映射的标准组件生态位 | 40 |
+| 已映射的标准组件生态位 | 41 |
 | 已标准化的领域词汇 | 2 |
 | 已定义契约的 AgentSlot 自有领域接口 | 0 |
 | 通过一致性验证的组件生态位 | 0 |
@@ -29,7 +29,7 @@
 
 独立的组装协议目前导出了五个 Go 接口：`Module`、`SlotRequirer`、
 `Registrar`、`Contribution` 和 `Lifecycle`。它们是框架机制，不能代替
-地图中 40 个待落地的 Agent 领域组件契约。
+地图中 41 个待落地的 Agent 领域组件契约。
 
 ## 可运行标准 Profile
 
@@ -38,40 +38,44 @@
 
 | Slot ID | 标准契约 | 类型 | 必需基数 | 职责 |
 | --- | --- | --- | --- | --- |
-| `agent.loop` | `AgentLoopFactory` | `One` | 恰好 1 个 | 提供 Factory，为每个需要活跃执行的 Session 按需创建至多一个独立 AgentLoop；Loop 在执行期间负责模型/工具迭代和循环控制决策。 |
-| `session.manager` | `SessionManager` | `One` | 恰好 1 个 | 创建或解析稳定 Session，并提供其持久状态与命令句柄。 |
-| `model.provider` | `ModelProvider` | `Many` | 至少 1 个 | 以供应商无关的 Agent 语义执行模型请求。 |
+| `session.manager` | `SessionManager` | `One` | 恰好 1 个 | 创建、恢复、完整 fork 或摘要启动稳定 Session，但不吞并可替换的持久化实现。 |
+| `session.store` | `SessionStore` | `One` | 恰好 1 个 | 持久化 Session 聚合中的 History、Context、Queue、RunJournal、revision 和原子 CAS 事务。 |
+| `model.executor` | `ModelExecutor` | `One` | 恰好 1 个 | 执行一次逻辑模型调用，并封装 Provider 专属的真实请求、流恢复和最终失败语义。 |
 | `interaction.entrypoint` | `Entrypoint` | `Many` | 至少 1 个 | 通过 TUI、Web、桌面端、HTTP、ACP 或其他协议接收输入并呈现 Agent 输出。 |
 
-这些是装配要求，不是引入隐藏运行时协调器的借口。`agent.loop` 安装一个
-`AgentLoopFactory`，只在 Session 已经取得活跃执行权时创建独立 `AgentLoop`。
-打开或浏览 Session 不创建 Loop。Session 长期拥有状态和命令入口；活跃 Loop
-始终是循环语义的唯一所有者。Entrypoint 调用 Session 命令而不持有 Loop 对象，
-也不能重新实现模型和工具的控制流程。
+`AgentRuntime` 及其模型/工具循环是框架固定行为，不是 Slot，也不是可替换组件
+生态位。创建或显式恢复 Session 时初始化一个绑定该 Session 的 Runtime；仅列出或
+浏览 Session 不创建。一个进程内同一 Session 只有一个 Runtime，idle 时继续驻留，
+只在显式 Close 或应用停止时释放。Entrypoint 调用 Session 生命周期入口和 Runtime
+命令，不能重新实现模型与工具控制流程。
 
-`ModelProvider` 必须存在，因为一个虽然能启动、却不能生成模型响应的计划，
-不能算可运行的 LLM Agent。标准契约必须保持供应商无关。AgentSlot 将提供
-官方 OpenAI Chat Compatible 适配器，作为最普及的基线实现；OpenAI
-Responses、Anthropic Messages 和其他协议则是同一个 Slot 契约的独立实现。
+一个不可变 AgentConfig 快照为 Runtime 生命周期提供 SystemPrompt、模型选择与参数、
+ToolKeys 和 Context 配置。这些属于产品配置，不是 Slot 实现。SystemPrompt 和工具
+Schema 在模型请求中装配，不能仅因为模型可见就反复写成 History 事实。
 
-当只安装一个模型 Provider 时，应用可以自动选中它。安装多个 Provider 时，
-计划必须配置一个明确且确定的默认模型/Provider，或者提供
-`ModelSelector`。选择结果绝不能依赖 Module 安装顺序、具体 Go 类型或隐藏的
-兜底逻辑。
+全局必需的是 `ModelExecutor`，而不是 `ModelProvider`，因为前者才是 Runtime 的
+逻辑模型调用边界。`model.provider` 是可选 `Many` Slot：使用本地 Provider 集合的
+Executor 必须显式声明依赖；使用远程模型服务或内嵌后端的 Executor 不必伪造
+Provider 注册表。
+
+当 Executor 声明依赖 `model.provider` 且只安装一个 Provider 时，可以自动选中它。
+安装多个 Provider 时，必须通过 AgentConfig/Executor 配置或 `ModelSelector` 做出
+明确、确定的选择，绝不能依赖 Module 安装顺序、具体 Go 类型或隐藏兜底。
 
 Tools 有意不进入全局最低基数。纯对话 Agent 可以在没有工具时运行；编程或
 运维 Profile 可以要求特定工具集合，但不能把这种要求强加给所有 Agent。
 
 ```mermaid
 flowchart LR
-    E["Entrypoint（1..n）"] --> S["SessionManager（1）"]
-    S -->|"FollowUp / Resume"| F["AgentLoopFactory（1）"]
-    F --> L["活跃执行期间的 AgentLoop"]
-    L --> M["ModelProvider（1..n）"]
-    L -. "可选" .-> T["工具与技能"]
-    L -. "可选" .-> C["上下文、历史与记忆"]
-    L -. "可选" .-> X["执行与策略"]
-    L -. "事件" .-> O["观察与运维"]
+    E["Entrypoint（1..n）"] --> SM["SessionManager（1）"]
+    SM --> SS["SessionStore（1）"]
+    SM -->|"CreateSession / ResumeSession"| R["框架 AgentRuntime"]
+    R --> ME["ModelExecutor（1）"]
+    ME -. "可选依赖" .-> MP["ModelProvider（0..n）"]
+    R -. "可选" .-> T["工具与技能"]
+    R -. "可选" .-> C["Context 组件"]
+    R -. "可选" .-> H["AgentHooks"]
+    R -. "事件" .-> O["观察与运维"]
 ```
 
 ## 成熟度成绩单
@@ -100,22 +104,21 @@ flowchart LR
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `agent.loop` | `AgentLoopFactory` | `One` | 全局必需 | 为每个正在活跃执行的 Session 按需创建至多一个独立 AgentLoop；Loop 在执行期间执行请求并负责循环控制决策。 | 已映射 |
-| `session.manager` | `SessionManager` | `One` | 全局必需 | 解析稳定 Session 的身份、生命周期、状态和命令句柄，但不吞并可替换的持久化实现。 | 已映射 |
-| `interaction.entrypoint` | `Entrypoint` | `Many` | 全局至少 1 个 | 把面向调用方的协议或 UI 与 Session 命令、Snapshot 和 Agent 事件连接起来。 | 已映射 |
-| `runtime.observer` | `RuntimeObserver` | `Chain` | 可选 | 观察 Agent、轮次、消息、工具、重试和生命周期事件，但不控制 Loop。 | 已映射 |
+| `session.manager` | `SessionManager` | `One` | 全局必需 | 创建、恢复、完整 fork 或摘要启动稳定 Session，并依赖可替换的 SessionStore 持久化。 | 已映射 |
+| `interaction.entrypoint` | `Entrypoint` | `Many` | 全局至少 1 个 | 把面向调用方的协议或 UI 与 Session 生命周期入口、Runtime 命令、Snapshot 和 Agent 事件连接起来。 | 已映射 |
+| `agent.hook` | `AgentHook` | `Chain` | 可选 | 有序执行受控 Hook：在 Run 完成前提出后续输入，或观察已提交事实，但不能直接修改 Session 或 Runtime 状态。 | 已映射 |
+| `runtime.observer` | `RuntimeObserver` | `Chain` | 可选 | 被动观察 Agent、Run、消息、工具、重试和生命周期事件，但不控制 Runtime。 | 已映射 |
 
-`AgentLoopFactory` 的方法级契约目前只是设计基线，还不是已定义契约或已证明的
-公开接口。`AgentLoop` 的实现可以截然不同，例如通用助手、编程 Agent、研究 Agent、
-确定性工作流 Agent 或远程 Agent 桥接器。如果某个实现隐藏了自己的外部模型
-服务，无法使用 `model.provider`，它就不符合标准 LLM Agent Profile；但仍可在
-另一个明确的 Profile 下使用底层组装核心。
+固定 AgentRuntime 有意不出现在表中：组件地图只记录定制边界，不罗列全部框架
+对象。确实需要完全不同循环的产品可以在通用装配核心上定义项目本地 Slot 和明确的
+非标准 Profile，但不能宣称符合标准 LLM AgentRuntime。
 
 ### 2. 模型访问
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `model.provider` | `ModelProvider` | `Many` | 全局至少 1 个 | 以供应商无关语义流式输出模型内容、工具调用、停止原因、用量和能力；非流式响应由 Gateway 聚合。 | 已映射 |
+| `model.executor` | `ModelExecutor` | `One` | 全局必需 | 执行一次逻辑模型请求，在内部管理真实请求和恢复，并统一发出临时输出、reset、完整结果或最终失败。 | 已映射 |
+| `model.provider` | `ModelProvider` | `Many` | 可选；仅由声明依赖的 Executor 要求 | 为组合本地适配器的 Executor 提供具名 Provider 访问。 | 已映射 |
 | `model.selector` | `ModelSelector` | `One` | 可选；动态路由时按条件要求 | 根据明确的请求和策略输入选择 Provider/模型。 | 已映射 |
 | `model.catalog` | `ModelCatalog` | `Many` | 可选 | 描述可用模型及其声明能力，但不暴露凭证。 | 已映射 |
 | `model.middleware` | `ModelMiddleware` | `Chain` | 可选 | 在不改变 Provider 身份的前提下处理可观察的请求/响应横切逻辑。 | 已映射 |
@@ -138,7 +141,7 @@ OpenAI 专属的网络数据结构。
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `tool` | `Tool` | `Many` | 全局可选；Profile 可要求指定键 | 声明并调用一个可供 Loop 使用的具名能力。 | 已映射 |
+| `tool` | `Tool` | `Many` | 全局可选；Profile 可要求指定键 | 声明并调用一个可供 AgentRuntime 使用的具名能力。 | 已映射 |
 | `skill` | `Skill` | `Many` | 可选 | 提供可发现的指令、资源或组件包，不能用自然语言关键字匹配冒充语义路由。 | 已映射 |
 | `tool.middleware` | `ToolMiddleware` | `Chain` | 可选 | 为调用过程增加策略、遥测、标准化或恢复处理。 | 已映射 |
 | `tool.output-store` | `ToolOutputStore` | `One` | 可选 | 存储超大或二进制工具结果，并返回稳定引用。 | 已映射 |
@@ -164,9 +167,9 @@ OpenAI 专属的网络数据结构。
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `history.store` | `HistoryStore` | `One` | 可选 | 以仅追加序列持久化唯一、有序的已提交对话、模型、工具和运行事实；Queue、Context 与 RunJournal 保持不同职责。 | 已映射 |
+| `session.store` | `SessionStore` | `One` | 全局必需 | 持久化完整 Session 聚合及其 revision/CAS 原子事务；History 是聚合内唯一、append-only 的事实视图。 | 已映射 |
 | `context.source` | `ContextSource` | `Chain` | 可选 | 为一次模型调用按顺序提供上下文。 | 已映射 |
-| `context.compactor` | `ContextCompactor` | `One` | 可选 | 把当前完整 Context 转为更小的会话消息投影且不改写 History；Loop 重新装配固定 Prompt/Tool，并校验协议和硬 Token 上限。 | 已映射 |
+| `context.compactor` | `ContextCompactor` | `One` | 可选 | 把当前完整 Context 转为更小的会话消息投影且不改写 History；AgentRuntime 重新装配固定 Prompt/Tool，并校验协议和硬 Token 上限。 | 已映射 |
 | `memory.store` | `MemoryStore` | `Many` | 可选 | 读写权威对话历史之外的持久化召回信息。 | 已映射 |
 | `checkpoint.store` | `CheckpointStore` | `One` | 可选 | 保存可恢复的执行状态，但不把它冒充为用户可见的历史。 | 已映射 |
 
@@ -180,8 +183,9 @@ OpenAI 专属的网络数据结构。
 - **Memory** 是可能在未来被选中使用的持久化召回信息。
 - **Checkpoint** 是可以恢复的运行时状态。
 
-如果安装了 `HistoryStore`，所有已提交事实必须严格仅追加。实现不得修改、
-删除、换位，也不得向已经提交的尾部之前插入事实。上下文压缩只能产生派生
+每个 `SessionStore` 都必须保证已提交 History 事实严格仅追加。实现不得修改、
+删除、换位，也不得向已经提交的尾部之前插入事实；还必须原子协调 History、
+Context、Queue、RunJournal 和 revision/CAS 边界。上下文压缩只能产生派生
 Context，绝不能改写 History。
 标准 Compactor 契约允许整体替换；“摘要 + 最近三条 inbound”只是默认实现，
 不是框架不变量。
@@ -208,7 +212,7 @@ Context，绝不能改写 History。
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
 | `agent.provider` | `AgentProvider` | `Many` | 可选 | 暴露具名的子 Agent 或远程 Agent 能力。 | 已映射 |
-| `workflow.scheduler` | `WorkflowScheduler` | `One` | 可选 | 调度多步骤或多 Agent 工作，但不替代单个 AgentLoop。 | 已映射 |
+| `workflow.scheduler` | `WorkflowScheduler` | `One` | 可选 | 调度多步骤或多 Agent 工作，但不替代框架固定的每 Session AgentRuntime。 | 已映射 |
 | `job.store` | `JobStore` | `One` | 可选 | 持久化排队中、运行中和已完成的工作流任务状态。 | 已映射 |
 | `mailbox` | `Mailbox` | `One` | 可选 | 在 Agent 或任务之间传递有明确收件人的异步消息。 | 已映射 |
 

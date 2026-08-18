@@ -15,15 +15,14 @@ Typed component slots and deterministic composition for agent systems.
 
 > **Agent runtime decisions and implementation design:**
 > [Agent 设计的架构讨论](docs/agent-architecture-discussion.zh-CN.md) |
-> [StandardAgentLoop 实施计划](docs/standard-agent-loop-implementation-plan.zh-CN.md).
+> [AgentRuntime 与标准 Slot 实施计划](docs/agent-runtime-standard-slots-implementation-plan.zh-CN.md).
 
 > A module unifies registration and lifecycle. A slot defines the component ecosystem, interface, cardinality, and ordering rule.
 
-An agent loop and a tool are not interchangeable plugins. A runnable profile
-normally needs exactly one selected loop factory, which creates one isolated
-loop on demand for each Session with active execution, while the application
-can accept many tools. Opening or browsing a Session does not create a Loop;
-the Session owns durable state and commands. AgentSlot makes that difference
+The standard AgentRuntime and its model/tool loop are framework behavior, not a
+replaceable Slot. The replaceable parts are narrower: one SessionManager, one
+SessionStore, one ModelExecutor, zero or more Tools, ordered Context and Hook
+components, and one or more Entrypoints. AgentSlot makes those cardinalities
 explicit and validates the assembled system before startup.
 
 ## Status
@@ -52,40 +51,40 @@ place in the final assembled plan.
 | `Plan` | Immutable result of validated composition. |
 | `PlanDescription` | Versioned JSON-safe assembly description containing no component values. |
 | `Runtime` | Started module lifecycles owned by one plan. |
-| `Session runtime` | Durable Session state and commands below the shared Plan; at most one isolated Loop exists while that Session is actively executing. |
+| `AgentRuntime` | Framework-owned per-Session command and execution object created by explicit Session create/resume; it is not a Slot. |
 
 The generic `Module` interface is deliberately not the component interface. The slot's `T` is the component interface:
 
 ```go
-type AgentLoopFactory interface {
-	Create(context.Context, OpenedSession) (AgentLoop, error)
-}
-
-type AgentLoop interface {
-	Run(context.Context, string) (string, error)
+type TextGenerator interface {
+	Generate(context.Context, string) (string, error)
 }
 
 type Tool interface {
 	Name() string
 }
 
+type ToolCatalog interface {
+	Keys() []string
+}
+
 var (
-	AgentLoopSlot = agentslot.One[AgentLoopFactory]("agent.loop")
-	ToolSlot      = agentslot.Many[Tool]("tool")
+	GeneratorSlot = agentslot.One[TextGenerator]("example.text-generator")
+	ToolSlot      = agentslot.Many[Tool]("example.tool")
+	CatalogSlot   = agentslot.One[ToolCatalog]("example.tool-catalog")
 )
 ```
 
-`OpenedSession`, `AgentLoopFactory`, and `AgentLoop` above are deliberately
-minimal application-local examples, not AgentSlot-owned public contracts. The maturity of
-AgentSlot-owned standard domain contracts is tracked separately in the
-[component map](COMPONENT_MAP.md).
+These are deliberately application-local examples of the generic composition
+API, not AgentSlot-owned standard domain contracts. The standard Slot IDs and
+their maturity are tracked only in the [component map](COMPONENT_MAP.md).
 
 Modules then contribute implementations:
 
 ```go
 func (m Bundle) Register(r agentslot.Registrar) error {
 	return r.Contribute(
-		agentslot.Set(AgentLoopSlot, m.loopFactory),
+		agentslot.Set(GeneratorSlot, m.generator),
 		agentslot.Add(ToolSlot, "shell", m.shell),
 		agentslot.Add(ToolSlot, "files", m.files),
 	)
@@ -97,23 +96,18 @@ use a build-time constructor instead of manually assembling it before
 `Build`:
 
 ```go
-func (m RunnerModule) Register(r agentslot.Registrar) error {
-	return r.Contribute(agentslot.SetWith(AgentLoopSlot, func(resolver agentslot.Resolver) (AgentLoopFactory, error) {
-		model, err := agentslot.ResolveKey(resolver, ModelSlot, m.modelKey)
-		if err != nil {
-			return nil, err
-		}
+func (m CatalogModule) Register(r agentslot.Registrar) error {
+	return r.Contribute(agentslot.SetWith(CatalogSlot, func(resolver agentslot.Resolver) (ToolCatalog, error) {
 		tools, err := agentslot.ResolveMany(resolver, ToolSlot)
 		if err != nil {
 			return nil, err
 		}
-		return NewAgentLoopFactory(model, tools), nil
+		return NewToolCatalog(tools), nil
 	}))
 }
 
-func (m RunnerModule) RequiredSlots() []agentslot.Requirement {
+func (m CatalogModule) RequiredSlots() []agentslot.Requirement {
 	return []agentslot.Requirement{
-		agentslot.RequireKey(ModelSlot, m.modelKey),
 		agentslot.RequireMany(ToolSlot, 1),
 	}
 }
@@ -131,11 +125,12 @@ same application entry:
 application := agentslot.NewApplication(
 	"my-agent",
 	[]agentslot.Module{
-		runnerModule,
-		modelModule,
+		catalogModule,
+		generatorModule,
 		shellToolModule,
 	},
-	agentslot.RequireOne(AgentLoopSlot),
+	agentslot.RequireOne(GeneratorSlot),
+	agentslot.RequireOne(CatalogSlot),
 	agentslot.RequireMany(ToolSlot, 1),
 )
 
@@ -143,8 +138,8 @@ plan, err := application.Build()
 runtime, err := application.Start(ctx)
 defer runtime.Stop(shutdownCtx)
 
-loopFactory, _ := agentslot.Get(plan, AgentLoopSlot)
-// SessionManager opens each Session; loopFactory then creates its isolated Loop.
+catalog, _ := agentslot.Get(plan, CatalogSlot)
+_ = catalog
 ```
 
 `Application.Start` also calls `Build` automatically when the caller does not
@@ -165,7 +160,7 @@ A module can declare dependencies without naming their implementation modules:
 ```go
 func (m RunnerModule) RequiredSlots() []agentslot.Requirement {
 	return []agentslot.Requirement{
-		agentslot.RequireOne(AgentLoopSlot),
+		agentslot.RequireOne(GeneratorSlot),
 		agentslot.RequireKey(ToolSlot, "shell"),
 	}
 }
@@ -203,15 +198,16 @@ for the agent architecture. It currently maps runtime, model, tools, context,
 history, memory, execution, policy, multi-agent workflow, gateway, billing, and
 operations ecosystems.
 
-A runnable standard LLM agent requires exactly one agent loop factory, exactly one
-session manager, at least one model provider, and at least one interaction
-entrypoint. Tools and persistent history are optional globally; stricter
-profiles may require them.
+A runnable standard LLM agent requires exactly one SessionManager, exactly one
+SessionStore, exactly one ModelExecutor, and at least one Entrypoint. The fixed
+AgentRuntime is supplied by the framework rather than selected through a Slot.
+Tools, ModelProviders, Context components, and AgentHooks are optional globally;
+an installed ModelExecutor may explicitly require one or more ModelProviders.
 
 One Application Plan serves multiple Workspaces and Sessions. It does not
-build a separate Plan per Session. Session persistence, Queue, Context,
-RunJournal, and Gateway profile decisions that are still under review are
-recorded explicitly in the runtime design documents above.
+build a separate Plan per Session. Explicit create/resume initializes one
+AgentRuntime for that Session; listing Sessions does not. History, Context,
+Queue, and RunJournal are durable views inside the SessionStore aggregate.
 
 Mapping a Slot and standardizing its Go method contract are different maturity
 steps. A proposed method-level interface needs two independent implementations,

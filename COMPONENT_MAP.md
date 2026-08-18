@@ -21,7 +21,7 @@ Current repository reality:
 
 | Inventory | Count |
 | --- | ---: |
-| Mapped standard component ecosystems | 40 |
+| Mapped standard component ecosystems | 41 |
 | Standardized domain vocabularies | 2 |
 | Contracted AgentSlot-owned domain interfaces | 0 |
 | Conformant component ecosystems | 0 |
@@ -30,7 +30,7 @@ Current repository reality:
 
 The separate composition protocol currently exports five Go interfaces:
 `Module`, `SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. They are
-framework mechanics, not substitutes for the 40 mapped agent component
+framework mechanics, not substitutes for the 41 mapped agent component
 contracts.
 
 ## Runnable standard profile
@@ -40,31 +40,36 @@ when its assembled plan contains all four of these component ecosystems:
 
 | Slot ID | Standard contract | Kind | Required cardinality | Responsibility |
 | --- | --- | --- | --- | --- |
-| `agent.loop` | `AgentLoopFactory` | `One` | exactly 1 | Provides a factory that creates at most one isolated AgentLoop on demand for each Session with active execution; the Loop owns model/tool iteration and loop-control decisions during that execution. |
-| `session.manager` | `SessionManager` | `One` | exactly 1 | Creates or resolves a stable Session and exposes its durable state and command handle. |
-| `model.provider` | `ModelProvider` | `Many` | at least 1 | Executes model requests behind provider-neutral agent semantics. |
+| `session.manager` | `SessionManager` | `One` | exactly 1 | Creates, resumes, forks, or summary-starts a stable Session without absorbing its replaceable persistence implementation. |
+| `session.store` | `SessionStore` | `One` | exactly 1 | Persists the Session aggregate—History, Context, Queue, RunJournal, revisions, and atomic CAS transactions. |
+| `model.executor` | `ModelExecutor` | `One` | exactly 1 | Executes one logical model call while containing provider-specific physical attempts, streaming recovery, and final failure semantics. |
 | `interaction.entrypoint` | `Entrypoint` | `Many` | at least 1 | Accepts user or caller input and exposes agent output through TUI, Web, desktop, HTTP, ACP, or another protocol. |
 
-These are assembly requirements, not permission for a hidden runtime
-coordinator. `agent.loop` installs one `AgentLoopFactory`; the factory creates
-one isolated `AgentLoop` only when a Session has claimed active execution.
-Opening or browsing a Session does not create a Loop. The Session durably owns
-state and command entry points; the active Loop remains the sole owner of loop
-semantics. Entrypoints invoke Session commands rather than retaining Loop
-objects, and do not reimplement tool/model control flow.
+`AgentRuntime` and its model/tool loop are framework behavior, not a Slot or a
+replaceable component ecosystem. Creating or explicitly resuming a Session
+initializes one Runtime bound to that Session; listing or viewing Sessions does
+not. The same Session has one Runtime per process, that Runtime stays resident
+while idle, and it is released only by explicit Close or application shutdown.
+Entrypoints invoke Session lifecycle operations and Runtime commands without
+reimplementing model/tool control flow.
 
-`ModelProvider` is mandatory because a plan that can start but cannot produce a
-model response is not a runnable LLM agent. The standard contract must remain
-provider-neutral. AgentSlot will provide an official OpenAI Chat Compatible
-adapter as the ubiquitous baseline implementation; OpenAI Responses,
-Anthropic Messages, and other protocols remain independent implementations of
-the same Slot contract.
+An immutable AgentConfig snapshot supplies SystemPrompt, model selection and
+parameters, ToolKeys, and Context settings for one Runtime lifetime. Those are
+product configuration, not Slot implementations. SystemPrompt and tool schemas
+are assembled into model requests; they are not repeatedly stored as History
+facts merely because the model can see them.
 
-When exactly one model provider is installed, an application may select it
-automatically. When more than one is installed, the plan must have an explicit,
-deterministic default model/provider selection or a `ModelSelector`. Selection
-must never depend on module installation order, concrete Go type, or a hidden
-fallback.
+`ModelExecutor`, rather than `ModelProvider`, is globally mandatory because it
+is the Runtime's logical model-call boundary. `model.provider` is an optional
+`Many` Slot: an Executor that uses installed providers declares that dependency
+explicitly, while another Executor may use a remote service or an embedded
+backend without manufacturing a fake provider registry.
+
+When an Executor declares a `model.provider` dependency and exactly one provider
+is installed, it may select that provider automatically. With more than one,
+selection must be explicit and deterministic, either in AgentConfig/Executor
+configuration or through `ModelSelector`; it must never depend on module order,
+concrete Go type, or a hidden fallback.
 
 Tools are deliberately not part of the minimum cardinality. A conversational
 agent can run with zero tools. A coding or operational profile can require a
@@ -72,14 +77,15 @@ specific tool set without making that requirement universal.
 
 ```mermaid
 flowchart LR
-    E["Entrypoint (1..n)"] --> S["SessionManager (1)"]
-    S -->|"FollowUp / Resume"| F["AgentLoopFactory (1)"]
-    F --> L["AgentLoop during active execution"]
-    L --> M["ModelProvider (1..n)"]
-    L -. "optional" .-> T["Tools and skills"]
-    L -. "optional" .-> C["Context, history, and memory"]
-    L -. "optional" .-> X["Execution and policy"]
-    L -. "events" .-> O["Observers and operations"]
+    E["Entrypoint (1..n)"] --> SM["SessionManager (1)"]
+    SM --> SS["SessionStore (1)"]
+    SM -->|"CreateSession / ResumeSession"| R["framework AgentRuntime"]
+    R --> ME["ModelExecutor (1)"]
+    ME -. "optional dependency" .-> MP["ModelProvider (0..n)"]
+    R -. "optional" .-> T["Tools and skills"]
+    R -. "optional" .-> C["Context components"]
+    R -. "optional" .-> H["AgentHooks"]
+    R -. "events" .-> O["Observers and operations"]
 ```
 
 ## Maturity scorecard
@@ -110,24 +116,22 @@ Slots, and several modules may contribute to one `Many` or `Chain` Slot.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `agent.loop` | `AgentLoopFactory` | `One` | globally required | Creates at most one isolated AgentLoop on demand per actively executing Session; that Loop runs requests and owns loop-control decisions during execution. | Mapped |
-| `session.manager` | `SessionManager` | `One` | globally required | Resolves stable Session identity, lifecycle, state, and command handles without absorbing the replaceable persistence implementation. | Mapped |
-| `interaction.entrypoint` | `Entrypoint` | `Many` | globally requires at least 1 | Connects a caller-facing protocol or UI to Session commands, snapshots, and agent events. | Mapped |
-| `runtime.observer` | `RuntimeObserver` | `Chain` | optional | Observes typed agent, turn, message, tool, retry, and lifecycle events without controlling the loop. | Mapped |
+| `session.manager` | `SessionManager` | `One` | globally required | Creates, resumes, fully forks, or summary-starts stable Sessions while depending on replaceable SessionStore persistence. | Mapped |
+| `interaction.entrypoint` | `Entrypoint` | `Many` | globally requires at least 1 | Connects a caller-facing protocol or UI to Session lifecycle operations, Runtime commands, snapshots, and agent events. | Mapped |
+| `agent.hook` | `AgentHook` | `Chain` | optional | Runs ordered, controlled hooks: proposes follow-on input before run completion or observes committed facts, without mutating Session or Runtime state directly. | Mapped |
+| `runtime.observer` | `RuntimeObserver` | `Chain` | optional | Passively observes typed agent, run, message, tool, retry, and lifecycle events without controlling the Runtime. | Mapped |
 
-The `AgentLoopFactory` method-level contract is a design baseline, not a
-contracted or proven public interface. `AgentLoop` implementations can differ radically: general assistants, coding
-agents, research loops, deterministic workflow agents, or remote-agent
-bridges. If an implementation hides its own external model service and cannot
-use `model.provider`, it is not conformant to the standard LLM agent profile;
-it can still use the lower-level composition core under a different explicit
-profile.
+The fixed AgentRuntime is deliberately absent from this table: the map records
+customization seams, not every framework object. A product that needs a wholly
+different loop may define a local Slot and explicit non-standard profile on the
+generic composition core, but it is not a conforming standard LLM AgentRuntime.
 
 ### 2. Model access
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `model.provider` | `ModelProvider` | `Many` | globally requires at least 1 | Streams model output, tool calls, stop reasons, usage, and capability reporting behind provider-neutral semantics; non-streaming responses are Gateway aggregation. | Mapped |
+| `model.executor` | `ModelExecutor` | `One` | globally required | Executes one logical model request and emits provider-neutral temporary output, reset, complete result, or final failure while owning physical attempts and recovery. | Mapped |
+| `model.provider` | `ModelProvider` | `Many` | optional; required only by an Executor that declares it | Implements named provider access for Executors that compose local adapters. | Mapped |
 | `model.selector` | `ModelSelector` | `One` | optional; conditional for dynamic routing | Selects a provider/model using explicit request and policy inputs. | Mapped |
 | `model.catalog` | `ModelCatalog` | `Many` | optional | Describes available models and their declared capabilities without exposing credentials. | Mapped |
 | `model.middleware` | `ModelMiddleware` | `Chain` | optional | Applies observable request/response concerns without changing provider identity. | Mapped |
@@ -154,7 +158,7 @@ wire objects.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `tool` | `Tool` | `Many` | optional globally; profiles may require keys | Declares and invokes a named capability available to the loop. | Mapped |
+| `tool` | `Tool` | `Many` | optional globally; profiles may require keys | Declares and invokes a named capability available to AgentRuntime. | Mapped |
 | `skill` | `Skill` | `Many` | optional | Supplies discoverable instructions, resources, or component bundles without pretending natural-language keyword matching is semantic routing. | Mapped |
 | `tool.middleware` | `ToolMiddleware` | `Chain` | optional | Wraps invocation for policy, telemetry, normalization, or recovery. | Mapped |
 | `tool.output-store` | `ToolOutputStore` | `One` | optional | Stores oversized or binary tool results and returns stable references. | Mapped |
@@ -181,9 +185,9 @@ decisions must use policy/approval components rather than concrete UI checks.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `history.store` | `HistoryStore` | `One` | optional | Persists the unique ordered ledger of committed conversation, model, tool, and run facts as an append-only sequence; Queue, Context, and RunJournal remain distinct responsibilities. | Mapped |
+| `session.store` | `SessionStore` | `One` | globally required | Persists the whole Session aggregate and its atomic revision/CAS transactions; History remains the unique append-only fact view inside that aggregate. | Mapped |
 | `context.source` | `ContextSource` | `Chain` | optional | Contributes ordered context for a model turn. | Mapped |
-| `context.compactor` | `ContextCompactor` | `One` | optional | Replaces the current full Context with a smaller conversation-message projection without rewriting History; the Loop reattaches fixed prompts/tools and validates protocol and hard token limits. | Mapped |
+| `context.compactor` | `ContextCompactor` | `One` | optional | Replaces the current full Context with a smaller conversation-message projection without rewriting History; AgentRuntime reattaches fixed prompts/tools and validates protocol and hard token limits. | Mapped |
 | `memory.store` | `MemoryStore` | `Many` | optional | Reads and writes durable recall outside the authoritative conversation history. | Mapped |
 | `checkpoint.store` | `CheckpointStore` | `One` | optional | Saves resumable execution state without pretending it is user-visible history. | Mapped |
 
@@ -197,9 +201,11 @@ Terminology is strict:
 - **Memory** is durable recall selected for possible future use.
 - A **checkpoint** is resumable runtime state.
 
-If `HistoryStore` is installed, committed facts are strictly append-only. An
+Every `SessionStore` must keep committed History facts strictly append-only. An
 implementation may not edit, delete, reorder, or insert facts before the
-committed tail. Compaction creates derived context; it never rewrites history.
+committed tail. The Store must also atomically coordinate History, Context,
+Queue, RunJournal, and revision/CAS boundaries. Compaction creates derived
+context; it never rewrites History.
 The standard Compactor contract is replaceable: any “summary plus last three
 inbound messages” algorithm is a default implementation, not a framework
 invariant.
@@ -226,7 +232,7 @@ invariant.
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
 | `agent.provider` | `AgentProvider` | `Many` | optional | Exposes named child-agent or remote-agent capabilities. | Mapped |
-| `workflow.scheduler` | `WorkflowScheduler` | `One` | optional | Schedules multi-step or multi-agent work without replacing an individual agent loop. | Mapped |
+| `workflow.scheduler` | `WorkflowScheduler` | `One` | optional | Schedules multi-step or multi-agent work without replacing the fixed per-Session AgentRuntime. | Mapped |
 | `job.store` | `JobStore` | `One` | optional | Persists queued/running/completed workflow job state. | Mapped |
 | `mailbox` | `Mailbox` | `One` | optional | Carries addressed asynchronous messages between agents or jobs. | Mapped |
 
