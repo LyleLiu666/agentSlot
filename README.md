@@ -21,9 +21,10 @@ Typed component slots and deterministic composition for agent systems.
 
 An agent loop and a tool are not interchangeable plugins. A runnable profile
 normally needs exactly one selected loop factory, which creates one isolated
-loop for each opened Session, while the application can accept many tools.
-AgentSlot makes that difference explicit and validates the assembled system
-before startup.
+loop on demand for each Session with active execution, while the application
+can accept many tools. Opening or browsing a Session does not create a Loop;
+the Session owns durable state and commands. AgentSlot makes that difference
+explicit and validates the assembled system before startup.
 
 ## Status
 
@@ -51,13 +52,13 @@ place in the final assembled plan.
 | `Plan` | Immutable result of validated composition. |
 | `PlanDescription` | Versioned JSON-safe assembly description containing no component values. |
 | `Runtime` | Started module lifecycles owned by one plan. |
-| `Session runtime` | One isolated Loop created below the shared application Plan for one opened Session. |
+| `Session runtime` | Durable Session state and commands below the shared Plan; at most one isolated Loop exists while that Session is actively executing. |
 
 The generic `Module` interface is deliberately not the component interface. The slot's `T` is the component interface:
 
 ```go
 type AgentLoopFactory interface {
-	Open(context.Context, OpenedSession) (AgentLoop, error)
+	Create(context.Context, OpenedSession) (AgentLoop, error)
 }
 
 type AgentLoop interface {

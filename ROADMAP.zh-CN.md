@@ -44,9 +44,9 @@ Module 只是组件注册和生命周期的载体，不代表一个新的组件�
 
 至少需要：
 
-- 一个 `AgentLoopFactory`：为每个已打开的 Session 创建独立 `AgentLoop`，由
-  每个 Loop 决定该 Session 的任务如何执行；
-- 一个 `SessionManager`：提供稳定的 Session 身份；
+- 一个 `AgentLoopFactory`：为需要执行的 Session 按需创建独立 `AgentLoop`，由
+  每个 Loop 在执行期间驱动该 Session 的 Run 和 Step；
+- 一个 `SessionManager`：提供稳定的 Session 身份、持久状态和命令句柄；
 - 至少一个 `Entrypoint`：接收输入并返回结果，例如 TUI、Web、桌面端或 ACP。
 
 这种 Host 可以运行确定性工作流、远程 Agent 桥接器或其他不直接调用模型的 Loop。
@@ -71,11 +71,15 @@ Tool 和持久化 History 不作为所有 Agent 的强制要求：
 一个 Application Plan 只装配并启动一次应用级组件，可以同时服务多个 Workspace
 和 Session。`agent.loop` Slot 保存应用级 Factory，不保存共享的有状态 Loop：
 
-- SessionManager 先创建或打开 Session，Factory 再为它创建独立 Loop；
-- 同一 Session 同时最多一个活跃 Run，不同 Session 可以并行；
+- SessionManager 先创建或打开 Session；Session 取得执行权后再请求 Factory 创建独立 Loop；
+- 打开或浏览 Session 不创建 Loop；新 FollowUp 或显式 Resume 才触发按需创建；
+- 同一 Session 同时最多一个活跃 Loop 和 Run，不同 Session 可以并行；
 - Session 明确提供 History、Context、Queue 三个业务视图；
+- FollowUp、Steer、Queue 修改、Cancel 和 Resume 进入长期 Session 命令接口，不进入短生命周期 Loop API；
 - Queue 持久化尚未进入 Context 的 normal、steer 和 held 消息；
-- RunJournal 保存进行中工具调用的恢复证据，不直接进入 History/Context；
+- History 是唯一、有序、append-only 的事实账本；Context 才投影合法模型协议；
+- RunJournal 只保存进行中工具调用的恢复证据，不成为第二份对话账本；
+- 正常完成可以 FIFO 自动处理下一条 normal；取消、错误和重启回到 idle，但不自动消费旧 Queue；
 - 应用级 Gateway 通过稳定身份路由，不为每个 Session 重复创建。
 
 Gateway 是否取代 `interaction.entrypoint` 成为 Profile 必需项仍待商榷。本节不改变
@@ -95,7 +99,7 @@ Gateway 是否取代 `interaction.entrypoint` 成为 Profile 必需项仍待商�
 - Trace 和 Metric 是不同的运维数据，不能因为经常一起使用就合成一个 Sink；
 - Gateway 的接入、身份、路由和投递可以独立替换，不能只保留出站投递；
 - `agent.loop` 安装 `AgentLoopFactory`，一个 Application Plan 服务多个 Session，
-  每个 Session 由 Factory 创建一个隔离 Loop；
+  每个活跃执行的 Session 由 Factory 按需创建一个隔离 Loop；
 - Session 的 History、Context、Queue 和 RunJournal 必须按不同修改规则建模，
   即使具体存储实现把它们放在同一个事务数据库中；
 - Interrupt、Steer、Retry 等控制命令不只来自 Gateway。它们作为
@@ -177,13 +181,16 @@ History 的“严格追加”必须成为可以验证的合同，而不是一句
 - 一批记录要么全部追加成功，要么全部失败；
 - 多个入口同时写入时能够发现尾位置冲突；
 - 重试同一次写入不会制造重复历史。
+- 完整 tool call 产生后立即写入 History，并在同一事务建立 RunJournal pending；
+- tool result 后续单独追加，每个 ToolCallID 最终只有一个终态结果。
 
 Session 的其他视图也必须有可验证合同：
 
 - Context 是版本化派生视图，压缩只能创建新版本，不能改写 History；
+- Context 只投影满足模型协议的 call/result，未配对 call 不进入模型请求；
 - Queue 使用 expected revision/CAS，消息被认领后不得原地编辑或删除；
-- 正常完成自动 FIFO 消费 normal，取消、错误和重启后一律 paused；
-- RunJournal 在工具执行前记录 pending 意图，崩溃后未知结果不得自动重跑。
+- Session 执行状态只有 idle/running；取消、错误和重启后不自动消费旧 Queue；
+- RunJournal 在工具执行前记录 pending 状态，崩溃后未知结果不得自动重跑。
 
 ## 8. 默认组件只减少重复劳动，不替开发者做隐蔽决定
 
@@ -195,6 +202,8 @@ Session 的其他视图也必须有可验证合同：
 - 多个 Model Provider、执行环境或 Tool 之间的选择不能靠默认安装顺序决定；
 - 默认组件由 `standard.Defaults()` 一类明确入口安装，导入包本身不会改变应用；
 - 最终 Plan 必须标明默认或显式来源。
+- 默认 ContextCompactor 可以采用“摘要 + 最近三条 inbound + 必要协议尾部”，但
+  `context.compactor` 整体可替换，该算法不是所有 Agent 的框架不变量。
 
 AgentSlot 禁止反射扫描、`init()` 自动注册和隐藏的全局组件容器。
 
@@ -204,7 +213,7 @@ AgentSlot 禁止反射扫描、`init()` 自动注册和隐藏的全局组件容�
 
 ### 第一层：最小对话 Agent
 
-- Provider 无关的 `AgentLoopFactory` 和每 Session 一个基础 Loop；
+- Provider 无关的 `AgentLoopFactory` 和按活跃执行 Session 创建的基础 Loop；
 - 无密钥确定性 Provider，用于自动化测试；
 - 正式的 OpenAI Chat Compatible 配置入口；
 - 支持多 Session 隔离的内存 SessionManager/SessionStore；
@@ -219,7 +228,7 @@ AgentSlot 禁止反射扫描、`init()` 自动注册和隐藏的全局组件容�
 - Context Source 和 Compactor；
 - Policy Guard 与 Approval Service；
 - Steering、Follow-up 和内部重试。
-- 持久化 Queue、paused/Resume 状态和 RunJournal 崩溃恢复；
+- 持久化 Queue、Resume 命令和 RunJournal 崩溃恢复；
 
 ### 第三层：编程 Agent 示例包
 
@@ -252,11 +261,12 @@ AgentSlot 参考这些行为，不复制 pi 的类型、聚合 Session 或产品
 
 ### 阶段 2：跑通标准 LLM Agent
 
-- 完成 AgentLoopFactory、每 Session 一个 AgentLoop、SessionManager、ModelProvider
+- 完成 AgentLoopFactory、按需 AgentLoop、SessionManager、ModelProvider
   和 Entrypoint；
 - 完成无密钥确定性链路和真实 OpenAI Chat Compatible 入口；
 - 验证一个 Application Plan 下的零 Tool、取消、错误、流式事件和多 Session 隔离；
-- 验证同一 Session 只有一个活跃 Run，正常完成自动 FIFO，取消、错误和重启后 paused；
+- 验证打开 Session 不创建 Loop、同一 Session 只有一个活跃 Loop/Run、正常完成自动
+  FIFO，取消、错误和重启后回到 idle 且不自动消费旧 Queue；
 - 提供极简交互入口，但不把文件和 Shell 工具作为标准 Agent 的必需能力。
 
 ### 阶段 3：完成第一批可扩展能力
@@ -265,7 +275,9 @@ AgentSlot 参考这些行为，不复制 pi 的类型、聚合 Session 或产品
 - 完成持久化 Queue、RunJournal、Context 版本与完整 History 查询；
 - 验证 StandardLoop 更换 Provider、Tool、Session、History、Entrypoint 和 Policy
   时没有具体类型分支；
-- 验证工具 call/result 配对、未知副作用恢复和跨 Session 文件版本冲突；
+- 验证工具 call 事实与 Journal pending 同事务、result 后续唯一终结、未知副作用恢复和跨 Session 文件版本冲突；
+- 验证 ModelExecutor 管理 Provider-specific 物理尝试和 AttemptID，Loop 不包含供应商恢复分支；
+- 验证替换 ContextCompactor 不受默认“最近三条”算法限制，但仍满足协议和 Token 硬上限；
 - 加入工具 Agent 和编程 Agent 示例包。
 
 ### 阶段 4：逐域扩展

@@ -40,16 +40,18 @@ when its assembled plan contains all four of these component ecosystems:
 
 | Slot ID | Standard contract | Kind | Required cardinality | Responsibility |
 | --- | --- | --- | --- | --- |
-| `agent.loop` | `AgentLoopFactory` | `One` | exactly 1 | Provides a factory that creates one isolated AgentLoop for each opened Session; the per-session Loop owns turn execution, model/tool iteration, retry, continuation, and stop policy. |
-| `session.manager` | `SessionManager` | `One` | exactly 1 | Creates or resolves stable session identity and owns session lifecycle. |
+| `agent.loop` | `AgentLoopFactory` | `One` | exactly 1 | Provides a factory that creates at most one isolated AgentLoop on demand for each Session with active execution; the Loop owns model/tool iteration and loop-control decisions during that execution. |
+| `session.manager` | `SessionManager` | `One` | exactly 1 | Creates or resolves a stable Session and exposes its durable state and command handle. |
 | `model.provider` | `ModelProvider` | `Many` | at least 1 | Executes model requests behind provider-neutral agent semantics. |
 | `interaction.entrypoint` | `Entrypoint` | `Many` | at least 1 | Accepts user or caller input and exposes agent output through TUI, Web, desktop, HTTP, ACP, or another protocol. |
 
 These are assembly requirements, not permission for a hidden runtime
 coordinator. `agent.loop` installs one `AgentLoopFactory`; the factory creates
-one isolated `AgentLoop` for each opened Session. The per-session Loop remains
-the sole owner of loop semantics. Entrypoints invoke the Loop through its
-standard contract; they do not reimplement its tool/model control flow.
+one isolated `AgentLoop` only when a Session has claimed active execution.
+Opening or browsing a Session does not create a Loop. The Session durably owns
+state and command entry points; the active Loop remains the sole owner of loop
+semantics. Entrypoints invoke Session commands rather than retaining Loop
+objects, and do not reimplement tool/model control flow.
 
 `ModelProvider` is mandatory because a plan that can start but cannot produce a
 model response is not a runnable LLM agent. The standard contract must remain
@@ -71,8 +73,8 @@ specific tool set without making that requirement universal.
 ```mermaid
 flowchart LR
     E["Entrypoint (1..n)"] --> S["SessionManager (1)"]
-    E --> F["AgentLoopFactory (1)"]
-    F --> L["AgentLoop per Session"]
+    S -->|"FollowUp / Resume"| F["AgentLoopFactory (1)"]
+    F --> L["AgentLoop during active execution"]
     L --> M["ModelProvider (1..n)"]
     L -. "optional" .-> T["Tools and skills"]
     L -. "optional" .-> C["Context, history, and memory"]
@@ -108,9 +110,9 @@ Slots, and several modules may contribute to one `Many` or `Chain` Slot.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `agent.loop` | `AgentLoopFactory` | `One` | globally required | Creates one isolated AgentLoop per opened Session; that Loop runs requests and owns loop-control decisions. | Mapped |
-| `session.manager` | `SessionManager` | `One` | globally required | Resolves stable session identity and session lifecycle without absorbing history storage. | Mapped |
-| `interaction.entrypoint` | `Entrypoint` | `Many` | globally requires at least 1 | Connects a caller-facing protocol or UI to sessions and the agent loop. | Mapped |
+| `agent.loop` | `AgentLoopFactory` | `One` | globally required | Creates at most one isolated AgentLoop on demand per actively executing Session; that Loop runs requests and owns loop-control decisions during execution. | Mapped |
+| `session.manager` | `SessionManager` | `One` | globally required | Resolves stable Session identity, lifecycle, state, and command handles without absorbing the replaceable persistence implementation. | Mapped |
+| `interaction.entrypoint` | `Entrypoint` | `Many` | globally requires at least 1 | Connects a caller-facing protocol or UI to Session commands, snapshots, and agent events. | Mapped |
 | `runtime.observer` | `RuntimeObserver` | `Chain` | optional | Observes typed agent, turn, message, tool, retry, and lifecycle events without controlling the loop. | Mapped |
 
 The `AgentLoopFactory` method-level contract is a design baseline, not a
@@ -179,25 +181,28 @@ decisions must use policy/approval components rather than concrete UI checks.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `history.store` | `HistoryStore` | `One` | optional | Persists published conversation and run facts as an append-only sequence; Queue, Context, and RunJournal remain separate responsibilities under review. | Mapped |
+| `history.store` | `HistoryStore` | `One` | optional | Persists the unique ordered ledger of committed conversation, model, tool, and run facts as an append-only sequence; Queue, Context, and RunJournal remain distinct responsibilities. | Mapped |
 | `context.source` | `ContextSource` | `Chain` | optional | Contributes ordered context for a model turn. | Mapped |
-| `context.compactor` | `ContextCompactor` | `One` | optional | Produces a smaller derived context without rewriting published history. | Mapped |
+| `context.compactor` | `ContextCompactor` | `One` | optional | Replaces the current full Context with a smaller conversation-message projection without rewriting History; the Loop reattaches fixed prompts/tools and validates protocol and hard token limits. | Mapped |
 | `memory.store` | `MemoryStore` | `Many` | optional | Reads and writes durable recall outside the authoritative conversation history. | Mapped |
 | `checkpoint.store` | `CheckpointStore` | `One` | optional | Saves resumable execution state without pretending it is user-visible history. | Mapped |
 
 Terminology is strict:
 
 - A **session** is stable identity and lifecycle.
-- **History** is the ordered record already published to a user or model.
-- **Context** is the derived input assembled for the next model call.
+- **History** is the unique append-only fact ledger in actual committed order; it is not required to be a directly sendable provider message sequence at every instant.
+- **Context** is the versioned, model-protocol-valid projection assembled for the next model call; an unpaired tool call is not projected.
 - **Queue** is the durable set of normal, steer, and held messages not yet in Context.
-- **RunJournal** records in-flight execution and tool recovery evidence, not model context.
+- **RunJournal** records in-flight execution and tool recovery evidence, not model context or a second conversation ledger.
 - **Memory** is durable recall selected for possible future use.
 - A **checkpoint** is resumable runtime state.
 
-If `HistoryStore` is installed, published events are strictly append-only. An
-implementation may not edit, delete, reorder, or insert events before the
-published tail. Compaction creates derived context; it never rewrites history.
+If `HistoryStore` is installed, committed facts are strictly append-only. An
+implementation may not edit, delete, reorder, or insert facts before the
+committed tail. Compaction creates derived context; it never rewrites history.
+The standard Compactor contract is replaceable: any “summary plus last three
+inbound messages” algorithm is a default implementation, not a framework
+invariant.
 
 ### 5. Workspace, execution, and artifacts
 
@@ -238,6 +243,11 @@ A direct TUI, Web UI, desktop application, HTTP server, or ACP server can be an
 `Entrypoint`. A gateway that multiplexes several external channels is normally
 one `Entrypoint` assembled from the optional gateway Slots above. This avoids
 making every small UI implement gateway routing machinery.
+
+AgentSlot standardizes neither transient-chunk cursors nor client ACK cursors.
+Reconnect uses a client revision and Session Snapshot. A concrete gateway or
+external messaging system may keep private reliable-delivery state, but that
+state is not a standard Slot or Session fact and cannot change run completion.
 
 ### 9. Usage and billing
 

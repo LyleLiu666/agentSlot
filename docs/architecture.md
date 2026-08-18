@@ -41,27 +41,30 @@ rolls back only modules whose `Start` completed successfully.
 
 An Application Plan is the application scope, not a Session scope. One plan can
 serve many Workspaces and Sessions. The `agent.loop` Slot installs an
-`AgentLoopFactory`; after a SessionManager opens a Session, the Factory creates
-one isolated Loop for that Session. Hierarchical Workspace or Session
+`AgentLoopFactory`; after a Session receives FollowUp or Resume and atomically
+claims execution, the Factory creates one isolated Loop on demand. Opening or
+browsing a Session does not create a Loop. Hierarchical Workspace or Session
 inheritance is still deferred, but it must not be modelled as repeated Plans.
 
 The Plan owns application-level lifecycle components such as the Factory,
 Provider adapters, shared Gateway, and SessionStore services. A per-Session
-Loop is a runtime child created after `Plan.Start`; closing that child releases
-its in-memory execution state without deleting the Session or its durable
-views.
+Loop is a runtime child created only during active execution after `Plan.Start`;
+closing that child releases its in-memory execution state without deleting the
+Session or its durable views.
 
 ## Session-scoped runtime
 
 The runtime boundary below the Plan is explicit:
 
 1. `SessionManager` creates or opens a stable Session and performs recovery.
-2. `AgentLoopFactory.Open` receives the already-open Session and an immutable
-   AgentDefinition snapshot.
-3. The resulting Loop owns exactly one Session and at most one active Run.
-4. Different Sessions receive different Loop objects and may run concurrently.
-5. History, Context, Queue, and RunJournal are Session views coordinated by an
-   atomic SessionStore transaction; the Loop does not create or fork Sessions.
+2. The Session durably owns History, Context, Queue, RunJournal, and the
+   FollowUp, Steer, Queue-mutation, Cancel, and Resume command entry points.
+3. New FollowUp or explicit Resume atomically claims execution and asks
+   `AgentLoopFactory.Create` for a Loop using an immutable AgentDefinition snapshot.
+4. The resulting Loop binds exactly one Session; the same Session has at most
+   one active Loop and Run, while different Sessions may run concurrently.
+5. Loop reclamation never changes Session correctness. Immediate reclamation
+   or a short idle grace period is an implementation optimization.
 6. Gateway is shared by the Application and routes commands/events using
    `AgentID + WorkspaceID + SessionID + RunID`, without exposing Loop objects.
 

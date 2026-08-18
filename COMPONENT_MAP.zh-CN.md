@@ -38,15 +38,16 @@
 
 | Slot ID | 标准契约 | 类型 | 必需基数 | 职责 |
 | --- | --- | --- | --- | --- |
-| `agent.loop` | `AgentLoopFactory` | `One` | 恰好 1 个 | 提供 Factory，为每个已打开的 Session 创建独立 AgentLoop；每个 Loop 负责轮次执行、模型/工具迭代、重试、继续和停止策略。 |
-| `session.manager` | `SessionManager` | `One` | 恰好 1 个 | 创建或解析稳定的 Session 身份，并管理 Session 生命周期。 |
+| `agent.loop` | `AgentLoopFactory` | `One` | 恰好 1 个 | 提供 Factory，为每个需要活跃执行的 Session 按需创建至多一个独立 AgentLoop；Loop 在执行期间负责模型/工具迭代和循环控制决策。 |
+| `session.manager` | `SessionManager` | `One` | 恰好 1 个 | 创建或解析稳定 Session，并提供其持久状态与命令句柄。 |
 | `model.provider` | `ModelProvider` | `Many` | 至少 1 个 | 以供应商无关的 Agent 语义执行模型请求。 |
 | `interaction.entrypoint` | `Entrypoint` | `Many` | 至少 1 个 | 通过 TUI、Web、桌面端、HTTP、ACP 或其他协议接收输入并呈现 Agent 输出。 |
 
 这些是装配要求，不是引入隐藏运行时协调器的借口。`agent.loop` 安装一个
-`AgentLoopFactory`，由它为每个已打开的 Session 创建独立 `AgentLoop`。每个
-Session 的 Loop 始终是循环语义的唯一所有者。Entrypoint 通过标准契约调用
-Loop，不能重新实现模型和工具的控制流程。
+`AgentLoopFactory`，只在 Session 已经取得活跃执行权时创建独立 `AgentLoop`。
+打开或浏览 Session 不创建 Loop。Session 长期拥有状态和命令入口；活跃 Loop
+始终是循环语义的唯一所有者。Entrypoint 调用 Session 命令而不持有 Loop 对象，
+也不能重新实现模型和工具的控制流程。
 
 `ModelProvider` 必须存在，因为一个虽然能启动、却不能生成模型响应的计划，
 不能算可运行的 LLM Agent。标准契约必须保持供应商无关。AgentSlot 将提供
@@ -64,8 +65,8 @@ Tools 有意不进入全局最低基数。纯对话 Agent 可以在没有工具�
 ```mermaid
 flowchart LR
     E["Entrypoint（1..n）"] --> S["SessionManager（1）"]
-    E --> F["AgentLoopFactory（1）"]
-    F --> L["每个 Session 一个 AgentLoop"]
+    S -->|"FollowUp / Resume"| F["AgentLoopFactory（1）"]
+    F --> L["活跃执行期间的 AgentLoop"]
     L --> M["ModelProvider（1..n）"]
     L -. "可选" .-> T["工具与技能"]
     L -. "可选" .-> C["上下文、历史与记忆"]
@@ -99,9 +100,9 @@ flowchart LR
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `agent.loop` | `AgentLoopFactory` | `One` | 全局必需 | 为每个已打开的 Session 创建独立 AgentLoop；每个 Loop 执行请求并负责循环控制决策。 | 已映射 |
-| `session.manager` | `SessionManager` | `One` | 全局必需 | 解析稳定的 Session 身份并管理其生命周期，但不吞并历史存储职责。 | 已映射 |
-| `interaction.entrypoint` | `Entrypoint` | `Many` | 全局至少 1 个 | 把面向调用方的协议或 UI 与 Session、AgentLoop 连接起来。 | 已映射 |
+| `agent.loop` | `AgentLoopFactory` | `One` | 全局必需 | 为每个正在活跃执行的 Session 按需创建至多一个独立 AgentLoop；Loop 在执行期间执行请求并负责循环控制决策。 | 已映射 |
+| `session.manager` | `SessionManager` | `One` | 全局必需 | 解析稳定 Session 的身份、生命周期、状态和命令句柄，但不吞并可替换的持久化实现。 | 已映射 |
+| `interaction.entrypoint` | `Entrypoint` | `Many` | 全局至少 1 个 | 把面向调用方的协议或 UI 与 Session 命令、Snapshot 和 Agent 事件连接起来。 | 已映射 |
 | `runtime.observer` | `RuntimeObserver` | `Chain` | 可选 | 观察 Agent、轮次、消息、工具、重试和生命周期事件，但不控制 Loop。 | 已映射 |
 
 `AgentLoopFactory` 的方法级契约目前只是设计基线，还不是已定义契约或已证明的
@@ -163,25 +164,27 @@ OpenAI 专属的网络数据结构。
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `history.store` | `HistoryStore` | `One` | 可选 | 以仅追加序列持久化已发布的对话和运行事实；Queue、Context 与 RunJournal 仍是待评审的独立职责。 | 已映射 |
+| `history.store` | `HistoryStore` | `One` | 可选 | 以仅追加序列持久化唯一、有序的已提交对话、模型、工具和运行事实；Queue、Context 与 RunJournal 保持不同职责。 | 已映射 |
 | `context.source` | `ContextSource` | `Chain` | 可选 | 为一次模型调用按顺序提供上下文。 | 已映射 |
-| `context.compactor` | `ContextCompactor` | `One` | 可选 | 在不改写已发布历史的前提下生成更小的派生上下文。 | 已映射 |
+| `context.compactor` | `ContextCompactor` | `One` | 可选 | 把当前完整 Context 转为更小的会话消息投影且不改写 History；Loop 重新装配固定 Prompt/Tool，并校验协议和硬 Token 上限。 | 已映射 |
 | `memory.store` | `MemoryStore` | `Many` | 可选 | 读写权威对话历史之外的持久化召回信息。 | 已映射 |
 | `checkpoint.store` | `CheckpointStore` | `One` | 可选 | 保存可恢复的执行状态，但不把它冒充为用户可见的历史。 | 已映射 |
 
 术语必须严格区分：
 
 - **Session** 是稳定身份和生命周期。
-- **History** 是已经向用户或模型发布过的有序记录。
-- **Context** 是为下一次模型调用组装出的派生输入。
+- **History** 是按真实提交顺序排列的唯一、append-only 事实账本；它不要求任意时刻都能直接作为 Provider 消息序列发送。
+- **Context** 是为下一次模型调用组装出的版本化、满足模型协议的投影；未配对 tool call 不进入投影。
 - **Queue** 是尚未进入 Context 的持久化 normal、steer 和 held 消息集合。
-- **RunJournal** 记录进行中的执行和工具恢复证据，不进入模型 Context。
+- **RunJournal** 记录进行中的执行和工具恢复证据，不进入模型 Context，也不是第二份对话账本。
 - **Memory** 是可能在未来被选中使用的持久化召回信息。
 - **Checkpoint** 是可以恢复的运行时状态。
 
-如果安装了 `HistoryStore`，所有已发布事件必须严格仅追加。实现不得修改、
-删除、换位，也不得向已经发布的尾部之前插入事件。上下文压缩只能产生派生
+如果安装了 `HistoryStore`，所有已提交事实必须严格仅追加。实现不得修改、
+删除、换位，也不得向已经提交的尾部之前插入事实。上下文压缩只能产生派生
 Context，绝不能改写 History。
+标准 Compactor 契约允许整体替换；“摘要 + 最近三条 inbound”只是默认实现，
+不是框架不变量。
 
 ### 5. 工作区、执行与产物
 
@@ -222,6 +225,10 @@ Context，绝不能改写 History。
 `Entrypoint`。需要复用多个外部通道的 Gateway，通常是一个由上述可选 Gateway
 Slot 装配出来的 `Entrypoint`。这样无需强迫每个简单 UI 都实现一整套 Gateway
 路由机制。
+
+AgentSlot 不标准化临时 chunk 游标或客户端 ACK 游标。重连使用客户端 revision
+与 Session Snapshot。具体 Gateway 或外部消息系统可以私有保存可靠投递状态，
+但它不是标准 Slot 或 Session 事实，也不能改变 Run 完成状态。
 
 ### 9. 用量与计费
 

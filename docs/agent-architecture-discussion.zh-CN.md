@@ -23,14 +23,20 @@ flowchart TD
     W --> S2["Session B"]
     SM --> S1
     SM --> S2
-    F --> L1["StandardAgentLoop A"]
-    F --> L2["StandardAgentLoop B"]
-    S1 --> L1
-    S2 --> L2
+    S1 --> C1["Session 命令入口"]
+    S2 --> C2["Session 命令入口"]
+    C1 -. "FollowUp / Resume 时按需创建" .-> F
+    C2 -. "FollowUp / Resume 时按需创建" .-> F
+    F --> L1["活跃 StandardAgentLoop A"]
+    F --> L2["活跃 StandardAgentLoop B"]
+    L1 --> S1
+    L2 --> S2
     S1 --> R1["同一时刻最多一个活跃 Run"]
     S2 --> R2["同一时刻最多一个活跃 Run"]
-    G --> L1
-    G --> L2
+    G --> C1
+    G --> C2
+    L1 -. "事件" .-> G
+    L2 -. "事件" .-> G
 ```
 
 基本包含关系如下：一个 Application Plan 可以服务多个 Workspace；一个 Workspace
@@ -56,25 +62,25 @@ Run/Step。sub-agent 是独立执行参与者，必须拥有独立 Session，并
 - **最终决定：** `agent.loop` Slot 安装 `AgentLoopFactory`，而不是共享 Loop 实例。
 - **必须满足的不变量：** Slot 仍为 `One`；应用必须显式选择一个 Factory；Factory 本身不保存某个 Session 的执行状态。
 - **否决的方案及原因：** 把单个 Loop 注册为全局单例会混合队列、取消信号、上下文和当前 Run。
-- **对接口、存储、Gateway 和实现的影响：** 组件地图和 Profile 按 Factory 描述；Session 打开后再由 Factory 创建 Loop。
+- **对接口、存储、Gateway 和实现的影响：** 组件地图和 Profile 按 Factory 描述；Session 收到需要执行的命令并取得执行权后，才请求 Factory 按需创建 Loop。
 - **状态：** 已确定。
 
-### A-003 每个 Session 一个独立 `StandardAgentLoop`
+### A-003 活跃 Session 按需拥有独立 `StandardAgentLoop`
 
 - **问题 / 背景：** 并行 Session 必须在内存状态、取消和等待关系上隔离。
-- **最终决定：** 每个打开的 Session 创建一个独立的 `StandardAgentLoop` 对象。
-- **必须满足的不变量：** 一个 Loop 只绑定一个 Session；不同 Loop 可以并行；关闭 Loop 不等于删除 Session。
-- **否决的方案及原因：** 用一个 Loop 加 SessionID 分支管理全部会话，会形成高风险的共享可变状态和复杂锁协议。
-- **对接口、存储、Gateway 和实现的影响：** Factory 的创建参数必须包含已打开 Session 和稳定身份；Gateway 路由到对应 Loop。
+- **最终决定：** 打开或浏览 Session 不创建 Loop。新 FollowUp 或显式 Resume 需要执行时，由 Factory 为该 Session 按需创建独立 `StandardAgentLoop`；同一 Session 同时最多一个活跃 Loop。
+- **必须满足的不变量：** 一个 Loop 只绑定一个 Session；活跃 Loop 的取得必须原子化；不同 Session 的 Loop 可以并行；Loop 回收不影响 Session 正确性，也不等于删除 Session。
+- **否决的方案及原因：** 用一个 Loop 加 SessionID 分支管理全部会话，会形成高风险的共享可变状态和复杂锁协议；每个已打开 Session 永久常驻一个 Loop，则会把浏览行为错误地变成执行资源占用。
+- **对接口、存储、Gateway 和实现的影响：** Factory 的创建参数包含已打开 Session、稳定身份和配置快照；Session 命令入口负责触发创建，Gateway 不直接持有永久 Loop。执行结束后可立即释放资源或延迟回收句柄，但已结束的 Loop 不得再承接新 Run。
 - **状态：** 已确定。
 
-### A-004 Loop 注入已打开的 Session
+### A-004 Session 管理生命周期和命令，Loop 只执行
 
 - **问题 / 背景：** Session 创建、恢复、fork 与一次循环执行是不同职责。
-- **最终决定：** Loop 只接收已经由 SessionManager 打开的 Session，不负责 Session 的 create、open/reopen、持久化恢复或 fork。`AgentLoop.Resume` 仅恢复 paused 的执行状态，不是重新打开 Session。
-- **必须满足的不变量：** Session 生命周期操作在进入 Factory 前完成；Loop 不自行选择或替换 SessionStore。
+- **最终决定：** Session 长期拥有 History、Context、Queue、RunJournal 和命令入口；Loop 只接收已经由 SessionManager 打开的 Session，不负责 create、open/reopen、持久化恢复或 fork。FollowUp、Steer、Queue 修改、Cancel 和 Resume 都属于 Session 能力。
+- **必须满足的不变量：** Session 生命周期操作在进入 Factory 前完成；Loop 不自行选择或替换 SessionStore；没有常驻 Loop 时，Session 仍能正确接收和持久化命令。
 - **否决的方案及原因：** 把 Session 管理并入 Loop 会让存储迁移、fork 和恢复逻辑无法独立替换。
-- **对接口、存储、Gateway 和实现的影响：** SessionManager/Store 提供打开句柄；Factory 只创建绑定该句柄的执行对象。
+- **对接口、存储、Gateway 和实现的影响：** SessionManager/Store 提供长期 Session 句柄和命令接口；Session 在需要执行时请求 Factory 创建短生命周期执行对象。
 - **状态：** 已确定。
 
 ### A-005 身份和包含关系
@@ -92,7 +98,7 @@ Run/Step。sub-agent 是独立执行参与者，必须拥有独立 Session，并
 - **最终决定：** 同一 Session 同一时刻只允许一个活跃 Run；不同 Session 可以并行运行。
 - **必须满足的不变量：** 活跃 Run 的认领必须原子化；重复启动返回冲突或同一结果，不能产生第二个活跃 Run。
 - **否决的方案及原因：** 同一 Session 并行 Run 会破坏消息顺序、工具调用配对和 Context 版本。
-- **对接口、存储、Gateway 和实现的影响：** SessionStore 需要活跃 Run CAS；应用级组件必须支持多个 Loop 并发调用。
+- **对接口、存储、Gateway 和实现的影响：** SessionStore 需要活跃 Run/Loop 执行权 CAS；应用级组件必须支持多个 Session 的 Loop 并发调用。
 - **状态：** 已确定。
 
 ### A-007 sub-agent 使用独立 Session
@@ -112,7 +118,7 @@ Run/Step。sub-agent 是独立执行参与者，必须拥有独立 Session，并
 - **最终决定：** 一个应用运行时共享 Gateway，不为每个 Session 创建 Gateway。
 - **必须满足的不变量：** Gateway 不拥有 Session 真相；它只认证、路由、调用和投递事件。
 - **否决的方案及原因：** 每 Session 一个 Gateway 会重复监听器和连接管理，并把传输生命周期绑定到会话。
-- **对接口、存储、Gateway 和实现的影响：** Gateway 依赖 Session/Loop 注册表或应用服务；Loop 只依赖抽象事件发布能力。
+- **对接口、存储、Gateway 和实现的影响：** Gateway 依赖 Session 应用服务并调用 Session 命令，不持有 Loop 注册表；Loop 只依赖抽象事件发布能力。
 - **状态：** 已确定。
 
 ### A-009 完整路由身份
@@ -172,10 +178,10 @@ Run/Step。sub-agent 是独立执行参与者，必须拥有独立 Session，并
 ### A-015 重连基于 Snapshot 和 revision
 
 - **问题 / 背景：** 临时 chunk 不持久化，客户端仍需要在重连后恢复一致界面。
-- **最终决定：** 重连时读取 Session Snapshot 和持久化 revision；服务端不保存每个客户端的消费游标。
-- **必须满足的不变量：** Snapshot 只包含已提交事实和当前状态；客户端以 revision 去重和替换本地临时内容。
-- **否决的方案及原因：** 保存每客户端游标会把展示状态变成核心业务状态，并带来无界清理问题。
-- **对接口、存储、Gateway 和实现的影响：** Gateway 提供 Snapshot RPC 和后续事件流；客户端发现 revision 缺口时重新拉 Snapshot。
+- **最终决定：** 重连时读取 Session Snapshot 和持久化 revision；AgentSlot 不保存临时 chunk 游标，也不保存框架级客户端 ACK 或消费游标。
+- **必须满足的不变量：** Snapshot 只包含已提交事实和当前状态；客户端以 revision 去重和替换本地临时内容；传输回执不能改变 History、Context、Run 或业务完成状态。
+- **否决的方案及原因：** 把每客户端 ACK 或游标放进 SessionStore，会把展示与传输状态变成核心业务状态，并带来客户端身份、租期和无界清理问题。
+- **对接口、存储、Gateway 和实现的影响：** Gateway 提供 Snapshot RPC 和后续事件流；客户端发现 revision 缺口时重新拉 Snapshot。具体 Gateway 或外部消息系统可以自行实现可靠投递，但不新增标准 ACK Slot。
 - **状态：** 已确定。
 
 ## 5. Session 的三个业务视图
@@ -192,17 +198,17 @@ Run/Step。sub-agent 是独立执行参与者，必须拥有独立 Session，并
 ### A-017 History 严格 append-only
 
 - **问题 / 背景：** History 是模型交互和工具事实的审计来源。
-- **最终决定：** History 保存全部已提交模型交互事实，并严格只追加。
-- **必须满足的不变量：** 已发布项不能修改、删除、换位或向前插入；批量追加原子且可幂等重试。
+- **最终决定：** History 是唯一的会话事实账本，按真实发生顺序保存全部已提交模型交互和工具事实，并严格只追加。
+- **必须满足的不变量：** 已提交项不能修改、删除、换位或向前插入；批量追加原子且可幂等重试；History 不以“可直接发送给某个 Provider”为合法性标准。
 - **否决的方案及原因：** 压缩时改写或删除旧 History 会失去恢复、审计和重新派生 Context 的依据。
-- **对接口、存储、Gateway 和实现的影响：** Store 提供尾 revision/CAS 和批量 append；更正只能追加新事实。
+- **对接口、存储、Gateway 和实现的影响：** Store 提供尾 revision/CAS 和批量 append；更正只能追加新事实；完整 tool call 一旦产生就立即成为 History 事实。
 - **状态：** 已确定。
 
 ### A-018 Context 是版本化派生视图
 
 - **问题 / 背景：** 模型输入需要压缩，但压缩不应篡改事实。
-- **最终决定：** Context 是从 History、Queue 消费结果和配置派生的版本化视图；压缩生成新版本。
-- **必须满足的不变量：** 每次模型调用绑定明确 ContextVersion；旧 History 保持不变。
+- **最终决定：** Context 是从 History、Queue 消费结果和配置派生、且满足所选模型协议的版本化视图；压缩生成新版本。
+- **必须满足的不变量：** 每次模型调用绑定明确 ContextVersion；旧 History 保持不变；未配对 tool call 不进入下一次模型请求。
 - **否决的方案及原因：** 直接裁剪 History 会把模型预算优化变成数据丢失。
 - **对接口、存储、Gateway 和实现的影响：** Context 记录来源 revision、压缩元数据和必要协议尾部。
 - **状态：** 已确定。
@@ -243,22 +249,22 @@ Run/Step。sub-agent 是独立执行参与者，必须拥有独立 Session，并
 - **对接口、存储、Gateway 和实现的影响：** Loop 在 step 边界检查 Queue；事件标明认领批次和目标 Run。
 - **状态：** 已确定。
 
-### A-023 正常完成自动消费，异常统一暂停
+### A-023 正常完成可自动消费，异常停止自动消费
 
 - **问题 / 背景：** Queue 自动推进需要清楚区分正常结束和不确定状态。
-- **最终决定：** Run 正常完成后自动按 FIFO 启动下一条 normal；取消、错误或进程重启后 Session 统一进入 `paused`。
-- **必须满足的不变量：** paused 状态不自动认领任何新消息；已持久化 Queue 保持不变。
+- **最终决定：** Run 正常完成后可以在同一原子边界按 FIFO 启动下一条 normal；取消、错误或进程重启后 Session 回到 `idle`，但不得自动消费旧 Queue。
+- **必须满足的不变量：** 异常边界之后旧 Queue 保持不变；只有新的 FollowUp 或显式 Resume 才能重新启动执行。
 - **否决的方案及原因：** 异常后自动继续可能在未知副作用或坏 Context 上扩大损失。
-- **对接口、存储、Gateway 和实现的影响：** 状态转换和自动 drain 必须与提交边界绑定。
+- **对接口、存储、Gateway 和实现的影响：** Session 执行状态只需要 `idle/running`；正常 drain 与异常停止都必须和 Run 终态提交绑定。
 - **状态：** 已确定。
 
-### A-024 paused 只允许显式 Resume 继续
+### A-024 FollowUp 和 Resume 是两种显式启动方式
 
-- **问题 / 背景：** 暂停期间仍可能收到用户输入，但这些输入不等于恢复授权。
-- **最终决定：** paused 时消息继续持久化，只有显式 `Resume` 才继续执行。
-- **必须满足的不变量：** FollowUp 不隐式解除 paused；Resume 可审计且使用 expected revision。
-- **否决的方案及原因：** 新消息自动唤醒会让用户无法先检查失败和未知工具结果。
-- **对接口、存储、Gateway 和实现的影响：** Gateway 分开展示“已收到”和“已恢复”；Loop 暴露 Resume 命令。
+- **问题 / 背景：** 异常停止后，用户可能通过新输入继续，也可能要求在没有新输入时恢复未完成工作。
+- **最终决定：** Session 在 `idle` 时收到新 FollowUp 会持久化消息并立即按需启动执行；显式 Resume 用于没有新消息时继续可恢复工作或旧 Queue。
+- **必须满足的不变量：** 两种命令都可审计并使用 expected revision；不能因 Session 中存在旧 Queue 就自行唤醒；Steer 不能替代启动命令。
+- **否决的方案及原因：** 保留独立 `paused` 状态会让“是否正在执行”和“是否允许自动 drain”混成一个持久状态；强制用户先 Resume 再 FollowUp 又会制造没有业务价值的两步操作。
+- **对接口、存储、Gateway 和实现的影响：** FollowUp、Resume 属于 Session 命令；二者都通过原子执行权认领和 Factory 按需创建 Loop。
 - **状态：** 已确定。
 
 ### A-025 重启后的未消费 Steer 进入 held
@@ -273,8 +279,8 @@ Run/Step。sub-agent 是独立执行参与者，必须拥有独立 Session，并
 ### A-026 五类持久化职责分离
 
 - **问题 / 背景：** SessionStore、History、Context、Queue 和 RunJournal 不是同义词。
-- **最终决定：** SessionStore 负责 Session 聚合状态、revision 和原子提交；History 保存已完成事实；Context 保存版本化模型输入；Queue 保存未消费输入；RunJournal 保存尚未完成提交的执行意图和恢复证据。
-- **必须满足的不变量：** 领域上分责，物理上可共用一个数据库事务；任何实现都必须提供相同原子边界。
+- **最终决定：** SessionStore 负责 Session 聚合状态、revision 和原子提交；History 保存唯一、有序的会话事实；Context 保存合法的版本化模型输入；Queue 保存未消费输入；RunJournal 只保存执行恢复状态和证据。
+- **必须满足的不变量：** 领域上分责，物理上可共用一个数据库事务；任何实现都必须提供相同原子边界；RunJournal 不能成为第二份对话事实账本。
 - **否决的方案及原因：** 把全部数据都叫 History 会掩盖可变性、保留期限和恢复规则的差异。
 - **对接口、存储、Gateway 和实现的影响：** 接口可分层但提交协调由 SessionStore 完成；具体 Slot ID 仍需评审。
 - **状态：** 职责已确定；Slot 命名待商榷。
@@ -282,29 +288,29 @@ Run/Step。sub-agent 是独立执行参与者，必须拥有独立 Session，并
 ### A-027 默认 Context 压缩结构
 
 - **问题 / 背景：** 长 Session 必须在 Token 预算内保留目标和协议完整性。
-- **最终决定：** 默认压缩结果由历史执行摘要、最近三条 inbound 意图和必要协议尾部组成。
-- **必须满足的不变量：** 不截断未配对工具协议；摘要标明来源 History revision 和 ContextVersion。
+- **最终决定：** `context.compactor` 是唯一可替换的压缩 Slot，不新增 `CompactionPolicy` Slot。框架只固定输入输出、来源 revision、版本和协议完整性；默认实现的压缩结果由历史执行摘要、最近三条 inbound 意图和必要协议尾部组成。
+- **必须满足的不变量：** Compactor 输入当前完整 Context，输出压缩后的会话 Message 列表，不包含 SystemPrompt 和 Tool 定义；它不修改 History、不保存 ContextVersion、不提交 Session 事务。StandardAgentLoop 重新装配固定部分，并验证模型协议完整性与硬 Token 上限。
 - **否决的方案及原因：** 只保留最近若干原始消息容易丢失长期目标；只保留摘要容易丢失近期精确意图。
-- **对接口、存储、Gateway 和实现的影响：** Compactor 需要结构化输入和版本化输出，不能返回任意拼接字符串。
-- **状态：** 已确定。
+- **对接口、存储、Gateway 和实现的影响：** 开发者可配置默认实现或整体替换 `context.compactor`；“摘要 + 三条 inbound + 协议尾部”不是其他实现的合规要求。
+- **状态：** 高层契约已确定；默认算法属于可替换实现。
 
 ### A-028 “最近三条 inbound”范围
 
 - **问题 / 背景：** inbound 不只来自当前人类的一种消息类型。
-- **最终决定：** 最近三条包括 normal、steer，以及人类或其他被授权 Session 来源的输入意图。
+- **最终决定：** 默认 ContextCompactor 的最近三条包括 normal、steer，以及人类或其他被授权 Session 来源的输入意图。
 - **必须满足的不变量：** 按被 Session 接受的稳定顺序选择；系统内部事件和 assistant 输出不计入三条。
 - **否决的方案及原因：** 只数 human normal 会漏掉 sub-agent 协作和用户纠偏。
-- **对接口、存储、Gateway 和实现的影响：** Message 元数据必须表达来源主体和投递类型。
-- **状态：** 已确定。
+- **对接口、存储、Gateway 和实现的影响：** Message 元数据必须表达来源主体和投递类型；替换实现可以采用其他选择规则。
+- **状态：** 默认实现行为已确定，不是框架强制算法。
 
 ### A-029 摘要模型与阈值
 
 - **问题 / 背景：** 压缩模型和触发阈值若含糊，会导致各实现行为不可比较。
-- **最终决定：** 默认使用当前 Session 配置的模型生成摘要；外部配置的比例或预算最终解析成确定 Token 数。
-- **必须满足的不变量：** 一次压缩绑定同一模型配置快照；执行前能够检查明确的 Token 阈值。
+- **最终决定：** 默认 ContextCompactor 使用当前 Session 配置的模型生成摘要；外部配置的比例或预算最终解析成确定 Token 数。替换实现可以选择其他摘要算法或模型。
+- **必须满足的不变量：** 一次压缩记录来源 Context revision；StandardAgentLoop 在调用模型前能够检查明确的硬 Token 上限。
 - **否决的方案及原因：** 在核心中硬编码某个便宜模型会引入 Provider 偏好；运行中反复解释比例会产生漂移。
-- **对接口、存储、Gateway 和实现的影响：** 配置加载阶段解析阈值；Compactor 通过 ModelExecutor 调用当前模型。
-- **状态：** 已确定。
+- **对接口、存储、Gateway 和实现的影响：** 默认实现的配置加载阶段解析阈值，并通过 ModelExecutor 调用当前模型；框架接口不硬编码摘要模型。
+- **状态：** 框架校验边界已确定；摘要选择属于可替换实现。
 
 ### A-030 压缩后可查询完整 History
 
@@ -338,37 +344,37 @@ Run/Step。sub-agent 是独立执行参与者，必须拥有独立 Session，并
 ### A-033 Loop 生命周期内关键配置固定
 
 - **问题 / 背景：** SystemPrompt、工具集合或模型在 Session 运行中变化会改变推理语义。
-- **最终决定：** `SystemPrompt`、`ToolKeys`、模型选择和模型参数在一个 Loop 生命周期内固定。
+- **最终决定：** `SystemPrompt`、`ToolKeys`、模型选择和模型参数在一个活跃 Loop 生命周期内固定。
 - **必须满足的不变量：** 每个 Run 可追溯到同一 AgentDefinition/Model 配置版本；运行中不热替换。
 - **否决的方案及原因：** 隐式热更新会让同一 Context 的前后请求使用不同协议和能力。
-- **对接口、存储、Gateway 和实现的影响：** Factory 创建时注入不可变配置快照；更新通过关闭并新建 Loop 生效。
+- **对接口、存储、Gateway 和实现的影响：** Factory 按需创建时注入不可变配置快照；当前执行结束并创建下一个 Loop 后使用新配置。
 - **状态：** 已确定。
 
 ### A-034 配置更新只影响新 Loop
 
 - **问题 / 背景：** 模型请求的稳定前缀有利于 KV cache，也便于复现。
-- **最终决定：** 配置更新只影响之后创建的 Loop，现有 Loop 继续使用原快照。
+- **最终决定：** 配置更新只影响之后按需创建的 Loop，当前活跃 Loop 继续使用原快照。
 - **必须满足的不变量：** 不在下一 step 偷换模型、SystemPrompt 或 Tool 定义；版本在事件中可见。
 - **否决的方案及原因：** 自动热刷新会隐式破坏 KV cache，并让恢复无法重建原请求。
-- **对接口、存储、Gateway 和实现的影响：** 配置服务提供版本化快照；产品显式决定何时重建会话运行对象。
+- **对接口、存储、Gateway 和实现的影响：** 配置服务提供版本化快照；Loop 回收后，下一次执行自然取得新快照。
 - **状态：** 已确定。
 
 ### A-035 ModelExecutor 统一模型调用和网络重试
 
 - **问题 / 背景：** Provider 协议转换和瞬时网络故障不应散落在 Loop 状态机中。
-- **最终决定：** `ModelExecutor` 统一负责流式调用、Provider 适配和可重试网络错误策略。
-- **必须满足的不变量：** Loop 只消费标准事件；重试保持相同 Context 和配置快照；不可重试错误立即返回。
+- **最终决定：** StandardAgentLoop 发起一次逻辑模型调用；`ModelExecutor` 统一负责背后一次或多次真实 Provider 请求、Provider 适配，以及重试、原生续传或终止决定。
+- **必须满足的不变量：** Loop 只消费临时输出、`reset`、完整结果和最终失败等标准事件，不理解 Provider 差异；每次真实请求有唯一 AttemptID；只有完整模型结果进入 Session History。
 - **否决的方案及原因：** 每个 Loop 自己适配 Provider 会复制协议逻辑，并产生不同重试语义。
-- **对接口、存储、Gateway 和实现的影响：** Factory 注入 ModelExecutor；重试次数和退避默认值仍需确定。
+- **对接口、存储、Gateway 和实现的影响：** Factory 注入 ModelExecutor；AttemptID 和用量进入运维事件而非 Session History；重试次数和退避默认值仍需确定。
 - **状态：** 职责已确定；数值默认值待商榷。
 
-### A-036 半流失败的 reset 与重试
+### A-036 半流失败由 ModelExecutor 恢复
 
 - **问题 / 背景：** Provider 可能已经发出部分 chunk 后断网，这些 chunk 不是完整事实。
-- **最终决定：** 丢弃本次尝试的临时 chunk，向客户端发送 `reset`，并使用相同 Context 重新调用；重试耗尽后暂停 Session。
-- **必须满足的不变量：** 临时 chunk 不进入 History；失败尝试不得污染下一次模型请求；已提交完整消息不回滚。
-- **否决的方案及原因：** 从半截文本继续拼接无法证明内容一致；把半截持久化为 assistant message 会制造伪事实。
-- **对接口、存储、Gateway 和实现的影响：** 流事件带 attempt 标识；Gateway 能撤销对应临时展示。
+- **最终决定：** Provider 半流失败后，由 ModelExecutor 根据协议能力决定重试、原生续传或终止；需要撤销临时展示时向 Loop 发出 `reset`。不再强制所有 Provider 使用相同 Context 从头重试。
+- **必须满足的不变量：** 临时 chunk 不进入 History；已提交完整消息不回滚；最终失败结束当前 Run，使 Session 回到 `idle`，且不自动消费旧 Queue。
+- **否决的方案及原因：** Loop 猜测 Provider 恢复方式会把供应商协议污染进状态机；把半截持久化为 assistant message 会制造伪事实。
+- **对接口、存储、Gateway 和实现的影响：** 流事件带 AttemptID；Gateway 能撤销对应临时展示；物理尝试的计费和观测由模型调用组件记录。
 - **状态：** 已确定。
 
 ## 7. 工具循环、并发与崩溃恢复
@@ -382,31 +388,31 @@ Run/Step。sub-agent 是独立执行参与者，必须拥有独立 Session，并
 - **对接口、存储、Gateway 和实现的影响：** 状态机固定 model -> tool -> model 循环；安全上限配置待定。
 - **状态：** 行为已确定；安全上限默认值待商榷。
 
-### A-038 History 中工具 call/result 必须成对
+### A-038 工具 call/result 在 History 中按事实先后追加
 
-- **问题 / 背景：** 主流模型协议要求工具调用与结果配对，审计也需要完整因果关系。
-- **最终决定：** 正常提交到 History 的工具交互必须包含对应 call 和 result。
-- **必须满足的不变量：** 同一 ToolCallID 唯一配对；批次提交不能只写入其中一半。
-- **否决的方案及原因：** 先把 call 单独写入 History 会在崩溃后留下无效协议尾部。
-- **对接口、存储、Gateway 和实现的影响：** History 提供成对原子追加；执行前的意图由 RunJournal 承担。
+- **问题 / 背景：** History 要保存真实发生顺序，而模型 Context 又必须满足 call/result 配对协议。
+- **最终决定：** 完整 tool call 产生后立即追加到 History；tool result 在执行完成后单独追加，不要求 call/result 原子成对写入 History。
+- **必须满足的不变量：** 每个 ToolCallID 最终只能有一个终态结果：成功、结构化错误或 `outcome_unknown`；未配对 call 不进入下一次模型请求。
+- **否决的方案及原因：** 为了让 History 看起来像 Provider 消息数组而延迟记录 call，会混淆事实账本与模型协议投影。
+- **对接口、存储、Gateway 和实现的影响：** History 支持逐事实 append；Context 投影负责筛除未配对 call，直到对应终态结果存在。
 - **状态：** 已确定。
 
 ### A-039 pending 工具意图进入 RunJournal
 
 - **问题 / 背景：** 工具有外部副作用，执行前不留证据会在崩溃后无法判断是否已发生。
-- **最终决定：** 工具执行前把 pending 调用意图写入 RunJournal，不直接写入 History 或 Context。
-- **必须满足的不变量：** Journal 记录 ToolCallID、参数摘要/安全表示、Run/Step 和状态；写入成功后才允许执行。
-- **否决的方案及原因：** 完全不记录会诱发盲目重跑；把 pending call 暴露给模型会破坏 call/result 配对。
-- **对接口、存储、Gateway 和实现的影响：** SessionStore 的事务覆盖 Journal 状态；敏感参数按安全策略存储。
+- **最终决定：** 工具执行前，在同一 Session 事务中把完整 call 追加到 History，并在 RunJournal 建立 pending 执行记录；事务成功后才允许执行工具。
+- **必须满足的不变量：** Journal 记录 ToolCallID、Run/Step、执行状态和必要恢复证据，但不重复承载完整对话事实；pending 记录写入成功后才允许执行。
+- **否决的方案及原因：** 完全不记录会诱发盲目重跑；只写 Journal 而不写 History 会隐去已经真实产生的模型调用事实。
+- **对接口、存储、Gateway 和实现的影响：** SessionStore 的事务同时覆盖 History append 和 Journal pending；敏感执行证据按安全策略存储。
 - **状态：** 已确定。
 
 ### A-040 崩溃恢复使用 `outcome_unknown`
 
 - **问题 / 背景：** 进程可能在工具产生副作用后、结果提交前崩溃。
-- **最终决定：** 恢复时不自动重跑未知调用；为其生成配对的结构化 `outcome_unknown` 结果，提交 call/result 到 History，并暂停 Session。
-- **必须满足的不变量：** 已确认完成的调用使用真实结果；未知调用不得伪装成功或失败；只有显式 Resume 后模型才能判断下一步。
+- **最终决定：** 恢复时不自动重跑未知调用；为已经存在于 History 的 call 追加唯一的结构化 `outcome_unknown` 结果，再允许后续模型执行。
+- **必须满足的不变量：** 已确认完成的调用使用真实结果；未知调用不得伪装成功或失败；恢复事务结束当前 Run 并把 Session 置为 `idle`，不得自动消费旧 Queue。
 - **否决的方案及原因：** 自动重跑可能重复付款、写文件或执行命令；丢弃调用会隐瞒真实风险。
-- **对接口、存储、Gateway 和实现的影响：** 恢复器扫描 RunJournal，原子完成合成配对和状态迁移。
+- **对接口、存储、Gateway 和实现的影响：** 恢复器扫描 RunJournal，原子追加 unknown 结果、结束旧 Run 并迁移状态；用户可用新 FollowUp 或 Resume 决定下一步。
 - **状态：** 已确定。
 
 ### A-041 Tool 只声明两种调度模式
@@ -441,10 +447,10 @@ Run/Step。sub-agent 是独立执行参与者，必须拥有独立 Session，并
 ### A-044 Hook 固定两个阶段
 
 - **问题 / 背景：** 可扩展收尾行为需要 Hook，但任意阶段会让主循环不可推理。
-- **最终决定：** 使用统一 `AgentHook` 注册模型，只开放 `BeforeRunComplete` 和 `AfterCommit` 两个固定阶段。
-- **必须满足的不变量：** `BeforeRunComplete` 只在自然完成边界运行，可追加 Steer 以继续当前 Run；`AfterCommit` 只观察已提交事实，不能回滚或控制 Run。
-- **否决的方案及原因：** 为每个内部动作增加 Hook 会把状态机拆成外部隐式代码；允许 AfterCommit 改事务会破坏一致性。
-- **对接口、存储、Gateway 和实现的影响：** Hook 接收只读快照和受限命令；最终 Slot ID 待商榷。
+- **最终决定：** 使用统一 `AgentHook` 注册模型，只开放 `BeforeRunComplete` 和 `AfterCommit` 两个固定阶段。`BeforeRunComplete` 在完整 assistant 消息已经保存、Run 尚未标记完成时运行；首版只能返回受控的“追加后续输入请求”。
+- **必须满足的不变量：** Hook 不能直接修改 Queue、History、Context 或 Run 状态，也不能自行启动 step；StandardAgentLoop 校验并持久化请求，由它唯一决定继续下一 step 或完成 Run。Hook 报错只记录并忽略，其他 Hook 继续运行；`AfterCommit` 只观察已提交事实。
+- **否决的方案及原因：** 为 Hook 提供暂停、取消或任意状态动作会制造第二个循环控制者；允许 AfterCommit 改事务会破坏一致性。
+- **对接口、存储、Gateway 和实现的影响：** Hook 接收只读快照并返回受限 proposal；未来新增动作必须单独评审；最终 Slot ID 待商榷。
 - **状态：** 阶段语义已确定；Slot ID 待商榷。
 
 ### A-045 Session 持久化属于核心事务
@@ -456,7 +462,54 @@ Run/Step。sub-agent 是独立执行参与者，必须拥有独立 Session，并
 - **对接口、存储、Gateway 和实现的影响：** SessionStore 是 Loop 必需依赖；Hook 只做通知、索引、遥测等派生工作。
 - **状态：** 已确定。
 
-## 9. 实现前仍待商榷
+## 9. 外部评审问题（已讨论）
+
+本节保留外部评审意见及本项目的处理结果。R-001～R-006 均已完成讨论，结论已经
+写入受影响的 A 系列决策；这里不再形成一套平行规范。
+
+### R-001 Hook 是否会成为第二个循环控制者
+
+- **评审意见：** 当前 A-044 允许 `BeforeRunComplete` 追加 Steer 并继续当前 Run。若 Hook 既能决定是否继续，又能修改输入，主 Loop 和 Hook 可能形成双重循环控制者。建议 Hook 只能提出后续命令，由唯一的 Loop/Session owner 在事实提交后决定是否继续。
+- **讨论结论：** 接受风险判断，并收窄 Hook 权限。首版 `BeforeRunComplete` 只能在完整 assistant 消息提交后返回“追加后续输入请求”；StandardAgentLoop 校验、持久化并拥有唯一继续权。Hook 失败只记录并忽略，其他 Hook 继续；`AfterCommit` 纯观察。
+- **对既有决策的处理：** 已修订 A-044；A-022 的用户 Steer 语义不变，Hook 请求不再被描述为可直接追加 Steer。
+- **状态：** 已讨论并接受修改。
+
+### R-002 History 是 canonical facts 还是模型协议投影
+
+- **评审意见：** A-038 要求工具 call/result 成对写入 History，但必须先明确 History 是“真实发生事实的时间序列”，还是“可以直接发送给模型的合法协议序列”。前者可能要求已被 Provider 接受的 tool call 及时成为事实；后者才天然要求成对提交。
+- **讨论结论：** 接受概念分离。History 是唯一事实账本；Context 是满足模型协议的派生投影。完整 tool call 立即写入 History，并在同一事务建立 RunJournal pending；result 后续单独追加。未配对 call 不进入模型请求。
+- **对既有决策的处理：** 已修订 A-017、A-018、A-026、A-038～A-040，删除“History 必须原子成对”的旧结论。
+- **状态：** 已讨论并接受修改。
+
+### R-003 是否保存持久事实的最小客户端 ACK
+
+- **评审意见：** 赞成不持久化临时 chunk，也不保存逐 chunk 游标；但可以考虑保存客户端最后确认的持久化 Message、revision 或 retirement。是否保存应交给 Gateway 根据可靠投递需求决定。
+- **讨论结论：** 不接受把 ACK 提升为 AgentSlot 标准。框架既不保存临时 chunk 游标，也不保存客户端对持久事实的 ACK；重连继续使用客户端 revision 与 Session Snapshot。可靠投递可由具体 Gateway 或外部消息系统私有实现。
+- **对既有决策的处理：** 已补强 A-015；不新增 ACK Slot，不把 ACK 写入 SessionStore，传输回执不影响业务事实或完成状态。
+- **状态：** 已讨论并否决标准化。
+
+### R-004 默认压缩策略是否应成为固定架构语义
+
+- **评审意见：** “历史摘要 + 最近三条 inbound + 协议尾部”适合作为默认策略，但不应成为 StandardAgentLoop 的固定语义。架构应只规定压缩输入、输出、来源 revision、协议完整性和版本要求；保留条数、摘要模型和选择规则应由可替换 Compaction Policy 配置。
+- **讨论结论：** 接受默认算法不应成为核心语义，但不新增 `CompactionPolicy` Slot。继续使用唯一可替换的 `context.compactor`；框架固定输入输出、来源 revision、版本、协议完整性和硬 Token 上限，默认实现可配置或整体替换。
+- **对既有决策的处理：** 已修订 A-027～A-029，把“摘要 + 最近三条 inbound + 协议尾部”和当前 Session 模型明确降为默认实现行为。
+- **状态：** 已讨论并接受修改。
+
+### R-005 半流失败是否必须使用相同 Context 重试
+
+- **评审意见：** 不同 Provider 可能支持原请求重试、continuation，或只能终止，不能统一规定相同 Context 重新调用。建议 ModelExecutor 返回 typed recovery decision，并记录每次 physical attempt；Loop 只执行决定。
+- **讨论结论：** 接受 Provider-specific recovery 不属于 Loop。StandardAgentLoop 发起一次逻辑调用；ModelExecutor 自行管理物理尝试，并决定重试、原生续传或终止。每次真实请求有 AttemptID 和运维/用量记录，不进入 Session History。
+- **对既有决策的处理：** 已修订 A-035、A-036，删除“所有 Provider 使用相同 Context 重试”的固定规则；重试次数和退避仍保留为待商榷数值。
+- **状态：** 已讨论并接受修改。
+
+### R-006 “每个打开的 Session 一个 Loop”的生命周期是否过重
+
+- **评审意见：** 风险不一定是立即 Bug，主要是生命周期含糊：浏览或恢复 1,000 个 Session 是否会常驻 1,000 个 Loop、队列和取消对象；配置更新后旧 Loop 何时释放；并发打开同一 Session 是否会生成两个 Loop。建议改为“每个具有执行租约的活跃 Session 最多一个 Loop”，无活跃 Run 时 Session 的正确性不依赖 Loop 常驻。
+- **讨论结论：** 接受按需生命周期。Session 长期拥有状态和命令；FollowUp 或 Resume 触发 Factory 按需创建 Loop，同一 Session 最多一个活跃 Loop。打开/浏览不创建，执行结束可回收；立即回收还是延迟回收是实现优化。
+- **对既有决策的处理：** 已修订 A-002～A-004、A-006、A-023～A-024、A-033～A-034；删除持久 `paused` 状态，Session 执行状态只保留 `idle/running`，`closed` 只属于内存 Loop 或句柄生命周期。
+- **状态：** 已讨论并接受修改。
+
+## 10. 实现前仍待商榷
 
 以下事项没有足够证据形成最终结论。它们不得在组件地图、Profile 或公共 API 中被
 提前写成既定事实：
@@ -471,7 +524,7 @@ Run/Step。sub-agent 是独立执行参与者，必须拥有独立 Session，并
 | Hook、RunJournal、Session History Tool 的 Slot ID | 行为和职责已确定 | 评审是否独立 Slot、具体 cardinality 和生命周期依赖 |
 | 第一批真实 Provider 适配器 | 需要至少两个独立协议验证接口 | 根据真实消费者选择范围，不能只包两层同一 SDK |
 
-## 10. 文档约束
+## 11. 文档约束
 
 - 本文记录架构结论；组件地图记录标准生态位和成熟度；实施计划记录代码顺序与验收。
 - 新证据推翻已确定结论时，必须同时修改本文、实施计划和受影响的中英文组件地图。
