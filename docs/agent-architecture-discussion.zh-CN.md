@@ -67,7 +67,7 @@ RuntimeCoordinator 只操作注册表，不拥有它。
 - **最终决定：** 目标公共名称使用 `Assembly`（应用装配结果）。一个已构建并启动的 Application Assembly 可以同时服务多个 Workspace 和 Session。
 - **必须满足的不变量：** Assembly 内组件选择和启动顺序固定；不同 Session 的运行状态相互隔离；运行时不能把 Assembly 当作服务定位器。
 - **否决的方案及原因：** 每个 Session 创建独立 Assembly，会重复启动应用级组件，并把会话隔离错误地变成重复装配；继续使用 `Plan` 会与 Agent 自己的任务计划混淆。
-- **对接口、存储、Gateway 和实现的影响：** 目标 API 为 `Application.Build() -> *Assembly`、`Assembly.Start() -> *Runtime`、`Assembly.Describe()` 和 `Runtime.Assembly()`，描述格式为 `agentslot.assembly/v0`。当前代码仍导出 `Plan`、`PlanDescription` 和 `agentslot.plan/v0`，后续代码批次必须整体改名为 `Assembly`、`AssemblyDescription` 和新格式标识，不能长期保留两套同义公共类型。Assembly 固定 SessionManager、SessionStore、ModelExecutor、InteractionCommand 等共享组件选择；启动后的 Application Runtime 持有 Gateway、Registry 和 AgentRuntime。
+- **对接口、存储、Gateway 和实现的影响：** 公共 API 为 `Application.Build() -> *Assembly`、`Assembly.Start() -> *Runtime`、`Assembly.Describe()` 和 `Runtime.Assembly()`，描述格式为 `agentslot.assembly/v0`。不保留旧 `Plan`、`PlanDescription` 名称的长期兼容别名。Assembly 固定 SessionManager、SessionStore、ModelExecutor、InteractionCommand 等共享组件选择；启动后的 Application Runtime 持有 Gateway、Registry 和 AgentRuntime。
 - **状态：** 已确定。
 
 ### A-002 `AgentRuntime` 是框架固定对象，不是 Slot
@@ -592,7 +592,7 @@ RuntimeCoordinator 只操作注册表，不拥有它。
 
 实现前仍需要用失败测试收敛具体 Go 方法名、错误包装和数据库字段，但这些细化不能
 改变对象所有权、调用方向、状态机、事务边界或 Slot 扩展边界。当前代码中的
-`Plan.Describe()` 需要在同一代码批次完成目标 `Assembly` 名称和描述格式迁移。
+`Assembly.Describe()` 已完成目标名称和描述格式迁移；后续实现直接使用该 API。
 
 后续实现必须遵守：
 
@@ -609,7 +609,7 @@ RuntimeCoordinator 只操作注册表，不拥有它。
 - InteractionCommand 只注册到 Gateway，并只提供 UI-neutral 描述和结构化执行；
 - 进程内 Gateway 可以通过私有 RuntimeAccess 操作 Runtime；Entrypoint 只能取得稳定
   ID、revision、snapshot、命令结果和事件；包内私有装配 Slot 不属于公共扩展边界；
-- 目标 Build 产物名称是 `Assembly`；当前 `Plan` 代码名必须在后续实现批次整体迁移。
+- 目标 Build 产物名称是 `Assembly`；当前实现已经完成迁移，不提供旧 `Plan` 别名。
 - 标准 Agent 通过 `standardagent.NewApplication` 显式启用，通用 Application 不得隐式
   猜测 Profile；固定 Gateway 从应用运行骨架阶段开始就是所有测试和产品入口的唯一后端。
 

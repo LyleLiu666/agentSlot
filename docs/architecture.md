@@ -45,12 +45,9 @@ keeps the same `Build`, `Start`, `Run`, and `Runtime.Stop` lifecycle.
    `Assembly.Start` creates one `Runtime` and starts lifecycle-aware modules in dependency order.
 8. `Runtime.Stop` releases them in reverse order.
 
-The current pre-1.0 Go implementation still names this object `Plan`, its
-description `PlanDescription`, and its schema `agentslot.plan/v0`. The decided
-target names are `Assembly`, `AssemblyDescription`, and
-`agentslot.assembly/v0`.
-They must migrate atomically in a later code batch; this document uses the
-target architecture name because `Plan` conflicts with agent task planning.
+The Go implementation exposes this object as `Assembly`, with
+`AssemblyDescription` and the `agentslot.assembly/v0` schema. The old `Plan`
+names are not compatibility aliases; `Plan` conflicts with agent task planning.
 
 A failed module registration never leaks partial contributions. A failed
 build, including constructor failure, does not freeze the builder or publish a
@@ -116,8 +113,8 @@ operates it:
 - `Build` is idempotent after success and returns the same immutable Assembly.
 - `Start` automatically builds, then starts the Assembly once.
 - `Run` treats context cancellation as a normal shutdown request.
-- the target `Runtime.Assembly()` exposes the exact Assembly owned by the running
-  application; current code retains `Runtime.Plan()` until the atomic rename;
+- `Runtime.Assembly()` exposes the exact Assembly owned by the running
+  application;
 - the internal Runtime module resolves only declared typed Slot dependencies at
   Build time; the started Runtime binds package-private Runtime access only to
   the fixed Gateway and binds carrier-neutral Gateway access to standard
@@ -199,9 +196,8 @@ The target `Assembly.Describe()` returns the versioned
 lists modules in lifecycle start order and slots in lexical ID order.
 Contributions contain only module ownership and optional keys. Component values
 and configuration are intentionally absent so the description can be logged or
-exported without serializing implementations or leaking credentials. Current
-code still exposes `Plan.Describe()` and `agentslot.plan/v0`; the code migration
-must rename the type and schema together.
+exported without serializing implementations or leaking credentials. The
+implementation exposes `Assembly.Describe()` and `agentslot.assembly/v0`.
 
 ## Package layers
 
@@ -275,9 +271,9 @@ The composition API is ready for a stable release only after:
    isolated per-Session AgentRuntime instances without duplicating
    application-level components.
 
-Until those proofs exist, keep domain contracts outside the core. The current
-`agentslot.plan/v0` schema remains an implementation fact only until the atomic
-Assembly rename; the replacement schema must also remain pre-stable.
+Until those proofs exist, keep domain contracts outside the core. The
+`agentslot.assembly/v0` schema remains pre-stable even though it is the current
+implementation format.
 
 ## Current implementation frontier
 

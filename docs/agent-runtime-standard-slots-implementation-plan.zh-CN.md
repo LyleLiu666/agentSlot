@@ -68,7 +68,7 @@ flowchart TD
 | 对象 | 作用域 | 职责 |
 | --- | --- | --- |
 | Application | 进程内应用定义 | 装配模块，提供统一 Build、Start、Run 入口 |
-| Assembly | Application 生命周期 | 保存经过校验的共享组件选择和启动顺序；当前代码名 `Plan` 待整体迁移 |
+| Assembly | Application 生命周期 | 保存经过校验的共享组件选择和启动顺序 |
 | 应用级 Runtime | 一次 Application.Start | 由启动入口创建，持有进程内 RuntimeRegistry 和已启动 Module 生命周期 |
 | RuntimeRegistry | 应用级 Runtime 生命周期 | 保存已 create/resume 的 `SessionID → AgentRuntime`；不是 Slot |
 | RuntimeCoordinator | 应用级 Runtime 生命周期 | 操作 Registry 和固定生命周期命令，但不拥有 Registry |
@@ -104,7 +104,7 @@ Runtime 内部命令面提供 `Send`、`Steer`、`RunPending`、
 
 | 层级 | 可否替换 | 内容 | 约束 |
 | --- | --- | --- | --- |
-| 装配框架 | 否 | Application、Module、typed Slot、Assembly、Build/Start/Run、生命周期回滚 | 通用核心保持小且稳定；当前代码名 `Plan` 待迁移 |
+| 装配框架 | 否 | Application、Module、typed Slot、Assembly、Build/Start/Run、生命周期回滚 | 通用核心保持小且稳定 |
 | AgentRuntime | 否 | Session 绑定、命令串行化、循环、状态机、模型配置更新边界和事务顺序 | 不是 Slot，不允许实现另一套标准循环 |
 | Gateway | 否 | 统一交互命令、路由、Snapshot、事件、流式/聚合呈现边界 | 不是 Slot；不得包含 Session 真相或模型/工具循环 |
 | 正确性不变量 | 否 | 同 Session 唯一活跃 Run、History append-only、CAS、工具结果后继续模型、异常不自动消费旧 Queue | 不能被配置或 Hook 关闭 |
@@ -419,8 +419,8 @@ Runtime 初始化必须一次完成：任一必需依赖、ToolKey、SessionMode
 
 标准 Agent 的目标入口是 `standardagent.NewApplication`。它自动安装框架内部
 Runtime/Gateway 模块，同时返回并继续使用统一 Application、Assembly 与 Runtime 层级，
-不新增 AgentHost、RunningApplication 或公开 Factory。当前 Go 实现的 `Plan` 名称在代码
-迁移前只代表目标 `Assembly` 的旧名。
+不新增 AgentHost、RunningApplication 或公开 Factory。当前 Go 实现直接使用 `Assembly`
+名称，不提供旧 `Plan` 别名。
 
 1. 内部模块通过 `RequiredSlots` 声明 SessionManager、SessionStore、ModelExecutor、
    InteractionCommand 以及 Runtime/Gateway 所需可选组件，并贡献包内私有、尚未激活的
@@ -658,8 +658,7 @@ History。
   无约束的 `SessionMutation` 万能对象。
 - 以失败测试确定 ModelEvent 的顺序、临时 chunk、reset、唯一完整结果、最终失败、
   取消和流关闭规则；不得让不同 Executor 自行解释事件协议。
-- 把当前 `Plan`、`PlanDescription` 和 `agentslot.plan/v0` 整体迁移为 `Assembly`、
-  `AssemblyDescription` 和 `agentslot.assembly/v0`；完成 cardinality、依赖、错误分类、秘密不进入
+- 使用 `Assembly`、`AssemblyDescription` 和 `agentslot.assembly/v0`；完成 cardinality、依赖、错误分类、秘密不进入
   `Assembly.Describe` 的合同测试，不保留两套同义公共 API。
 - 提供最小假实现，只用于证明装配；不实现 AgentRuntime 循环。
 - 清理示例和测试夹具中把 `agent.loop` 当作标准 Slot 的旧叙述；通用 Slot 测试使用

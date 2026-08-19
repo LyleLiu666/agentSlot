@@ -130,9 +130,8 @@ Runtime 注册表、Gateway 或循环装配。框架不新增 `AgentHost`、`Run
 3. 按依赖顺序构造组件，并冻结 Runtime 所需的依赖集合；
 4. 生成可检查、不可泄密的 `AssemblyDescription`。
 
-当前代码仍使用 `Plan`、`PlanDescription` 和 `agentslot.plan/v0`。它们必须在一个原子
-代码批次中改成 `Assembly`、`AssemblyDescription` 和 `agentslot.assembly/v0`，不保留
-两套长期同义 API。
+当前代码使用 `Assembly`、`AssemblyDescription` 和 `agentslot.assembly/v0`，不保留
+旧 `Plan` 名称的长期兼容别名。
 
 ### 4.3 Start 与 Stop
 
