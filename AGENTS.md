@@ -9,7 +9,7 @@ map: it tells agent developers which responsibilities can be implemented and
 replaced independently. Its score is the quality and proven portability of
 those component ecosystems, not the raw number of interfaces. Keep the generic
 composition core small while making **component boundaries, cardinality,
-dependencies, lifecycle, conformance maturity, and the final assembled plan
+dependencies, lifecycle, conformance maturity, and the final Assembly
 explicit, inspectable, and exportable**. Reject additions that increase API
 surface without clarifying or mechanically enforcing one of those properties.
 
@@ -17,7 +17,7 @@ surface without clarifying or mechanically enforcing one of those properties.
 
 - `Module` is only the registration and lifecycle envelope. Component ecosystems are represented by typed slots.
 - Express module dependencies against typed slots, never concrete module IDs. Build must reject missing providers and cycles before startup.
-- `Plan.Describe()` may expose IDs, kinds, types, keys, ownership, requirements, and order. It must never expose component values, configurations, credentials, or other secrets.
+- Target `Assembly.Describe()` may expose IDs, kinds, types, keys, ownership, requirements, and order. It must never expose component values, configurations, credentials, or other secrets. Until the atomic pre-1.0 rename, the implemented name `Plan.Describe()` follows the same rule.
 - Keep the composition core free of product, provider, UI, storage, and transport dependencies.
 - Keep core documentation product-neutral. Describe capability roles here; document named framework migrations and adapters in their consuming repositories.
 - Fix finite, cross-provider semantic vocabulary in AgentSlot leaf packages;

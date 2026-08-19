@@ -2,6 +2,9 @@
 
 [English](COMPONENT_MAP.md) | [简体中文](COMPONENT_MAP.zh-CN.md)
 
+For complete object ownership, the Gateway spine, and package dependency
+direction, read the [Agent framework panorama](docs/agent-framework-architecture.zh-CN.md).
+
 This document is the authoritative map of the customization seams in a
 composable LLM agent. It is a primary AgentSlot asset, not a list of whatever
 interfaces happen to exist in one implementation.
@@ -21,7 +24,7 @@ Current repository reality:
 
 | Inventory | Count |
 | --- | ---: |
-| Mapped standard component ecosystems | 41 |
+| Mapped standard component ecosystems | 42 |
 | Standardized domain vocabularies | 2 |
 | Contracted AgentSlot-owned domain interfaces | 0 |
 | Conformant component ecosystems | 0 |
@@ -30,34 +33,56 @@ Current repository reality:
 
 The separate composition protocol currently exports five Go interfaces:
 `Module`, `SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. They are
-framework mechanics, not substitutes for the 41 mapped agent component
+framework mechanics, not substitutes for the 42 mapped agent component
 contracts.
 
 ## Runnable standard profile
 
+A standard Agent explicitly enters through `standardagent.NewApplication`. It
+returns the same `*agentslot.Application` as the generic core and automatically
+mounts the fixed AgentRuntime/Gateway layer. The generic
+`agentslot.NewApplication` never infers a standard Agent profile from installed
+Slots.
+
 An AgentSlot application conforms to the runnable standard agent profile only
-when its assembled plan contains all four of these component ecosystems:
+when its Assembly contains all four of these component ecosystems:
+
+`Assembly` is the decided architecture name for the build result. The current
+pre-1.0 Go implementation still exports `Plan` until the type, description, and
+schema identifier are migrated together to `Assembly`, `AssemblyDescription`,
+and `agentslot.assembly/v0`.
 
 | Slot ID | Standard contract | Kind | Required cardinality | Responsibility |
 | --- | --- | --- | --- | --- |
 | `session.manager` | `SessionManager` | `One` | exactly 1 | Creates, resumes, forks, or summary-starts a stable Session without absorbing its replaceable persistence implementation. |
-| `session.store` | `SessionStore` | `One` | exactly 1 | Persists the Session aggregate—History, Context, Queue, RunJournal, revisions, and atomic CAS transactions. |
+| `session.store` | `SessionStore` | `One` | exactly 1 | Persists the Session aggregate—History, Context, Queue, RunJournal, SessionModelConfig, revisions, and atomic CAS transactions. |
 | `model.executor` | `ModelExecutor` | `One` | exactly 1 | Executes one logical model call while containing provider-specific physical attempts, streaming recovery, and final failure semantics. |
-| `interaction.entrypoint` | `Entrypoint` | `Many` | at least 1 | Accepts user or caller input and exposes agent output through TUI, Web, desktop, HTTP, ACP, or another protocol. |
+| `interaction.entrypoint` | `Entrypoint` | `Many` | at least 1 | Adapts TUI, Web, desktop, function, HTTP, ACP, or another caller-facing surface to the fixed Gateway. |
 
-`AgentRuntime` and its model/tool loop are framework behavior, not a Slot or a
-replaceable component ecosystem. Creating or explicitly resuming a Session
+`AgentRuntime`, the in-process Gateway, and their control path are framework
+behavior, not Slots or replaceable component ecosystems. Creating or explicitly resuming a Session
 initializes one Runtime bound to that Session; listing or viewing Sessions does
-not. The same Session has one Runtime per process, that Runtime stays resident
-while idle, and it is released only by explicit Close or application shutdown.
-Entrypoints invoke Session lifecycle operations and Runtime commands without
-reimplementing model/tool control flow.
+not. One started application Runtime and all AgentRuntimes registered beneath it
+live in one process. The same Session has one Runtime in that registry, that
+Runtime stays resident while idle, and it is released only by explicit Close or
+application shutdown.
+Entrypoints invoke only the fixed Gateway's carrier-neutral API; they never
+receive Runtime access or AgentRuntime pointers. `Application.Start` creates a
+started application Runtime that owns one process-local Session-to-Runtime
+registry and one Gateway. A
+framework-internal Runtime coordinator operates that registry and is mounted
+with the standard Agent Application; none is a public Slot. Every Runtime in
+one registry lives in the same process, while persisted Sessions that have not
+been opened occupy no Runtime. This is the standard architecture boundary, not
+a first-version compromise.
 
-An immutable AgentConfig snapshot supplies SystemPrompt, model selection and
-parameters, ToolKeys, and Context settings for one Runtime lifetime. Those are
-product configuration, not Slot implementations. SystemPrompt and tool schemas
-are assembled into model requests; they are not repeatedly stored as History
-facts merely because the model can see them.
+An immutable AgentRuntimeConfig snapshot supplies SystemPrompt, ToolKeys, and
+Context settings for one Runtime lifetime. An Agent-level default initializes
+new Sessions, while each Session durably owns its current provider, model,
+reasoning, and model parameters as SessionModelConfig. That model configuration
+may be changed explicitly while the Runtime is idle and is snapshotted for each
+Run. SystemPrompt and tool schemas are assembled into model requests; they are
+not repeatedly stored as History facts merely because the model can see them.
 
 `ModelExecutor`, rather than `ModelProvider`, is globally mandatory because it
 is the Runtime's logical model-call boundary. `model.provider` is an optional
@@ -67,9 +92,9 @@ backend without manufacturing a fake provider registry.
 
 When an Executor declares a `model.provider` dependency and exactly one provider
 is installed, it may select that provider automatically. With more than one,
-selection must be explicit and deterministic, either in AgentConfig/Executor
-configuration or through `ModelSelector`; it must never depend on module order,
-concrete Go type, or a hidden fallback.
+selection must be explicit and deterministic, either in SessionModelConfig,
+Executor configuration, or through `ModelSelector`; it must never depend on
+module order, concrete Go type, or a hidden fallback.
 
 Tools are deliberately not part of the minimum cardinality. A conversational
 agent can run with zero tools. A coding or operational profile can require a
@@ -77,14 +102,22 @@ specific tool set without making that requirement universal.
 
 ```mermaid
 flowchart LR
-    E["Entrypoint (1..n)"] --> SM["SessionManager (1)"]
+    AR["started application Runtime"] --> REG["process-local RuntimeRegistry"]
+    AR --> RC["framework Runtime coordinator"]
+    AR --> G["fixed Gateway"]
+    RC --> REG
+    E["Entrypoint (1..n)"] --> G
+    IC["InteractionCommand (0..n)"] --> G
+    G --> RC
+    RC --> SM["SessionManager (1)"]
     SM --> SS["SessionStore (1)"]
-    SM -->|"CreateSession / ResumeSession"| R["framework AgentRuntime"]
+    REG -->|"CreateSession / ResumeSession"| R["framework AgentRuntime"]
     R --> ME["ModelExecutor (1)"]
     ME -. "optional dependency" .-> MP["ModelProvider (0..n)"]
     R -. "optional" .-> T["Tools and skills"]
     R -. "optional" .-> C["Context components"]
     R -. "optional" .-> H["AgentHooks"]
+    R -. "events" .-> G
     R -. "events" .-> O["Observers and operations"]
 ```
 
@@ -117,14 +150,16 @@ Slots, and several modules may contribute to one `Many` or `Chain` Slot.
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
 | `session.manager` | `SessionManager` | `One` | globally required | Creates, resumes, fully forks, or summary-starts stable Sessions while depending on replaceable SessionStore persistence. | Mapped |
-| `interaction.entrypoint` | `Entrypoint` | `Many` | globally requires at least 1 | Connects a caller-facing protocol or UI to Session lifecycle operations, Runtime commands, snapshots, and agent events. | Mapped |
+| `interaction.entrypoint` | `Entrypoint` | `Many` | globally requires at least 1 | Adapts a caller-facing protocol, function API, or UI to the fixed Gateway without receiving Runtime access. | Mapped |
+| `interaction.command` | `InteractionCommand` | `Many` | optional | Registers a keyed UI-neutral command with the fixed Gateway; Entrypoints render the shared descriptor as slash commands, menus, buttons, forms, or command palettes. | Mapped |
 | `agent.hook` | `AgentHook` | `Chain` | optional | Runs ordered, controlled hooks: proposes follow-on input before run completion or observes committed facts, without mutating Session or Runtime state directly. | Mapped |
 | `runtime.observer` | `RuntimeObserver` | `Chain` | optional | Passively observes typed agent, run, message, tool, retry, and lifecycle events without controlling the Runtime. | Mapped |
 
-The fixed AgentRuntime is deliberately absent from this table: the map records
-customization seams, not every framework object. A product that needs a wholly
-different loop may define a local Slot and explicit non-standard profile on the
-generic composition core, but it is not a conforming standard LLM AgentRuntime.
+The fixed AgentRuntime and Gateway are deliberately absent from this table: the
+map records customization seams, not every framework object. A product that
+needs a wholly different loop or interaction backend may define a local Slot
+and explicit non-standard profile on the generic composition core, but it is
+not a conforming standard LLM Agent application.
 
 ### 2. Model access
 
@@ -135,6 +170,12 @@ generic composition core, but it is not a conforming standard LLM AgentRuntime.
 | `model.selector` | `ModelSelector` | `One` | optional; conditional for dynamic routing | Selects a provider/model using explicit request and policy inputs. | Mapped |
 | `model.catalog` | `ModelCatalog` | `Many` | optional | Describes available models and their declared capabilities without exposing credentials. | Mapped |
 | `model.middleware` | `ModelMiddleware` | `Chain` | optional | Applies observable request/response concerns without changing provider identity. | Mapped |
+
+An explicit SessionModelConfig is authoritative. A ModelSelector may validate
+it, resolve aliases, apply authorization, or reject it, but must not silently
+route the Session to a different model. An interactive `model` command may use
+ModelCatalog contributions to present candidates; that presentation is not part
+of the fixed Runtime backend contract.
 
 AgentSlot fixes the finite model vocabulary in the
 [`model` package](model):
@@ -185,7 +226,7 @@ decisions must use policy/approval components rather than concrete UI checks.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `session.store` | `SessionStore` | `One` | globally required | Persists the whole Session aggregate and its atomic revision/CAS transactions; History remains the unique append-only fact view inside that aggregate. | Mapped |
+| `session.store` | `SessionStore` | `One` | globally required | Persists the whole Session aggregate, including SessionModelConfig, and its atomic revision/CAS transactions; History remains the unique append-only fact view inside that aggregate. | Mapped |
 | `context.source` | `ContextSource` | `Chain` | optional | Contributes ordered context for a model turn. | Mapped |
 | `context.compactor` | `ContextCompactor` | `One` | optional | Replaces the current full Context with a smaller conversation-message projection without rewriting History; AgentRuntime reattaches fixed prompts/tools and validates protocol and hard token limits. | Mapped |
 | `memory.store` | `MemoryStore` | `Many` | optional | Reads and writes durable recall outside the authoritative conversation history. | Mapped |
@@ -217,7 +258,7 @@ invariant.
 | `workspace.manager` | `WorkspaceManager` | `One` | optional | Defines the files, roots, isolation, and lifetime visible to an agent session or run. | Mapped |
 | `execution.environment` | `ExecutionEnvironment` | `Many` | optional | Executes commands or code in a named local, container, sandbox, or remote environment. | Mapped |
 | `artifact.store` | `ArtifactStore` | `One` | optional | Persists generated files and exposes stable metadata/references. | Mapped |
-| `credential.resolver` | `CredentialResolver` | `One` | optional | Resolves scoped credentials without placing secret values in plans or component descriptions. | Mapped |
+| `credential.resolver` | `CredentialResolver` | `One` | optional | Resolves scoped credentials without placing secret values in Assemblies or component descriptions. | Mapped |
 
 ### 6. Policy, authorization, and human approval
 
@@ -245,14 +286,23 @@ invariant.
 | `gateway.route` | `RouteResolver` | `One` | optional | Selects the target agent/session from authenticated inbound requests. | Mapped |
 | `gateway.delivery` | `DeliveryAdapter` | `Many` | optional | Delivers asynchronous output back through a named external channel. | Mapped |
 
-A direct TUI, Web UI, desktop application, HTTP server, or ACP server can be an
-`Entrypoint`. A gateway that multiplexes several external channels is normally
-one `Entrypoint` assembled from the optional gateway Slots above. This avoids
-making every small UI implement gateway routing machinery.
+The fixed Gateway is an in-process, carrier-neutral interaction backend, not a
+network forwarding service and not a Slot. Every direct TUI, Web UI, desktop
+application, function API, HTTP server, or ACP server is an `Entrypoint` or uses
+one, and every Entrypoint calls the same Gateway API. In-process adapters call it
+directly; out-of-process adapters map their wire protocol onto it. The optional
+gateway Slots above customize transport, identity, routing policy, and delivery
+without replacing the Gateway core.
+
+Only the Gateway consumes `interaction.command` contributions. It exposes one
+UI-neutral command directory and structured invocation contract. An Entrypoint
+may render the stable key `model` as `/model`, a menu, a button, or a form, but
+does not execute a separate command implementation. InteractionCommand cannot
+access SessionStore, Runtime access, or the model/tool loop directly.
 
 AgentSlot standardizes neither transient-chunk cursors nor client ACK cursors.
-Reconnect uses a client revision and Session Snapshot. A concrete gateway or
-external messaging system may keep private reliable-delivery state, but that
+Reconnect uses a client revision and Session Snapshot. A concrete transport
+adapter or external messaging system may keep private reliable-delivery state, but that
 state is not a standard Slot or Session fact and cannot change run completion.
 
 ### 9. Usage and billing
@@ -306,7 +356,7 @@ automated tests for the rules that apply to it:
 - cancellation and error propagation;
 - strict append-only history when history is installed;
 - deterministic provider selection;
-- `Plan.Describe()` visibility of Slot IDs, cardinality, dependencies, source,
+- target `Assembly.Describe()` visibility of Slot IDs, cardinality, dependencies, source,
   and lifecycle order without component values, configuration, or secrets.
 
 The reference standard agent must additionally prove a no-key automated path

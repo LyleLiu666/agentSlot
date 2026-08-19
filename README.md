@@ -15,6 +15,7 @@ Typed component slots and deterministic composition for agent systems.
 
 > **Agent runtime decisions and implementation design:**
 > [Agent 设计的架构讨论](docs/agent-architecture-discussion.zh-CN.md) |
+> [Agent 框架全景架构](docs/agent-framework-architecture.zh-CN.md) |
 > [AgentRuntime 与标准 Slot 实施计划](docs/agent-runtime-standard-slots-implementation-plan.zh-CN.md).
 
 > A module unifies registration and lifecycle. A slot defines the component ecosystem, interface, cardinality, and ordering rule.
@@ -22,8 +23,17 @@ Typed component slots and deterministic composition for agent systems.
 The standard AgentRuntime and its model/tool loop are framework behavior, not a
 replaceable Slot. The replaceable parts are narrower: one SessionManager, one
 SessionStore, one ModelExecutor, zero or more Tools, ordered Context and Hook
-components, and one or more Entrypoints. AgentSlot makes those cardinalities
-explicit and validates the assembled system before startup.
+components, one or more Entrypoints, and optional keyed InteractionCommands.
+AgentSlot makes those cardinalities explicit and validates the assembled system
+before startup.
+
+The generic core remains product-neutral. A standard LLM Agent explicitly uses
+`standardagent.NewApplication`, which returns the same `*agentslot.Application`
+and automatically mounts the fixed AgentRuntime/Gateway layer and standard Agent
+profile. It does not infer a profile from installed slots. All standard Agent
+projects therefore keep the same `Build`, `Start`, `Run`, and `Runtime.Stop`
+entry points; only the declared modules, configuration, and application name
+vary.
 
 ## Status
 
@@ -36,7 +46,7 @@ receive a new semantic version.
 The project's architectural result is the quality of its component map, not a
 large interface count. Each accepted ecosystem must have a clear boundary,
 cardinality, dependency model, lifecycle, conformance suite, and inspectable
-place in the final assembled plan.
+place in the final Assembly.
 
 ## Core model
 
@@ -48,10 +58,16 @@ place in the final assembled plan.
 | `Many[T]` | Zero or more implementations with unique keys, such as tools or model providers. |
 | `Chain[T]` | Zero or more ordered contributors, such as hooks or prompt contributors. |
 | `Requirement` | A profile constraint or a module dependency expressed against a slot, never a concrete provider type. |
-| `Plan` | Immutable result of validated composition. |
-| `PlanDescription` | Versioned JSON-safe assembly description containing no component values. |
-| `Runtime` | Started module lifecycles owned by one plan. |
+| `Assembly` | Target public name for the immutable result of validated composition. The current pre-1.0 Go type is still named `Plan` pending one atomic code migration. |
+| `AssemblyDescription` | Target public name for the versioned JSON-safe assembly description. The current code name is `PlanDescription`. |
+| `Runtime` | Started module lifecycles owned by one Assembly; the standard Agent layer will also attach its fixed Gateway and Runtime registry here. |
 | `AgentRuntime` | Framework-owned per-Session command and execution object created by explicit Session create/resume; it is not a Slot. |
+
+The code examples below retain `plan`, `Plan`, `PlanDescription`, and
+`Runtime.Plan()` only because those are the names implemented today. The
+architecture decision is to migrate them together to `assembly`, `Assembly`,
+`AssemblyDescription`, and `Runtime.Assembly()` before the standard Agent API is
+implemented; no long-lived compatibility aliases will be added pre-1.0.
 
 The generic `Module` interface is deliberately not the component interface. The slot's `T` is the component interface:
 
@@ -200,14 +216,33 @@ operations ecosystems.
 
 A runnable standard LLM agent requires exactly one SessionManager, exactly one
 SessionStore, exactly one ModelExecutor, and at least one Entrypoint. The fixed
-AgentRuntime is supplied by the framework rather than selected through a Slot.
+AgentRuntime and fixed in-process Gateway are supplied by the framework rather
+than selected through Slots.
 Tools, ModelProviders, Context components, and AgentHooks are optional globally;
 an installed ModelExecutor may explicitly require one or more ModelProviders.
+`interaction.command` is an optional `Many` Slot for structured commands that
+register only with the Gateway. Entrypoints render the Gateway's UI-neutral
+command directory as slash commands, menus, buttons, forms, or command palettes.
+`Application.Start` creates a started application Runtime that owns one
+process-local Session-to-AgentRuntime registry. Every created or resumed
+AgentRuntime registered by that application lives in the same process; durable
+Sessions that have not been opened do not occupy a Runtime. A framework-internal
+Runtime coordinator operates the registry; only the Gateway receives private
+Runtime access. Every Entrypoint receives the same carrier-neutral Gateway
+access and cannot obtain AgentRuntime pointers. The Gateway, registry,
+coordinator, and private assembly anchors are framework mechanics, not public
+Slots. This single-process
+ownership boundary is a deliberate part of the standard architecture, not a
+first-version limitation.
 
-One Application Plan serves multiple Workspaces and Sessions. It does not
-build a separate Plan per Session. Explicit create/resume initializes one
+One Application Assembly serves multiple Workspaces and Sessions. It does not
+build a separate Assembly per Session. Explicit create/resume initializes one
 AgentRuntime for that Session; listing Sessions does not. History, Context,
-Queue, and RunJournal are durable views inside the SessionStore aggregate.
+Queue, RunJournal, and SessionModelConfig are durable state inside the
+SessionStore aggregate. Runtime-fixed SystemPrompt, ToolKeys, and Context
+settings do not change during one Runtime lifetime; the Session's provider,
+model, reasoning, and model parameters can be changed explicitly while idle
+and are snapshotted for each Run.
 
 Mapping a Slot and standardizing its Go method contract are different maturity
 steps. A proposed method-level interface needs two independent implementations,
@@ -246,7 +281,7 @@ go test -race ./...
 go vet ./...
 ```
 
-Read [docs/architecture.md](docs/architecture.md) before changing the public composition model.
+Read [docs/architecture.md](docs/architecture.md) and the [Agent framework panorama](docs/agent-framework-architecture.zh-CN.md) before changing the public composition model.
 
 ## License
 

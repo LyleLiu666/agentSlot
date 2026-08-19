@@ -11,6 +11,10 @@ boundaries only as their portability is proven.
 
 The authoritative inventory of boundaries, Slot IDs, cardinality, profile
 requirements, and maturity is the [Standard Component Map](../COMPONENT_MAP.md).
+The complete standard-Agent topology is documented in the [Agent framework
+panorama](agent-framework-architecture.zh-CN.md). This document focuses on the
+generic composition core; it must not be read as a second, partial definition
+of Gateway or AgentRuntime ownership.
 
 The central distinction is:
 
@@ -20,6 +24,14 @@ The central distinction is:
 
 One module may provide a model provider, several tools, and a hook. Those contributions remain members of different ecosystems even though one module owns their cleanup.
 
+The generic core stays product-neutral. A standard LLM Agent explicitly enters
+through the separate `standardagent.NewApplication` package. That constructor
+returns the same `*agentslot.Application` used by the generic core, while
+automatically mounting the fixed AgentRuntime/Gateway module and standard Agent
+profile. It does not infer an Agent profile from installed slots, and importing
+the package has no registration side effect. Every standard Agent therefore
+keeps the same `Build`, `Start`, `Run`, and `Runtime.Stop` lifecycle.
+
 ## Composition states
 
 1. `Application` declares one name, module list, and profile. `Build`
@@ -28,25 +40,36 @@ One module may provide a model provider, several tools, and a hook. Those contri
 3. `Build` validates profile requirements and every module's optional `RequiredSlots` declaration.
 4. Slot providers create dependency edges; a stable topological sort rejects cycles before construction or startup.
 5. Deferred contributions are constructed in dependency order through a resolver limited to the owning module's declared requirements.
-6. Successful build returns an immutable `Plan` and freezes the builder.
-7. `Application.Start` builds when needed, then delegates to `Plan.Start`.
-   `Plan.Start` creates one `Runtime` and starts lifecycle-aware modules in dependency order.
+6. Successful build returns an immutable `Assembly` and freezes the builder.
+7. `Application.Start` builds when needed, then delegates to `Assembly.Start`.
+   `Assembly.Start` creates one `Runtime` and starts lifecycle-aware modules in dependency order.
 8. `Runtime.Stop` releases them in reverse order.
+
+The current pre-1.0 Go implementation still names this object `Plan`, its
+description `PlanDescription`, and its schema `agentslot.plan/v0`. The decided
+target names are `Assembly`, `AssemblyDescription`, and
+`agentslot.assembly/v0`.
+They must migrate atomically in a later code batch; this document uses the
+target architecture name because `Plan` conflicts with agent task planning.
 
 A failed module registration never leaks partial contributions. A failed
 build, including constructor failure, does not freeze the builder or publish a
-partially materialized plan. Constructors can therefore run again on a later
+partially materialized Assembly. Constructors can therefore run again on a later
 build attempt and must remain free of lifecycle side effects. A failed start
 rolls back only modules whose `Start` completed successfully.
 
-An Application Plan is the application scope, not a Session scope. One plan can
+An Application Assembly is the application scope, not a Session scope. One Assembly can
 serve many Workspaces and Sessions. It owns shared components such as
 SessionManager, SessionStore, ModelExecutor, optional Provider adapters, Tools,
-Context components, Hooks, and Gateway services. Hierarchical Workspace or
-Session inheritance is still deferred, but it must not be modelled as repeated
-Plans.
+Context components, Hooks, InteractionCommands, Entrypoints, and Gateway
+adapters. When the Assembly starts, the resulting application Runtime owns one
+process-local Session-to-AgentRuntime registry and one fixed in-process Gateway.
+A framework-internal Runtime coordinator operates the registry; the Gateway is
+the sole user-interaction backend. None of these three framework objects is a
+replaceable component ecosystem. Hierarchical Workspace or Session inheritance
+is still deferred, but it must not be modelled as repeated Assemblies.
 
-`AgentRuntime` is fixed framework behavior below the started Plan, not a Slot.
+`AgentRuntime` is fixed framework behavior below the started Assembly, not a Slot.
 Explicitly creating or resuming a Session initializes one Runtime bound to that
 Session; listing or viewing Sessions does not. The Runtime remains resident
 while idle and is released only by explicit Close or application shutdown.
@@ -54,35 +77,61 @@ Closing it never deletes the Session or its durable views.
 
 ## Session-scoped runtime
 
-The runtime boundary below the Plan is explicit:
+The runtime boundary below the Assembly is explicit:
 
 1. `SessionManager` creates, resumes, fully forks, or summary-starts a stable
    Session and performs recovery through the replaceable `SessionStore`.
 2. The Session aggregate durably owns History, Context, Queue, RunJournal, and
-   revision/CAS transaction state.
+   SessionModelConfig together with revision/CAS transaction state.
 3. Successful `CreateSession` or `ResumeSession` initializes one AgentRuntime
-   with an immutable AgentConfig snapshot and the components selected by Plan.
-4. The same process and SessionID have one Runtime; concurrent resume calls
-   converge on it. The Session has at most one active Run, while different
-   Sessions may run concurrently.
+   with an immutable AgentRuntimeConfig snapshot and the components selected by
+   Assembly. Create initializes SessionModelConfig from the Agent default; resume
+   restores the Session's persisted provider, model, reasoning, and parameters.
+4. All AgentRuntimes registered by one started application Runtime live in that
+   same process. The same SessionID has one Runtime in its registry; concurrent
+   resume calls converge on it. Persisted Sessions that have not been created or
+   resumed in this process do not occupy a Runtime. The Session has at most one
+   active Run, while different Sessions may run concurrently.
 5. Runtime commands are `Send`, `Steer`, `RunPending`, Queue mutations,
-   `Cancel`, `WhenIdle`, queries, and `Close`. Resume only means restoring a
-   Session; it is not an execution command.
-6. Gateway is shared by the Application and routes commands/events using
-   `AgentID + WorkspaceID + SessionID + RunID`, without exposing Runtime objects
-   over RPC.
+   `ModelConfig`, `UpdateModelConfig`, `Cancel`, `WhenIdle`, queries, and
+   `Close`. Model configuration can change only while idle and is snapshotted
+   for each Run. Resume only means restoring a Session; it is not an execution
+   command.
+6. The fixed Gateway is shared by the Application and routes commands/events
+   using `AgentID + WorkspaceID + SessionID + RunID`. Entrypoints receive only
+   carrier-neutral Gateway access and never receive Runtime objects. In-process
+   adapters call it directly; only out-of-process adapters require RPC.
 
 ## Application host
 
 `Application` is deliberately a thin owner of module selection, build, and
-startup. It does not add another registry beside the plan:
+startup. The generic core does not add a component service locator beside the
+Assembly. The standard Agent layer uses a narrow Runtime registry whose only
+contents are `SessionID → AgentRuntime` instances. That registry is owned by the
+application Runtime returned from `Start`; the internal Runtime coordinator only
+operates it:
 
 - `NewApplication` copies the named product's complete module list and profile.
 - `Build` automatically installs every declared module and all of its contributions.
-- `Build` is idempotent after success and returns the same immutable plan.
-- `Start` automatically builds, then starts the plan once.
+- `Build` is idempotent after success and returns the same immutable Assembly.
+- `Start` automatically builds, then starts the Assembly once.
 - `Run` treats context cancellation as a normal shutdown request.
-- `Runtime.Plan` exposes the exact plan owned by the running application.
+- the target `Runtime.Assembly()` exposes the exact Assembly owned by the running
+  application; current code retains `Runtime.Plan()` until the atomic rename;
+- the internal Runtime module resolves only declared typed Slot dependencies at
+  Build time; the started Runtime binds package-private Runtime access only to
+  the fixed Gateway and binds carrier-neutral Gateway access to standard
+  Entrypoint Module wrappers;
+- lifecycle dependency order starts the Runtime module before Entrypoint
+  Modules. Shutdown first prevents new Entrypoint commands, then closes
+  AgentRuntimes and the registry, then closes Gateway/adapters and shared
+  dependencies.
+
+One started application Runtime is intentionally one process execution boundary:
+all AgentRuntimes in its registry run in that process. This is a standard
+architecture decision, not a staged implementation compromise. Supporting
+cross-process Session ownership, leases, or migration would require a separate
+architecture decision rather than an implicit extension of this registry.
 
 There is no package scan, global self-registration, hidden field injection, or
 runtime service locator. Every product uses the same `Build`, `Start`, and
@@ -107,13 +156,14 @@ not represented by `One[T]` because it is not replaceable.
 
 `Many[T]` allows multiple values with unique stable keys. Registration order is deterministic, but consumers select by key unless their interface specifies another rule.
 
-Use it for tools, model providers, protocol adapters, and named stores.
+Use it for tools, model providers, interaction commands, protocol adapters, and
+named stores.
 
 `RequireKey` selects one named provider. `RequireMany` means the consumer observes the whole registry, so its lifecycle follows every current provider.
 
 ### Chain
 
-`Chain[T]` allows ordered values. Installation order is semantic and is preserved by the plan.
+`Chain[T]` allows ordered values. Installation order is semantic and is preserved by the Assembly.
 
 Use it only when every contributor participates in an explicit pipeline, such as hooks, policy checks, or prompt contributors. Do not use it as an unordered registry.
 
@@ -142,9 +192,16 @@ resolve it. Constructor functions prepare component values only; goroutines,
 listeners, locks, and other non-repeatable resources belong to `Start` and
 `Stop` because a failed build may retry construction.
 
-## Plan description
+## Assembly description
 
-`Plan.Describe()` returns the versioned `agentslot.plan/v0` format. It lists modules in lifecycle start order and slots in lexical ID order. Contributions contain only module ownership and optional keys. Component values and configuration are intentionally absent so the description can be logged or exported without serializing implementations or leaking credentials.
+The target `Assembly.Describe()` returns the versioned
+`agentslot.assembly/v0` description. It
+lists modules in lifecycle start order and slots in lexical ID order.
+Contributions contain only module ownership and optional keys. Component values
+and configuration are intentionally absent so the description can be logged or
+exported without serializing implementations or leaking credentials. Current
+code still exposes `Plan.Describe()` and `agentslot.plan/v0`; the code migration
+must rename the type and schema together.
 
 ## Package layers
 
@@ -153,7 +210,7 @@ The intended dependency direction is:
 ```text
              products and profiles
                 /          \
-fixed AgentRuntime          entrypoints, adapters, implementations
+fixed AgentRuntime/Gateway  entrypoints, adapters, implementations
                 \          /
           standard component contracts
                        |
@@ -162,10 +219,11 @@ fixed AgentRuntime          entrypoints, adapters, implementations
 
 The core must remain usable without an LLM SDK, tool SDK, database, UI framework, or wire protocol.
 
-The fixed Runtime layer depends on standard contracts and the generic core; the
-generic core does not import AgentRuntime. This preserves a product-neutral
-composition package while still giving conforming LLM Agent projects one loop,
-one command vocabulary, and one set of transaction invariants.
+The fixed Runtime/Gateway layer depends on standard contracts and the generic
+core; the generic core imports neither AgentRuntime nor Gateway. This preserves
+a product-neutral composition package while still giving conforming LLM Agent
+projects one loop, one interaction backend, one command vocabulary, and one set
+of transaction invariants.
 
 Standard component contracts are introduced in AgentSlot-owned leaf packages
 after real implementations establish common behavior. An adapter may depend on
@@ -212,18 +270,21 @@ The composition API is ready for a stable release only after:
 
 1. At least two independent SDK ecosystems declare real slots over their existing interfaces.
 2. One assembled product can exchange implementations through those slots without branching on concrete provider types.
-3. Shared conformance tests verify registration, requirements, lifecycle, and exported plan descriptions.
-4. The evidence proves that one application plan can safely serve multiple
+3. Shared conformance tests verify registration, requirements, lifecycle, and exported Assembly descriptions.
+4. The evidence proves that one Application Assembly can safely serve multiple
    isolated per-Session AgentRuntime instances without duplicating
    application-level components.
 
-Until those proofs exist, keep domain contracts outside the core and keep the plan schema at `v0`.
+Until those proofs exist, keep domain contracts outside the core. The current
+`agentslot.plan/v0` schema remains an implementation fact only until the atomic
+Assembly rename; the replacement schema must also remain pre-stable.
 
 ## Current implementation frontier
 
 The published composition foundation currently defers implementation of:
 
 - the Session-scoped runtime objects and their standard domain method contracts;
+- the fixed standard Agent Gateway, GatewayAccess, and private RuntimeAccess binding;
 - configuration schemas and secret resolution;
 - out-of-process discovery or loading;
 - the mapped standard domain method contracts and their conformance suites.
