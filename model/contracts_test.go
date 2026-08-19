@@ -3,6 +3,7 @@ package model_test
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 
 	agentslot "github.com/LyleLiu666/agentSlot"
@@ -83,5 +84,11 @@ func TestModelConfigValidatesPortableParameters(t *testing.T) {
 	invalid.ModelID = ""
 	if err := invalid.Validate(); err == nil {
 		t.Fatal("model config without model ID accepted")
+	}
+	nan := math.NaN()
+	invalid = valid
+	invalid.Parameters.Temperature = &nan
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("model config with non-finite temperature accepted")
 	}
 }

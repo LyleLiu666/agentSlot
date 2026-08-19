@@ -52,6 +52,10 @@ func TestMessageAndToolCallKeepStableContainment(t *testing.T) {
 		RunID:     message.RunID,
 		StepID:    message.StepID,
 		Name:      "example",
+		Arguments: []byte(`{}`),
+	}
+	if !call.Valid() {
+		t.Fatalf("tool call reported invalid: %#v", call)
 	}
 	if call.MessageID != message.ID || call.SessionID != message.SessionID || call.RunID != message.RunID || call.StepID != message.StepID {
 		t.Fatalf("tool call containment = %#v, want message containment", call)

@@ -70,6 +70,9 @@ func TestGatewaySnapshotUsesKnownRevisionForReconnectNotCAS(t *testing.T) {
 	if err != nil || snapshot.Revision != 3 {
 		t.Fatalf("behind Snapshot = %#v, %v; want current revision 3", snapshot, err)
 	}
+	if len(snapshot.History) != 1 || snapshot.History[0].Message == nil || snapshot.History[0].Message.SessionID != "session-1" {
+		t.Fatalf("Snapshot history = %#v, want complete Session history projection", snapshot.History)
+	}
 	_, err = access.Snapshot(context.Background(), interaction.SnapshotRequest{
 		SessionID: "session-1", KnownRevision: 4,
 	})
@@ -519,9 +522,14 @@ type fakeSession struct {
 func (s fakeSession) ID() agent.SessionID      { return s.id }
 func (s fakeSession) Revision() agent.Revision { return s.revision }
 func (s fakeSession) View(context.Context) (session.Snapshot, error) {
+	message := agent.Message{
+		ID: "message-1", SessionID: s.id, Role: agent.RoleUser,
+		Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "hello"}},
+	}
 	return session.Snapshot{
 		Session:  agent.Session{ID: s.id, Revision: s.revision},
 		Revision: s.revision,
+		History:  []session.HistoryFact{{Message: &message}},
 	}, nil
 }
 
@@ -531,6 +539,9 @@ func (fakeStore) Create(context.Context, session.NewSession) (session.Snapshot, 
 	return session.Snapshot{}, nil
 }
 func (fakeStore) Load(context.Context, session.SessionRef) (session.Snapshot, error) {
+	return session.Snapshot{}, nil
+}
+func (fakeStore) Recover(context.Context, session.SessionRef) (session.Snapshot, error) {
 	return session.Snapshot{}, nil
 }
 func (fakeStore) Commit(context.Context, session.CommitRequest) (session.Commit, error) {

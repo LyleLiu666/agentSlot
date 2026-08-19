@@ -56,6 +56,9 @@ func (r ToolResult) Validate() error {
 	if !r.CallID.Valid() {
 		return fmt.Errorf("tool: result requires a call ID")
 	}
+	if len(r.Output) > 0 && !json.Valid(r.Output) {
+		return fmt.Errorf("tool: result output must be valid JSON")
+	}
 	switch r.Status {
 	case ResultSucceeded:
 		if r.Error != nil {

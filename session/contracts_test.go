@@ -53,6 +53,9 @@ func (store) Create(context.Context, session.NewSession) (session.Snapshot, erro
 func (store) Load(context.Context, session.SessionRef) (session.Snapshot, error) {
 	return session.Snapshot{}, nil
 }
+func (store) Recover(context.Context, session.SessionRef) (session.Snapshot, error) {
+	return session.Snapshot{}, nil
+}
 func (store) Commit(context.Context, session.CommitRequest) (session.Commit, error) {
 	return session.Commit{}, nil
 }
@@ -106,14 +109,5 @@ func TestCommitValidationRequiresCASIdentityAndTypedMessageChange(t *testing.T) 
 	request.IdempotencyKey = ""
 	if err := request.Validate(); err == nil {
 		t.Fatal("commit without idempotency key accepted")
-	}
-}
-
-func TestForkModeMustBeExplicit(t *testing.T) {
-	if !session.ForkCompleteHistory.Valid() || !session.ForkSummary.Valid() {
-		t.Fatal("standard fork modes are invalid")
-	}
-	if session.ForkMode("implicit").Valid() {
-		t.Fatal("unknown fork mode accepted")
 	}
 }

@@ -150,6 +150,14 @@ type ToolCall struct {
 	Arguments json.RawMessage
 }
 
+// Valid reports whether a tool call has stable containment, a tool name, and
+// syntactically valid JSON arguments. Schema validation remains the fixed
+// dispatcher's responsibility.
+func (c ToolCall) Valid() bool {
+	return c.ID.Valid() && c.MessageID.Valid() && c.SessionID.Valid() &&
+		c.RunID.Valid() && c.StepID.Valid() && c.Name != "" && json.Valid(c.Arguments)
+}
+
 // Agent identifies one configured capability set.
 type Agent struct {
 	ID AgentID
@@ -163,10 +171,12 @@ type Workspace struct {
 
 // Session identifies one isolated conversation and execution aggregate.
 type Session struct {
-	ID          SessionID
-	AgentID     AgentID
-	WorkspaceID WorkspaceID
-	Revision    Revision
+	ID              SessionID
+	AgentID         AgentID
+	WorkspaceID     WorkspaceID
+	ParentSessionID SessionID
+	ParentRevision  Revision
+	Revision        Revision
 }
 
 // Run identifies one execution inside one Session.
@@ -204,18 +214,25 @@ const (
 type ErrorCode string
 
 const (
-	CodeRevisionConflict      ErrorCode = "revision_conflict"
-	CodeQueueItemClaimed      ErrorCode = "queue_item_claimed"
-	CodeNoActiveRun           ErrorCode = "no_active_run"
-	CodeNoPendingWork         ErrorCode = "no_pending_work"
-	CodeRuntimeClosed         ErrorCode = "runtime_closed"
-	CodeCanceled              ErrorCode = "canceled"
-	CodeSessionUnrecoverable  ErrorCode = "session_unrecoverable"
-	CodeApplicationNotStarted ErrorCode = "application_not_started"
-	CodeSessionNotOpen        ErrorCode = "session_not_open"
-	CodeSessionAlreadyOpen    ErrorCode = "session_already_open"
-	CodeRuntimeUnavailable    ErrorCode = "runtime_unavailable"
-	CodeCommandNotFound       ErrorCode = "command_not_found"
+	CodeRevisionConflict       ErrorCode = "revision_conflict"
+	CodeQueueItemClaimed       ErrorCode = "queue_item_claimed"
+	CodeNoActiveRun            ErrorCode = "no_active_run"
+	CodeNoPendingWork          ErrorCode = "no_pending_work"
+	CodeRuntimeClosed          ErrorCode = "runtime_closed"
+	CodeCanceled               ErrorCode = "canceled"
+	CodeSessionUnrecoverable   ErrorCode = "session_unrecoverable"
+	CodeApplicationNotStarted  ErrorCode = "application_not_started"
+	CodeSessionNotOpen         ErrorCode = "session_not_open"
+	CodeSessionAlreadyOpen     ErrorCode = "session_already_open"
+	CodeRuntimeUnavailable     ErrorCode = "runtime_unavailable"
+	CodeCommandNotFound        ErrorCode = "command_not_found"
+	CodeSessionNotFound        ErrorCode = "session_not_found"
+	CodeSessionAlreadyExists   ErrorCode = "session_already_exists"
+	CodeActiveRun              ErrorCode = "active_run"
+	CodeQueueItemNotFound      ErrorCode = "queue_item_not_found"
+	CodeQueueItemAlreadyExists ErrorCode = "queue_item_already_exists"
+	CodeJournalInvariant       ErrorCode = "journal_invariant"
+	CodeHistoryInvariant       ErrorCode = "history_invariant"
 )
 
 // ClassifiedError carries a safe operation-level message and an optional

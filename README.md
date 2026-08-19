@@ -252,6 +252,15 @@ settings do not change during one Runtime lifetime; the Session's provider,
 model, reasoning, and model parameters can be changed explicitly while idle
 and are snapshotted for each Run.
 
+The `session` package includes a reference `MemoryStore` and `MemoryManager`.
+They implement append-only History facts, Context, Queue, RunJournal,
+SessionModelConfig inheritance, revision/CAS commits, and the basic crash
+recovery transition. These are development and contract-reference
+implementations, not a production database or a completed AgentRuntime loop;
+production storage remains a replaceable `session.store` Slot. Development
+applications can explicitly install `session.NewMemoryModule`; importing the
+package never selects it as a hidden default.
+
 Mapping a Slot and standardizing its Go method contract are different maturity
 steps. A proposed method-level interface needs two independent implementations,
 one branch-free real consumer, and a conformance suite before it is described

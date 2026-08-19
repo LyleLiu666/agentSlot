@@ -81,6 +81,8 @@ The runtime boundary below the Assembly is explicit:
    Session and performs recovery through the replaceable `SessionStore`.
 2. The Session aggregate durably owns History, Context, Queue, RunJournal, and
    SessionModelConfig together with revision/CAS transaction state.
+   `SessionStore.Recover` is the explicit resume-time crash boundary; ordinary
+   `Load` is read-only and cannot terminate a legitimately active Run.
 3. Successful `CreateSession` or `ResumeSession` initializes one AgentRuntime
    with an immutable AgentRuntimeConfig snapshot and the components selected by
    Assembly. Create initializes SessionModelConfig from the Agent default; resume
@@ -98,6 +100,10 @@ The runtime boundary below the Assembly is explicit:
    `Send`, `Steer`, Queue edits, summary starts, and Hook follow-on proposals
    carry identity-free `MessageInput`; only the fixed Runtime may allocate a
    durable MessageID and Session/Run/Step containment.
+   A complete fork copies canonical History at a stable idle revision, rewrites
+   child fact identities, and re-derives Context for the child's final model;
+   it never copies source Queue or RunJournal execution state. A summary start
+   persists only its explicit summary input.
 6. The fixed Gateway is shared by the Application and routes commands/events
    using `AgentID + WorkspaceID + SessionID + RunID`. Entrypoints receive only
    carrier-neutral Gateway access and never receive Runtime objects. In-process

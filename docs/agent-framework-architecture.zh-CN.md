@@ -226,6 +226,11 @@ Runtime，也不能实现第二套循环。
 SystemPrompt、Tool 定义和 Runtime 的 Context 配置属于 `AgentRuntimeConfig`，不反复写入
 History。临时模型 chunk、Provider Attempt 和客户端展示状态也不进入 History。
 
+完整 fork 复制指定 revision 的可审计 History 并重写子 Session 的事实身份；Context
+按子 Session 最终模型重新派生，来源 Session 尚未完成的 Queue 和 RunJournal 不复制。
+摘要启动只把显式摘要作为新会话输入。两种派生都建立独立执行状态，并默认继承来源
+Session 当前模型配置。
+
 ### 7.2 Runtime 状态
 
 AgentRuntime 只有 `idle`、`running`、`closed`：

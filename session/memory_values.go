@@ -1,0 +1,117 @@
+package session
+
+import (
+	"encoding/json"
+
+	agent "github.com/LyleLiu666/agentSlot/agent"
+	"github.com/LyleLiu666/agentSlot/model"
+	"github.com/LyleLiu666/agentSlot/tool"
+)
+
+func cloneSnapshot(source Snapshot) Snapshot {
+	copy := source
+	copy.History = make([]HistoryFact, len(source.History))
+	for index, fact := range source.History {
+		copy.History[index] = cloneHistoryFact(fact)
+	}
+	copy.Context = cloneContext(source.Context)
+	copy.Queue = make([]QueueItem, len(source.Queue))
+	for index, item := range source.Queue {
+		copy.Queue[index] = cloneQueueItem(item)
+	}
+	copy.RunJournal = make([]JournalEntry, len(source.RunJournal))
+	for index, entry := range source.RunJournal {
+		copy.RunJournal[index] = cloneJournalEntry(entry)
+	}
+	copy.ModelConfig = cloneModelConfig(source.ModelConfig)
+	return copy
+}
+
+func cloneHistoryFact(source HistoryFact) HistoryFact {
+	copy := HistoryFact{}
+	if source.Message != nil {
+		message := cloneMessage(*source.Message)
+		copy.Message = &message
+	}
+	if source.ToolCall != nil {
+		call := cloneToolCall(*source.ToolCall)
+		copy.ToolCall = &call
+	}
+	if source.ToolResult != nil {
+		result := cloneToolResult(*source.ToolResult)
+		copy.ToolResult = &result
+	}
+	return copy
+}
+
+func cloneContext(source ContextView) ContextView {
+	copy := source
+	copy.Messages = make([]agent.Message, len(source.Messages))
+	for index, message := range source.Messages {
+		copy.Messages[index] = cloneMessage(message)
+	}
+	return copy
+}
+
+func cloneQueueItem(source QueueItem) QueueItem {
+	copy := source
+	copy.Message = cloneMessage(source.Message)
+	return copy
+}
+
+func cloneJournalEntry(source JournalEntry) JournalEntry {
+	copy := source
+	if source.ToolCall != nil {
+		call := cloneToolCall(*source.ToolCall)
+		copy.ToolCall = &call
+	}
+	copy.ToolResult = cloneToolResultPtr(source.ToolResult)
+	return copy
+}
+
+func cloneMessage(source agent.Message) agent.Message {
+	copy := source
+	copy.Parts = cloneParts(source.Parts)
+	return copy
+}
+
+func cloneParts(source []agent.MessagePart) []agent.MessagePart {
+	return append([]agent.MessagePart(nil), source...)
+}
+
+func cloneToolCall(source agent.ToolCall) agent.ToolCall {
+	copy := source
+	copy.Arguments = append(json.RawMessage(nil), source.Arguments...)
+	return copy
+}
+
+func cloneToolResult(source tool.ToolResult) tool.ToolResult {
+	copy := source
+	copy.Output = append(json.RawMessage(nil), source.Output...)
+	if source.Error != nil {
+		errorCopy := *source.Error
+		copy.Error = &errorCopy
+	}
+	return copy
+}
+
+func cloneToolResultPtr(source *tool.ToolResult) *tool.ToolResult {
+	if source == nil {
+		return nil
+	}
+	copy := cloneToolResult(*source)
+	return &copy
+}
+
+func cloneModelConfig(source model.Config) model.Config {
+	copy := source
+	if source.Parameters.Temperature != nil {
+		value := *source.Parameters.Temperature
+		copy.Parameters.Temperature = &value
+	}
+	if source.Parameters.MaxTokens != nil {
+		value := *source.Parameters.MaxTokens
+		copy.Parameters.MaxTokens = &value
+	}
+	return copy
+}

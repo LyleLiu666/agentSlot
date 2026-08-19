@@ -121,7 +121,7 @@ RuntimeCoordinator 只操作注册表，不拥有它。
 - **最终决定：** 每个 sub-agent 必须使用独立 Session；完整历史 fork 与摘要启动是两个显式操作。
 - **必须满足的不变量：** 子 Session 有独立 ID、Queue、Context、History 和 Run；父子关系可追踪；两种创建方式不得悄悄互换。
 - **否决的方案及原因：** 让 sub-agent 共用父 Session 会混淆权限、上下文和并发；把摘要伪装成 fork 会丢失审计语义。
-- **对接口、存储、Gateway 和实现的影响：** SessionManager 分别提供 fork 和基于摘要创建；新的 Session 获得独立 Runtime 固定配置快照，并默认继承来源 Session 当前的 SessionModelConfig，创建命令可以显式覆盖。
+- **对接口、存储、Gateway 和实现的影响：** SessionManager 分别提供 fork 和基于摘要创建。完整 fork 复制指定 revision 的完整 History，并为子 Session 重写消息、工具调用、Run 和 Step 身份；Context 按子 Session 最终模型重新派生，Queue 与 RunJournal 是来源 Session 的未完成投递/执行状态，不复制到子 Session。摘要启动只提交显式摘要输入。新的 Session 获得独立 Runtime 固定配置快照，并默认继承来源 Session 当前的 SessionModelConfig，创建命令可以显式覆盖。
 - **状态：** 已确定。
 
 ## 4. 固定 Gateway 与客户端交互
@@ -242,7 +242,7 @@ RuntimeCoordinator 只操作注册表，不拥有它。
 - **最终决定：** Queue 消息进入 Context 前允许编辑、删除，以及在 `normal`、`steer`、`held` 间改变投递方式。
 - **必须满足的不变量：** 一旦认领或进入 Context 就不可原地修改；修改行为必须产生新 revision。
 - **否决的方案及原因：** 修改已经进入 Context 的消息会让实际模型输入与持久化事实不一致。
-- **对接口、存储、Gateway 和实现的影响：** Queue API 提供 edit、delete、reclassify，并明确 conflict 错误。
+- **对接口、存储、Gateway 和实现的影响：** Queue API 提供 edit、delete、reclassify、claim 和 consume；认领记录目标 RunID，只有该 Run 在把输入纳入 Context 或完成其他持久化处理的同一事务中才能消费移除，并明确 conflict 错误。
 - **状态：** 已确定。
 
 ### A-021 Queue 操作使用 expected revision/CAS
@@ -426,7 +426,7 @@ RuntimeCoordinator 只操作注册表，不拥有它。
 - **最终决定：** 恢复时不自动重跑未知调用；为已经存在于 History 的 call 追加唯一的结构化 `outcome_unknown` 结果，再允许后续模型执行。
 - **必须满足的不变量：** 已确认完成的调用使用真实结果；未知调用不得伪装成功或失败；恢复事务结束当前 Run 并把 Session 置为 `idle`，不得自动消费旧 Queue。
 - **否决的方案及原因：** 自动重跑可能重复付款、写文件或执行命令；丢弃调用会隐瞒真实风险。
-- **对接口、存储、Gateway 和实现的影响：** 恢复器扫描 RunJournal，原子追加 unknown 结果、结束旧 Run 并迁移状态；用户可用新 Send 或 RunPending 决定下一步。
+- **对接口、存储、Gateway 和实现的影响：** `SessionStore.Recover` 在 Resume 边界扫描 RunJournal，原子追加 unknown 结果、结束旧 Run 并把遗留 Steer 转为 held；普通 `Load` 必须只读，不能把仍在正常运行的 Session 误判为崩溃。用户可用新 Send 或 RunPending 决定下一步。
 - **状态：** 已确定。
 
 ### A-041 Tool 只声明两种调度模式

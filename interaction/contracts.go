@@ -83,15 +83,15 @@ type ForkSessionRequest struct {
 	SourceSessionID agent.SessionID
 	AgentID         agent.AgentID
 	WorkspaceID     agent.WorkspaceID
-	Mode            session.ForkMode
 	ModelConfig     *session.SessionModelConfig
 }
 
 type SummarySessionRequest struct {
-	AgentID     agent.AgentID
-	WorkspaceID agent.WorkspaceID
-	Messages    []agent.MessageInput
-	ModelConfig *session.SessionModelConfig
+	SourceSessionID agent.SessionID
+	AgentID         agent.AgentID
+	WorkspaceID     agent.WorkspaceID
+	Messages        []agent.MessageInput
+	ModelConfig     *session.SessionModelConfig
 }
 
 type SessionOpened struct {
@@ -214,12 +214,16 @@ const (
 	EventState     EventKind = "state"
 )
 
-// SessionSnapshot is a client-facing projection, not the Session aggregate.
-// Implementations may add event metadata without exposing internal state.
+// SessionSnapshot is the client-facing durable projection used for reconnect.
+// It exposes History, pending Queue, and persisted execution state, but never
+// RunJournal, Store, component values, or an AgentRuntime object.
 type SessionSnapshot struct {
-	SessionID agent.SessionID
-	Revision  agent.Revision
-	Messages  []agent.Message
+	SessionID   agent.SessionID
+	Revision    agent.Revision
+	History     []session.HistoryFact
+	Queue       []session.QueueItem
+	RunState    session.RunState
+	ActiveRunID agent.RunID
 }
 
 type CloseSessionRequest struct {

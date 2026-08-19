@@ -245,6 +245,14 @@ Session 的其他视图也必须有可验证合同：
 
 AgentSlot 禁止反射扫描、`init()` 自动注册和隐藏的全局组件容器。
 
+### 当前开发进度
+
+第 2 阶段（Session 合同）已完成参考实现：`session.MemoryStore` 和
+`session.MemoryManager` 覆盖 History、Context、Queue、RunJournal、
+SessionModelConfig、revision/CAS、create/resume/完整 fork/摘要启动和基础崩溃恢复。
+这只证明标准合同可以落地，不把内存实现提升为生产存储，也不改变 `session.store`
+仍可替换的 Slot 边界；下一阶段才实现固定 AgentRuntime 状态机。
+
 ## 9. 参考实现分三层
 
 参考实现的任务是证明接口，而不是在 AgentSlot 中再造一个巨型产品。
@@ -310,9 +318,10 @@ AgentSlot 参考这些行为，不复制 pi 的类型、聚合 Session 或产品
 - 只提供最小假实现证明装配，不实现完整 AgentRuntime，不打 tag、不发布；
 - 接口批次通过评审后，才进入 Runtime 实现。
 
-### 阶段 2：先证明 Session 合同
+### 阶段 2：先证明 Session 合同（参考实现已完成）
 
-- 完成内存 SessionStore 与 SessionManager；
+- 完成内存 SessionStore 与 SessionManager；当前实现位于 `session` 包，尚未标记
+  `Conformant` 或 `Proven`；
 - 验证 append-only、revision/CAS、幂等和跨 History/Context/Queue/RunJournal 的原子边界；
 - 验证 create、resume、完整 fork、摘要启动和崩溃恢复；
 - 验证新 Session 使用 Agent 默认模型，resume 保留 SessionModelConfig，派生 Session

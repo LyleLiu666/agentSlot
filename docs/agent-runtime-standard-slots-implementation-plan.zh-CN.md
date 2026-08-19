@@ -236,9 +236,10 @@ Entrypoint 接口。
 
 ```go
 type SessionStore interface {
-	Create(context.Context, NewSession) (SessionSnapshot, error)
-	Load(context.Context, SessionRef) (SessionSnapshot, error)
-	Transact(context.Context, SessionRef, Revision, SessionMutation) (Commit, error)
+	Create(context.Context, NewSession) (Snapshot, error)
+	Load(context.Context, SessionRef) (Snapshot, error)
+	Recover(context.Context, SessionRef) (Snapshot, error)
+	Commit(context.Context, CommitRequest) (Commit, error)
 }
 
 type Session interface {
@@ -248,10 +249,15 @@ type Session interface {
 }
 ```
 
-`SessionStore.Transact` 是 Session 聚合的唯一持久化提交入口。它必须覆盖 History、
+`SessionStore.Commit` 是 Session 聚合的唯一持久化提交入口；`Recover` 只在
+`ResumeSession` 的恢复边界执行崩溃收束，普通 `Load` 保持只读。它必须覆盖 History、
 Context、Queue、RunJournal、SessionModelConfig 和执行状态之间需要一致的更新，支持
 expected revision、CAS 和幂等键。`Session` 是已恢复会话的窄句柄，不暴露存储实现，
 也不允许调用方绕过 AgentRuntime 随意改写聚合状态。
+
+参考实现 `session.MemoryStore` 使用进程内原子聚合提交，`session.MemoryManager` 负责
+默认模型、派生 Session 和稳定 ID 分配。它只用于合同验证和开发测试；生产实现可以
+使用数据库、事件存储或其他持久化方案，但必须保留相同事务与恢复边界。
 
 ### 6.4 SessionModelConfig
 
@@ -557,7 +563,8 @@ History/Queue revision、Compactor 实现与配置版本和 Token 计量。未�
 ### Queue
 
 Queue 保存未进入 Context 的 `normal`、`steer`、`held`。消息被认领前可以 CAS
-编辑、删除或改投；重启时未消费 steer 转为 held，等待用户处理。
+编辑、删除或改投；claim 记录目标 RunID，只有该 Run 在持久化 Context 推进的事务中
+才能 consume 移除。重启时未消费 steer 解除旧 Run 认领并转为 held，等待用户处理。
 
 ### RunJournal
 
@@ -641,6 +648,9 @@ History。
 
 - 每个 sub-agent 使用独立 Session、Queue、Context、History、RunJournal 和 Runtime。
 - 完整 fork 复制指定 revision 的完整可审计历史，并记录父子来源。
+- 来源 Session 尚未完成的 Queue 和 RunJournal 不进入 fork；子 Session 使用独立空闲
+  执行状态，所有复制事实都重写为新的 Session/Message/ToolCall/Run/Step 身份，Context
+  按子 Session 最终模型重新派生。
 - 摘要启动创建新 Session，只把显式摘要作为新会话输入，不伪装成完整 fork。
 - 两种方式都生成新的 AgentRuntimeConfig 快照，并默认继承来源 Session 当前的
   SessionModelConfig；创建命令的显式覆盖及最终配置必须可检查。
@@ -694,11 +704,14 @@ History。
   正常完成，一旦安装仍建立正确的构造和生命周期依赖；Resolver 仍只在 Build 构造期
   有效。
 
-### 阶段 3：SessionStore 与 SessionManager
+### 阶段 3：SessionStore 与 SessionManager（已完成参考实现）
 
-- 以内存实现驱动 append-only、CAS、幂等、原子提交和恢复测试。
-- 测试 create/resume/fork/summary-start，以及并发 resume 单实例语义。
-- 测试 Create 使用 Agent 默认模型、Resume 保留 SessionModelConfig、派生 Session 默认
+- 已以内存实现驱动 append-only HistoryFact、CAS、幂等、原子提交和恢复测试。
+- 已测试 Queue 编辑/删除/改投/认领冲突、单活跃 Run、tool call/pending 与
+  result/terminal 的事务配对，以及 `outcome_unknown` 恢复。
+- 已测试 create/resume/完整 fork/summary-start；并发 resume 的 Runtime 单实例语义由
+  应用级 RuntimeRegistry 测试覆盖。
+- 已测试 Create 使用 Agent 默认模型、Resume 保留 SessionModelConfig、派生 Session 默认
   继承且允许显式覆盖。
 - 引入第二个独立存储实现前，不把生态位标记 Proven。
 

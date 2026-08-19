@@ -135,9 +135,11 @@ method-level contract is an engineering result.
 | **Assembled** | A reference application exchanges proven implementations through the Slot without concrete-type branches. |
 
 Nine foundational domain rows are now **Contracted**: each has a public domain
-interface, typed Slot, and contract tests. They do not yet have independent
-implementations or a reusable conformance suite, so none is Conformant or
-Proven. Every other domain row remains **Mapped**.
+interface, typed Slot, and contract tests. `session.manager` and `session.store`
+also have one reference in-memory implementation with focused behavior tests,
+but no reusable conformance suite or independent second implementation exists;
+they therefore remain Contracted rather than Conformant or Proven. Every other
+domain row remains **Mapped**.
 
 The score is measured by proven component ecosystems, not by the number of
 modules, packages, or interface methods. One module may contribute to several

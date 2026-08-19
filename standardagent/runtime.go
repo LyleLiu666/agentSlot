@@ -276,8 +276,8 @@ func (c *runtimeCoordinator) resume(ctx context.Context, request interaction.Res
 }
 
 func (c *runtimeCoordinator) fork(ctx context.Context, request interaction.ForkSessionRequest) (interaction.SessionOpened, error) {
-	if !request.SourceSessionID.Valid() || !request.AgentID.Valid() || !request.WorkspaceID.Valid() || !request.Mode.Valid() {
-		return interaction.SessionOpened{}, invalidInput("gateway.fork_session", "source SessionID, AgentID, WorkspaceID, and a valid fork mode are required")
+	if !request.SourceSessionID.Valid() || !request.AgentID.Valid() || !request.WorkspaceID.Valid() {
+		return interaction.SessionOpened{}, invalidInput("gateway.fork_session", "source SessionID, AgentID, and WorkspaceID are required")
 	}
 	if request.ModelConfig != nil {
 		if err := request.ModelConfig.Validate(); err != nil {
@@ -287,7 +287,7 @@ func (c *runtimeCoordinator) fork(ctx context.Context, request interaction.ForkS
 	s, err := c.manager.Fork(ctx, session.ForkRequest{
 		SourceSessionID: request.SourceSessionID,
 		AgentID:         request.AgentID, WorkspaceID: request.WorkspaceID,
-		Mode: request.Mode, ModelConfig: request.ModelConfig,
+		ModelConfig: request.ModelConfig,
 	})
 	if err != nil {
 		return interaction.SessionOpened{}, err
@@ -312,7 +312,8 @@ func (c *runtimeCoordinator) summary(ctx context.Context, request interaction.Su
 		}
 	}
 	s, err := c.manager.StartFromSummary(ctx, session.SummaryRequest{
-		AgentID: request.AgentID, WorkspaceID: request.WorkspaceID,
+		SourceSessionID: request.SourceSessionID,
+		AgentID:         request.AgentID, WorkspaceID: request.WorkspaceID,
 		Messages: request.Messages, ModelConfig: request.ModelConfig,
 	})
 	if err != nil {
@@ -427,7 +428,11 @@ func (r *runtimeInstance) snapshot(ctx context.Context, request interaction.Snap
 	if request.KnownRevision > snapshot.Revision {
 		return interaction.SessionSnapshot{}, agent.NewCodedError(agent.ErrorConflict, agent.CodeRevisionConflict, "gateway.snapshot", "client revision is ahead of the persisted session", nil)
 	}
-	return interaction.SessionSnapshot{SessionID: r.id(), Revision: snapshot.Revision, Messages: append([]agent.Message(nil), snapshot.History...)}, nil
+	return interaction.SessionSnapshot{
+		SessionID: r.id(), Revision: snapshot.Revision,
+		History: snapshot.History, Queue: snapshot.Queue,
+		RunState: snapshot.RunState, ActiveRunID: snapshot.ActiveRunID,
+	}, nil
 }
 
 func (r *runtimeInstance) unavailable(op string) error {

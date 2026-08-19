@@ -75,6 +75,9 @@ func TestToolResultHasOneStructuredTerminalStatus(t *testing.T) {
 	if err := (tool.ToolResult{CallID: "call-1", Status: tool.ResultUnknown}).Validate(); err != nil {
 		t.Fatalf("outcome_unknown rejected: %v", err)
 	}
+	if err := (tool.ToolResult{CallID: "call-1", Status: tool.ResultSucceeded, Output: []byte("not-json")}).Validate(); err == nil {
+		t.Fatal("non-JSON structured output accepted")
+	}
 }
 
 func TestToolInvocationCarriesSessionIdentity(t *testing.T) {

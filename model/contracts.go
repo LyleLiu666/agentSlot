@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 
 	agentslot "github.com/LyleLiu666/agentSlot"
 	agent "github.com/LyleLiu666/agentSlot/agent"
@@ -58,8 +59,8 @@ func (c Config) Validate() error {
 	if !c.Reasoning.Valid() {
 		return fmt.Errorf("model: invalid reasoning mode %q", c.Reasoning)
 	}
-	if c.Parameters.Temperature != nil && *c.Parameters.Temperature < 0 {
-		return errors.New("model: temperature cannot be negative")
+	if c.Parameters.Temperature != nil && (math.IsNaN(*c.Parameters.Temperature) || math.IsInf(*c.Parameters.Temperature, 0) || *c.Parameters.Temperature < 0) {
+		return errors.New("model: temperature must be finite and non-negative")
 	}
 	if c.Parameters.MaxTokens != nil && *c.Parameters.MaxTokens <= 0 {
 		return errors.New("model: max tokens must be positive")
