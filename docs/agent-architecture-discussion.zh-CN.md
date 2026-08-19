@@ -484,7 +484,7 @@ RuntimeCoordinator 只操作注册表，不拥有它。
 - **最终决定：** Build 阶段只解析标准 Agent 所需的 typed Slot 并形成不可变 Assembly，不创建活跃注册表。`Application.Start` 创建应用级 Runtime 时，同时创建并持有唯一 RuntimeRegistry 和固定 Gateway，再构造操作注册表的 RuntimeCoordinator。Gateway 通过包内私有 RuntimeAccess 调用 Coordinator；所有 Entrypoint 只获得同一个 GatewayAccess。
 - **必须满足的不变量：** 用户继续只使用统一的 `Build/Start/Run/Stop`；Registry 和 Gateway 不能早于应用级 Runtime 存在，也不能晚于它销毁；运行时不得扫描包、查询全局容器或保留 Build Resolver；初始化失败不得登记半成品 Runtime；Entrypoint 的启动和停止仍由提供它的 Module 生命周期负责。停止时先阻止 Entrypoint 接收新命令，再收束 AgentRuntime，最后关闭 Gateway/Entrypoint 连接和共享组件。
 - **否决的方案及原因：** 每个 Entrypoint 自建注册表会产生重复 Runtime；向 Entrypoint 暴露 RuntimeAccess 会绕过 Gateway；公开 RuntimeFactory 会把固定循环伪装成替换点；让 Runtime 运行时从 Assembly 任意查询组件会形成服务定位器。
-- **对接口、存储、Gateway 和实现的影响：** Build 可以创建尚未激活的 RuntimeAccess 与 GatewayAccess 内部装配句柄；只有 Application Runtime 启动并绑定 Registry、Coordinator 和 Gateway 后才能接受命令。Gateway 的进程内内部调用可以取得 `*AgentRuntime`，但对 Entrypoint 只返回稳定 ID、revision、snapshot 和事件。私有装配句柄不进入标准 Profile、组件地图或成熟度计分。
+- **对接口、存储、Gateway 和实现的影响：** Build 创建尚未激活的 GatewayAccess 绑定和应用 Runtime 内部状态锚点；只有 Application Runtime 启动并创建 Registry、Coordinator 和 Gateway 后才能接受命令。Session 创建/恢复后，Coordinator 持有包内 `runtimeAccess` 窄接口并负责定位固定 AgentRuntime；Gateway 不接收或返回公开 Runtime 指针，对 Entrypoint 只返回稳定 ID、revision、snapshot 和事件。私有装配锚点不进入标准 Profile、组件地图或成熟度计分。
 - **状态：** 已确定。
 
 ### A-047 交互命令只向固定 Gateway 注册，Slash 只是呈现协议

@@ -74,7 +74,7 @@ func (m ForkMode) Valid() bool {
 type SummaryRequest struct {
 	AgentID     agent.AgentID
 	WorkspaceID agent.WorkspaceID
-	Messages    []agent.Message
+	Messages    []agent.MessageInput
 	ModelConfig *SessionModelConfig
 }
 

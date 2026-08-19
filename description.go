@@ -34,12 +34,14 @@ type ContributionDescription struct {
 	Key    string `json:"key,omitempty"`
 }
 
-// RequirementDescription identifies a required slot cardinality or key.
+// RequirementDescription identifies one profile constraint or module slot
+// dependency, including whether absence is allowed.
 type RequirementDescription struct {
-	Slot    string `json:"slot"`
-	Kind    string `json:"kind"`
-	Key     string `json:"key,omitempty"`
-	Minimum int    `json:"minimum"`
+	Slot     string `json:"slot"`
+	Kind     string `json:"kind"`
+	Key      string `json:"key,omitempty"`
+	Minimum  int    `json:"minimum"`
+	Optional bool   `json:"optional,omitempty"`
 }
 
 // Describe returns a fresh deterministic description of the Assembly. Module order
@@ -92,10 +94,11 @@ func describeRequirements(requirements []Requirement) []RequirementDescription {
 	descriptions := make([]RequirementDescription, 0, len(requirements))
 	for _, requirement := range requirements {
 		descriptions = append(descriptions, RequirementDescription{
-			Slot:    requirement.spec.id,
-			Kind:    requirement.spec.kind.String(),
-			Key:     requirement.key,
-			Minimum: requirement.minimum,
+			Slot:     requirement.spec.id,
+			Kind:     requirement.spec.kind.String(),
+			Key:      requirement.key,
+			Minimum:  requirement.minimum,
+			Optional: requirement.optional,
 		})
 	}
 	sort.Slice(descriptions, func(i, j int) bool {

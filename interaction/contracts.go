@@ -21,7 +21,8 @@ var CommandSlot = agentslot.Many[InteractionCommand]("interaction.command")
 
 // Entrypoint is an adapter binding operation. The supplied GatewayAccess is
 // the only Agent capability it may retain; it never receives Runtime or Store
-// objects. Listener lifecycle remains the owning Module's responsibility.
+// objects. Attach retains the capability but must not open listeners or start
+// goroutines; listener lifecycle remains the owning Module's responsibility.
 type Entrypoint interface {
 	Attach(GatewayAccess) error
 }
@@ -89,7 +90,7 @@ type ForkSessionRequest struct {
 type SummarySessionRequest struct {
 	AgentID     agent.AgentID
 	WorkspaceID agent.WorkspaceID
-	Messages    []agent.Message
+	Messages    []agent.MessageInput
 	ModelConfig *session.SessionModelConfig
 }
 
@@ -101,13 +102,13 @@ type SessionOpened struct {
 type SendRequest struct {
 	SessionID        agent.SessionID
 	ExpectedRevision agent.Revision
-	Message          agent.Message
+	Input            agent.MessageInput
 }
 
 type SteerRequest struct {
 	SessionID        agent.SessionID
 	ExpectedRevision agent.Revision
-	Message          agent.Message
+	Input            agent.MessageInput
 }
 
 type EnqueueReceipt struct {
@@ -137,7 +138,7 @@ type EditQueuedRequest struct {
 	SessionID        agent.SessionID
 	MessageID        agent.MessageID
 	ExpectedRevision agent.Revision
-	Message          agent.Message
+	Input            agent.MessageInput
 }
 
 type DeleteQueuedRequest struct {
@@ -177,7 +178,10 @@ type CommitReceipt struct {
 
 type SnapshotRequest struct {
 	SessionID agent.SessionID
-	Revision  agent.Revision
+	// KnownRevision is the caller's last durable revision. It is reconnect
+	// metadata, not a compare-and-swap precondition: Gateway still returns the
+	// current complete snapshot when the caller is behind.
+	KnownRevision agent.Revision
 }
 
 type SubscribeRequest struct {
@@ -273,18 +277,17 @@ type CommandInvocation struct {
 	Arguments        json.RawMessage
 }
 
-// CommandActions exposes only fixed backend actions. It intentionally has no
-// InvokeCommand method, preventing a command from recursively dispatching
-// another command through the same Gateway.
+// CommandActions exposes only fixed backend actions bound to the current
+// CommandInvocation scope. It intentionally has no target field or
+// InvokeCommand method, preventing cross-Session or recursive dispatch.
 type CommandActions interface {
 	Apply(context.Context, ActionRequest) (ActionResult, error)
 }
 
 type ActionRequest struct {
 	Kind                    ActionKind
-	Scope                   CommandScope
 	ExpectedRevision        agent.Revision
-	Message                 agent.Message
+	Input                   agent.MessageInput
 	Config                  session.SessionModelConfig
 	AcceptCompatibilityLoss bool
 }

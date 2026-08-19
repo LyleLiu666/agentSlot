@@ -30,7 +30,7 @@ type RunCompleteView struct {
 // FollowOnProposal contains only additional input; it cannot directly mutate
 // Queue, History, Context, Run state, or cancellation.
 type FollowOnProposal struct {
-	Messages []agent.Message
+	Messages []agent.MessageInput
 }
 
 // CommitView is read-only post-commit evidence.

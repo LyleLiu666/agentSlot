@@ -211,3 +211,113 @@ func TestResolvedManyIsACopy(t *testing.T) {
 		t.Fatalf("values = %#v", resolved)
 	}
 }
+
+func TestOptionalDependenciesResolveWithoutRequiringProviders(t *testing.T) {
+	optionalOne := agentslot.One[string]("optional.one")
+	optionalMany := agentslot.Many[string]("optional.many")
+	optionalChain := agentslot.Chain[string]("optional.chain")
+	built := agentslot.One[string]("built.optional")
+	builder := agentslot.NewBuilder()
+	consumer := &dependentModule{
+		testModule: testModule{id: "consumer", contributions: []agentslot.Contribution{
+			agentslot.SetWith(built, func(resolver agentslot.Resolver) (string, error) {
+				_, present, err := agentslot.ResolveOptionalOne(resolver, optionalOne)
+				if err != nil {
+					return "", err
+				}
+				many, err := agentslot.ResolveMany(resolver, optionalMany)
+				if err != nil {
+					return "", err
+				}
+				chain, err := agentslot.ResolveChain(resolver, optionalChain)
+				if err != nil {
+					return "", err
+				}
+				if present || len(many) != 0 || len(chain) != 0 {
+					return "unexpected", nil
+				}
+				return "empty", nil
+			}),
+		}},
+		requirements: []agentslot.Requirement{
+			agentslot.OptionalOne(optionalOne),
+			agentslot.OptionalMany(optionalMany),
+			agentslot.OptionalChain(optionalChain),
+		},
+	}
+	if err := builder.Install(consumer); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	assembly, err := builder.Build(agentslot.RequireOne(built))
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if got, ok := agentslot.Get(assembly, built); !ok || got != "empty" {
+		t.Fatalf("built = %q, %v; want empty, true", got, ok)
+	}
+	wantRequirements := []agentslot.RequirementDescription{
+		{Slot: "optional.chain", Kind: "chain", Optional: true},
+		{Slot: "optional.many", Kind: "many", Optional: true},
+		{Slot: "optional.one", Kind: "one", Optional: true},
+	}
+	if got := assembly.Describe().Modules[0].Requires; !reflect.DeepEqual(got, wantRequirements) {
+		t.Fatalf("optional requirements = %#v, want %#v", got, wantRequirements)
+	}
+}
+
+func TestResolveOneOnAbsentOptionalDependencyReturnsErrorInsteadOfPanicking(t *testing.T) {
+	optional := agentslot.One[string]("optional.one")
+	built := agentslot.One[string]("built.optional")
+	builder := agentslot.NewBuilder()
+	if err := builder.Install(&dependentModule{
+		testModule: testModule{id: "consumer", contributions: []agentslot.Contribution{
+			agentslot.SetWith(built, func(resolver agentslot.Resolver) (string, error) {
+				return agentslot.ResolveOne(resolver, optional)
+			}),
+		}},
+		requirements: []agentslot.Requirement{agentslot.OptionalOne(optional)},
+	}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	_, err := builder.Build()
+	if !errors.Is(err, agentslot.ErrRequirementUnsatisfied) {
+		t.Fatalf("Build error = %v, want ErrRequirementUnsatisfied", err)
+	}
+}
+
+func TestInstalledOptionalProviderPrecedesConsumer(t *testing.T) {
+	dependency := agentslot.One[string]("optional.dependency")
+	built := agentslot.One[string]("optional.consumer")
+	builder := agentslot.NewBuilder()
+	consumer := &dependentModule{
+		testModule: testModule{id: "consumer", contributions: []agentslot.Contribution{
+			agentslot.SetWith(built, func(resolver agentslot.Resolver) (string, error) {
+				value, present, err := agentslot.ResolveOptionalOne(resolver, dependency)
+				if err != nil || !present {
+					return "", err
+				}
+				return value, nil
+			}),
+		}},
+		requirements: []agentslot.Requirement{agentslot.OptionalOne(dependency)},
+	}
+	for _, module := range []agentslot.Module{
+		consumer,
+		testModule{id: "provider", contributions: []agentslot.Contribution{agentslot.Set(dependency, "ready")}},
+	} {
+		if err := builder.Install(module); err != nil {
+			t.Fatalf("install %s: %v", module.ID(), err)
+		}
+	}
+	assembly, err := builder.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if got, ok := agentslot.Get(assembly, built); !ok || got != "ready" {
+		t.Fatalf("built = %q, %v; want ready, true", got, ok)
+	}
+	modules := assembly.Describe().Modules
+	if len(modules) != 2 || modules[0].ID != "provider" || modules[1].ID != "consumer" || !modules[1].Requires[0].Optional {
+		t.Fatalf("module order/description = %#v", modules)
+	}
+}

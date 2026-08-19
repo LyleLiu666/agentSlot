@@ -52,8 +52,9 @@ type Module interface {
 	Register(Registrar) error
 }
 
-// SlotRequirer is an optional Module capability. Required slots are validated
-// at build time, and their provider modules start before the requiring module.
+// SlotRequirer is an optional Module capability. Declared slot dependencies
+// are validated at build time, and installed provider modules start before the
+// requiring module.
 type SlotRequirer interface {
 	RequiredSlots() []Requirement
 }
@@ -252,10 +253,11 @@ func isNil(value any) bool {
 // Requirement selects a slot cardinality or key for a build profile or module
 // dependency declaration.
 type Requirement struct {
-	spec    slotSpec
-	key     string
-	keyed   bool
-	minimum int
+	spec     slotSpec
+	key      string
+	keyed    bool
+	minimum  int
+	optional bool
 }
 
 // RequireOne requires the contribution to a OneSlot.
@@ -263,9 +265,21 @@ func RequireOne[T any](slot OneSlot[T]) Requirement {
 	return Requirement{spec: slot.spec, minimum: 1}
 }
 
+// OptionalOne declares an optional OneSlot module dependency. When no value
+// is installed, ResolveOptionalOne returns false without requiring a provider.
+func OptionalOne[T any](slot OneSlot[T]) Requirement {
+	return Requirement{spec: slot.spec, optional: true}
+}
+
 // RequireMany requires a minimum contribution count from a ManySlot.
 func RequireMany[T any](slot ManySlot[T], minimum int) Requirement {
 	return Requirement{spec: slot.spec, minimum: minimum}
+}
+
+// OptionalMany declares an optional ManySlot module dependency. Installed
+// providers still precede the consumer in lifecycle order.
+func OptionalMany[T any](slot ManySlot[T]) Requirement {
+	return Requirement{spec: slot.spec, optional: true}
 }
 
 // RequireKey requires one named contribution from a ManySlot. Module
@@ -277,6 +291,11 @@ func RequireKey[T any](slot ManySlot[T], key string) Requirement {
 // RequireChain requires a minimum contribution count from a ChainSlot.
 func RequireChain[T any](slot ChainSlot[T], minimum int) Requirement {
 	return Requirement{spec: slot.spec, minimum: minimum}
+}
+
+// OptionalChain declares an optional ChainSlot module dependency.
+func OptionalChain[T any](slot ChainSlot[T]) Requirement {
+	return Requirement{spec: slot.spec, optional: true}
 }
 
 // Assembly is an immutable set of resolved components and installed modules.

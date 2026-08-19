@@ -38,8 +38,8 @@ func TestHookIsAnOrderedOptionalChain(t *testing.T) {
 }
 
 func TestHookProposalContainsOnlyAdditionalMessages(t *testing.T) {
-	proposal := hook.FollowOnProposal{Messages: []agent.Message{{ID: "message-1", Role: agent.RoleUser}}}
-	if len(proposal.Messages) != 1 || proposal.Messages[0].ID != "message-1" {
+	proposal := hook.FollowOnProposal{Messages: []agent.MessageInput{{Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "continue"}}}}}
+	if len(proposal.Messages) != 1 || !proposal.Messages[0].Valid() {
 		t.Fatalf("proposal = %#v", proposal)
 	}
 }

@@ -85,8 +85,9 @@ flowchart TD
 
 `CreateSession`、`ResumeSession` 是框架固定的 Session 生命周期入口，不是已经存在
 的 `AgentRuntime` 实例方法，也不是 SessionManager 组件可以重写的循环入口。固定
-入口由 Gateway 调用内部 RuntimeAccess，再由后者调用 SessionManager、装配配置并初始化
-Runtime；Gateway 返回成功时，对应 Runtime 已经可用，但不会把 Runtime 指针交给调用方。
+入口由 Gateway 调用内部 RuntimeCoordinator；Coordinator 使用 SessionManager 创建或
+恢复 Session、装配配置并初始化 Runtime，再以包内 `runtimeAccess` 操作它。Gateway 返回
+成功时，对应 Runtime 已经可用，但不会把 Runtime 指针交给调用方。
 Runtime 内部命令面提供 `Send`、`Steer`、`RunPending`、
 `ModelConfig`、`UpdateModelConfig`、`Cancel`、`WhenIdle`、Queue 操作、查询和 `Close`。
 
@@ -183,8 +184,9 @@ func (g *Gateway) CloseSession(context.Context, CloseSessionRequest) error
 - Gateway 返回稳定 ID、revision、snapshot、receipt 和事件，不返回 `*AgentRuntime`。
 - Gateway 负责统一校验、主体与目标路由、命令目录和调用结果投影；不直接写
   SessionStore，不实现循环，也不保存第二份 Session 真相。
-- 包内私有 `RuntimeAccess` 是 Gateway 到 RuntimeCoordinator 的唯一通道，可以在进程内
-  返回 `*AgentRuntime`；Entrypoint、InteractionCommand 和产品 UI 都不能取得它。
+- 包内私有 `RuntimeAccess` 是 RuntimeCoordinator 到固定 Session Runtime 的唯一操作
+  通道；Gateway 只通过 Coordinator 取得该窄接口。Entrypoint、InteractionCommand 和
+  产品 UI 都不能取得它或 `*AgentRuntime`。
 - AgentRuntime 通过框架事件端口发布临时与持久事件；它不依赖 Gateway 具体类型。
 
 ### 6.2 SessionManager
@@ -201,19 +203,27 @@ type SessionManager interface {
 实际公共接口位于 `session`、`model`、`tool`、`context`、`hook` 和 `interaction` 包；
 本节代码用于说明合同，不是另一个平行 API。
 
+所有尚未持久化的用户输入、Steer、Queue 编辑、摘要启动输入和 Hook follow-on proposal
+统一使用 `agent.MessageInput`，只携带 provider-neutral 内容块。调用方和 Hook 不能预先
+指定 MessageID、SessionID、RunID、StepID、Role 或时间；固定 Runtime 在 Session 事务中
+分配这些字段后才形成可进入 History 的 `agent.Message`。
+
 - 负责创建、恢复和派生 Session，不执行 Agent 循环。
 - Manager 的 `Resume` 必须完成恢复检查；不能把损坏或半恢复 Session 交给 Runtime。
 - 同一应用级 Runtime 对同一 SessionID 的并发 resume 必须汇合为同一个
   AgentRuntime；注册表和单航班逻辑属于框架实现，不扩成公共 Factory Slot。
 - Manager 依赖 `session.store`，但不能要求具体存储实现。
 
-固定 RuntimeAccess 不是 Slot，只能由 Gateway 使用；它在进程内返回固定的
-`*AgentRuntime`：
+包内 `runtimeAccess` 不是 Slot，也不对产品代码导出。RuntimeCoordinator 通过它操作
+固定 Session Runtime，Gateway 只向 Coordinator 提交结构化命令并接收数据结果：
 
 ```go
-type RuntimeAccess interface {
-	CreateSession(context.Context, CreateSessionCommand) (*AgentRuntime, error)
-	ResumeSession(context.Context, ResumeSessionCommand) (*AgentRuntime, error)
+type runtimeAccess interface {
+	id() SessionID
+	revision() Revision
+	snapshot(context.Context, SnapshotRequest) (SessionSnapshot, error)
+	send(context.Context, SendRequest) (EnqueueReceipt, error)
+	// 其余固定 Runtime 命令；不包含 Store 或任意服务定位能力。
 }
 ```
 
@@ -422,24 +432,26 @@ Runtime/Gateway 模块，同时返回并继续使用统一 Application、Assembl
 
 1. 内部模块通过 `RequiredSlots` 声明 SessionManager、SessionStore、ModelExecutor、
    InteractionCommand 以及 Runtime/Gateway 所需可选组件，并贡献包内私有、尚未激活的
-   RuntimeAccess 与 GatewayAccess 装配句柄。
+   GatewayAccess 绑定和应用 Runtime 状态锚点；`runtimeAccess` 只在 Session Runtime
+   创建后存在，不伪装成 Build 期 Slot。
 2. Build 期间使用受限 Resolver 一次性解析依赖，形成不可变 Runtime 依赖集合；Resolver
    关闭后不得保存或再次调用。
 3. `Application.Start` 创建应用级 Runtime、Registry、RuntimeCoordinator 和固定 Gateway；
-   RuntimeAccess 只绑定到 Gateway，GatewayAccess 只绑定到 Gateway 的公开交互面。
+   Gateway 只通过 Coordinator 路由到包内 `runtimeAccess`，GatewayAccess 只绑定到
+   Gateway 的公开交互面。
 4. 标准 Entrypoint Module 包装器在构造 Entrypoint 时注入同一个 GatewayAccess；
    Entrypoint 不能取得 RuntimeAccess、Store、Executor、AgentRuntime 或内部锁。
-5. Gateway 内部 CreateSession/ResumeSession 可以取得 `*AgentRuntime`，但 GatewayAccess
-   只返回稳定 ID、revision、snapshot、receipt 和事件；是否跨进程不改变该语义。
-6. 依赖方向保证 Runtime 访问能力先于 Entrypoint Module 激活；Application 逆序停止时，
-   Entrypoint 先停止接收新命令，应用级 Runtime 再收束全部 AgentRuntime、清空 Registry，
-   Gateway 发布最终状态并关闭，随后才停止 Entrypoint 连接和共享组件。启动失败沿同一
-   依赖顺序反向回滚。
+5. Coordinator 内部 CreateSession/ResumeSession 创建或取得 `runtimeAccess`，GatewayAccess
+   始终只返回稳定 ID、revision、snapshot、receipt 和事件；是否跨进程不改变该语义。
+6. 依赖方向保证固定 Gateway 先于 Entrypoint Module 激活；Application 逆序停止时，
+   Entrypoint Module 先停止监听并收束连接，应用级 Runtime 随后拒绝新调用、等待已经
+   路由的调用结束、关闭全部 AgentRuntime 并清空 Registry，最后逆序停止共享组件。
+   启动失败沿同一依赖顺序反向回滚。
 
-RuntimeAccess 与 GatewayAccess 装配句柄不导出。Build 阶段可以把 GatewayAccess
-句柄注入标准 Entrypoint Module 包装器，但在 `Application.Start` 绑定固定 Gateway
-之前，任何命令都必须明确返回未启动错误。两个句柄都不进入标准 Profile、组件地图
-或成熟度计分，也不能被 Agent 开发者贡献或替换。
+包内 `runtimeAccess` 类型、GatewayAccess 绑定和应用 Runtime 状态锚点都不导出。Build
+阶段可以把 GatewayAccess 绑定注入标准 Entrypoint Module 包装器，但在
+`Application.Start` 绑定固定 Gateway 之前，任何命令都必须明确返回未启动错误。它们
+都不进入标准 Profile、组件地图或成熟度计分，也不能被 Agent 开发者贡献或替换。
 
 ## 8. 生命周期与状态机
 
@@ -661,17 +673,26 @@ History。
 - 9 个生态位标为 Contracted，尚未标为 Conformant 或 Proven；阶段提交后再进入应用级
   Runtime 与 Gateway 主链路。
 
-### 阶段 2：应用级 Runtime、Registry 与 Gateway 主链路
+### 阶段 2：应用级 Runtime、Registry 与 Gateway 主骨架（已完成）
 
 - 实现 `standardagent.NewApplication` 的自动挂载语义：内部 Runtime/Gateway Module、
   标准 Profile 和同一个通用 Application Build/Start/Run 入口。
 - 实现应用级 Runtime 持有的 RuntimeRegistry、RuntimeCoordinator、固定 Gateway、
   `GatewayAccess` 和私有 `RuntimeAccess`；注册表所有权属于启动后的 Application Runtime。
 - 实现 Entrypoint Module 的 GatewayAccess 注入和能力隔离测试：Entrypoint、Command 和
-  UI 都不能取得 Runtime、Store、Executor 或内部锁。
-- 实现 Gateway 的稳定路由、主体校验、Snapshot/revision、事件信封、流式/聚合边界和
-  断线不取消语义；传输适配器可先使用进程内假适配器，不能跳过 Gateway 核心。
-- 测试启动/停止顺序、失败回滚、并发 Create/Resume 的单飞和无半成品登记。
+  UI 都不能取得 Runtime、Store、Executor 或内部锁。标准应用必须通过
+  `standardagent.NewEntrypointModule` 安装入口；内部 Build 校验器拒绝绕过包装器的原始
+  `interaction.entrypoint` 贡献，该内部锚点不进入公共 Profile 或组件地图。
+- 已实现 SessionID 路由、Snapshot/KnownRevision 重连基础语义、命令目录和受控命令
+  Action 通道；Action 固定绑定本次 Invocation 的 Session scope，不能自行指定另一个
+  Session，也不能在 Invoke 返回后继续使用。尚未进入本阶段范围的执行命令返回 typed
+  unavailable，不伪造成功。
+- 已测试启动/停止顺序、失败回滚、并发 Resume 单飞、并发 Resume/Close 和无半成品
+  登记。完整主体授权、RunID 路由、事件信封、流式/聚合和断线订阅在对应 Gateway 与
+  Runtime 阶段实现，不用临时传输逻辑绕过固定 Gateway。
+- 为框架内部可选组件依赖增加 `OptionalOne/Many/Chain`：缺少可选 Provider 时 Build
+  正常完成，一旦安装仍建立正确的构造和生命周期依赖；Resolver 仍只在 Build 构造期
+  有效。
 
 ### 阶段 3：SessionStore 与 SessionManager
 

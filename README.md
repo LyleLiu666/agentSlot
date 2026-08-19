@@ -60,7 +60,7 @@ place in the final Assembly.
 | `Requirement` | A profile constraint or a module dependency expressed against a slot, never a concrete provider type. |
 | `Assembly` | Immutable result of validated composition. `Application.Build()` returns this shared application-level assembly. |
 | `AssemblyDescription` | Versioned JSON-safe assembly description returned by `Assembly.Describe()`. |
-| `Runtime` | Started module lifecycles owned by one Assembly; the standard Agent layer will also attach its fixed Gateway and Runtime registry here. |
+| `Runtime` | Started module lifecycles owned by one Assembly; `standardagent` attaches its fixed Gateway and Runtime registry to this lifecycle. |
 | `AgentRuntime` | Framework-owned per-Session command and execution object created by explicit Session create/resume; it is not a Slot. |
 
 The code examples use `assembly`, `Assembly`, `AssemblyDescription`, and
@@ -148,11 +148,11 @@ application := agentslot.NewApplication(
 	agentslot.RequireMany(ToolSlot, 1),
 )
 
-plan, err := application.Build()
+assembly, err := application.Build()
 runtime, err := application.Start(ctx)
 defer runtime.Stop(shutdownCtx)
 
-catalog, _ := agentslot.Get(plan, CatalogSlot)
+catalog, _ := agentslot.Get(assembly, CatalogSlot)
 _ = catalog
 ```
 
@@ -182,9 +182,16 @@ func (m RunnerModule) RequiredSlots() []agentslot.Requirement {
 
 `Build` validates these requirements, rejects dependency cycles, constructs
 deferred contributions in dependency order, and computes a stable lifecycle
-order. `plan.Describe()` exposes that order, slot kinds, Go value types,
+order. `assembly.Describe()` exposes that order, slot kinds, Go value types,
 contribution owners, keys, module requirements, and profile requirements
 without serializing component values.
+
+Optional component ecosystems are still declared dependencies rather than
+looked up dynamically. `OptionalOne`, `OptionalMany`, and `OptionalChain` add
+lifecycle edges whenever providers are installed, while allowing a build with
+no provider. Constructors resolve them with `ResolveOptionalOne`,
+`ResolveMany`, or `ResolveChain`; the build-scoped resolver remains closed
+outside construction.
 
 See the complete runnable [basic example](examples/basic/main.go).
 
@@ -193,7 +200,7 @@ See the complete runnable [basic example](examples/basic/main.go).
 - One module registration is transactional: one rejected contribution discards all contributions from that module.
 - A successful build freezes the builder; a failed build can be corrected and retried.
 - Build-time constructors resolve only declared slot dependencies; failed
-  construction does not publish a plan or freeze the builder.
+  construction does not publish an Assembly or freeze the builder.
 - `Application.Start` builds automatically when `Build` was not called explicitly.
 - Modules start in stable dependency order; independent modules retain installation precedence.
 - A failed start stops every previously started module in reverse order.
@@ -203,7 +210,7 @@ For module dependencies, `RequireOne` depends on the sole provider, `RequireKey`
 
 Constructors may be retried after a failed build, so they must not start
 goroutines, open listeners, or acquire non-repeatable resources. Those effects
-belong to module lifecycle methods after a plan has been built successfully.
+belong to module lifecycle methods after an Assembly has been built successfully.
 
 ## Standard component map
 
@@ -216,6 +223,9 @@ A runnable standard LLM agent requires exactly one SessionManager, exactly one
 SessionStore, exactly one ModelExecutor, and at least one Entrypoint. The fixed
 AgentRuntime and fixed in-process Gateway are supplied by the framework rather
 than selected through Slots.
+Standard applications install each Entrypoint with
+`standardagent.NewEntrypointModule`; Build rejects a raw Entrypoint contribution
+that would bypass GatewayAccess attachment or lifecycle ordering.
 Tools, ModelProviders, Context components, and AgentHooks are optional globally;
 an installed ModelExecutor may explicitly require one or more ModelProviders.
 `interaction.command` is an optional `Many` Slot for structured commands that
@@ -251,14 +261,21 @@ coverage behind a family name.
 The first fixed domain vocabularies are available in the [`model`](model) and
 [`tool`](tool) leaf packages: model input/output modalities are text, image, and
 audio; model-facing tool inputs use self-contained JSON Schema Draft 2020-12.
+Caller and Hook input uses `agent.MessageInput`, which carries content only;
+the fixed Runtime allocates MessageID, Session/Run/Step containment, role, and
+timestamp atomically when it creates a durable `agent.Message` fact.
 The first nine standard component contracts are now available in the
 `session`, `model`, `tool`, `context`, `hook`, and `interaction` packages. They
 are Contracted, but no domain ecosystem is yet Conformant or Proven.
 
-These packages define replaceable component boundaries only. The fixed
-AgentRuntime, Session lifecycle coordinator, Gateway, and concrete providers
-are implemented in later rounds; importing a contract package does not start
-anything or create a runtime.
+These packages define replaceable component boundaries only. The
+`standardagent` package now implements the application-scoped Runtime registry,
+coordinator, fixed Gateway skeleton, GatewayAccess binding, Entrypoint wrapper,
+and automatic standard profile. Its Session execution object is deliberately a
+skeleton until the Session and AgentRuntime rounds: Snapshot and lifecycle
+routing are real, while Send, model execution, tools, and event streaming
+return a typed unavailable error rather than pretending to succeed. Importing
+any package still has no registration or startup side effect.
 
 ## Relationship to previous-generation SDKs
 

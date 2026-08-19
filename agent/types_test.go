@@ -70,6 +70,16 @@ func TestMessagePartsSeparateTextFromAttachmentReferences(t *testing.T) {
 	}
 }
 
+func TestMessageInputCarriesContentWithoutDurableIdentity(t *testing.T) {
+	input := agent.MessageInput{Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "hello"}}}
+	if !input.Valid() {
+		t.Fatalf("MessageInput reported invalid: %#v", input)
+	}
+	if (agent.MessageInput{}).Valid() {
+		t.Fatal("empty MessageInput reported valid")
+	}
+}
+
 func TestRevisionAdvancesMonotonically(t *testing.T) {
 	var revision agent.Revision
 	if got := revision.Next(); got != 1 {

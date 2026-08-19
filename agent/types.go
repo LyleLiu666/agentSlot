@@ -117,6 +117,27 @@ func (p MessagePart) Valid() bool {
 	}
 }
 
+// MessageInput is unpersisted inbound content. It deliberately has no
+// MessageID, SessionID, RunID, StepID, role, or timestamp: only the fixed
+// Runtime may allocate durable identity and containment during commit.
+type MessageInput struct {
+	Parts []MessagePart
+}
+
+// Valid reports whether every inbound content part is provider-neutral and
+// the input is non-empty.
+func (m MessageInput) Valid() bool {
+	if len(m.Parts) == 0 {
+		return false
+	}
+	for _, part := range m.Parts {
+		if !part.Valid() {
+			return false
+		}
+	}
+	return true
+}
+
 // ToolCall is the durable identity, arguments, and containment record for one
 // model-requested tool invocation.
 type ToolCall struct {
@@ -183,13 +204,18 @@ const (
 type ErrorCode string
 
 const (
-	CodeRevisionConflict     ErrorCode = "revision_conflict"
-	CodeQueueItemClaimed     ErrorCode = "queue_item_claimed"
-	CodeNoActiveRun          ErrorCode = "no_active_run"
-	CodeNoPendingWork        ErrorCode = "no_pending_work"
-	CodeRuntimeClosed        ErrorCode = "runtime_closed"
-	CodeCanceled             ErrorCode = "canceled"
-	CodeSessionUnrecoverable ErrorCode = "session_unrecoverable"
+	CodeRevisionConflict      ErrorCode = "revision_conflict"
+	CodeQueueItemClaimed      ErrorCode = "queue_item_claimed"
+	CodeNoActiveRun           ErrorCode = "no_active_run"
+	CodeNoPendingWork         ErrorCode = "no_pending_work"
+	CodeRuntimeClosed         ErrorCode = "runtime_closed"
+	CodeCanceled              ErrorCode = "canceled"
+	CodeSessionUnrecoverable  ErrorCode = "session_unrecoverable"
+	CodeApplicationNotStarted ErrorCode = "application_not_started"
+	CodeSessionNotOpen        ErrorCode = "session_not_open"
+	CodeSessionAlreadyOpen    ErrorCode = "session_already_open"
+	CodeRuntimeUnavailable    ErrorCode = "runtime_unavailable"
+	CodeCommandNotFound       ErrorCode = "command_not_found"
 )
 
 // ClassifiedError carries a safe operation-level message and an optional

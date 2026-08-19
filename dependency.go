@@ -11,6 +11,9 @@ func resolveRequirement(state registryState, requirement Requirement) ([]registe
 	}
 	record := state.byID[requirement.spec.id]
 	if record == nil {
+		if requirement.optional {
+			return nil, nil
+		}
 		return nil, unsatisfiedRequirementError(requirement, 0)
 	}
 	if record.spec.kind != requirement.spec.kind || record.spec.valueType != requirement.spec.valueType {
@@ -41,12 +44,17 @@ func validateRequirement(requirement Requirement) error {
 	}
 	switch requirement.spec.kind {
 	case oneKind:
-		if requirement.keyed || requirement.key != "" || requirement.minimum != 1 {
-			return fmt.Errorf("%w: OneSlot %q requires minimum 1 without a key", ErrInvalidRequirement, requirement.spec.id)
+		validMinimum := requirement.minimum == 1 && !requirement.optional
+		validOptional := requirement.minimum == 0 && requirement.optional
+		if requirement.keyed || requirement.key != "" || (!validMinimum && !validOptional) {
+			return fmt.Errorf("%w: OneSlot %q must be required with minimum 1 or explicitly optional, without a key", ErrInvalidRequirement, requirement.spec.id)
 		}
 	case manyKind:
-		if requirement.minimum < 1 {
+		if requirement.minimum < 1 && !requirement.optional {
 			return fmt.Errorf("%w: ManySlot %q minimum must be positive", ErrInvalidRequirement, requirement.spec.id)
+		}
+		if requirement.optional && requirement.minimum != 0 {
+			return fmt.Errorf("%w: optional ManySlot %q minimum must be zero", ErrInvalidRequirement, requirement.spec.id)
 		}
 		if requirement.keyed && (requirement.key == "" || strings.TrimSpace(requirement.key) != requirement.key) {
 			return fmt.Errorf("%w: ManySlot %q key %q must be non-empty without surrounding whitespace", ErrInvalidRequirement, requirement.spec.id, requirement.key)
@@ -55,8 +63,8 @@ func validateRequirement(requirement Requirement) error {
 			return fmt.Errorf("%w: ManySlot %q has a key without keyed selection", ErrInvalidRequirement, requirement.spec.id)
 		}
 	case chainKind:
-		if requirement.keyed || requirement.key != "" || requirement.minimum < 1 {
-			return fmt.Errorf("%w: ChainSlot %q requires a positive minimum without a key", ErrInvalidRequirement, requirement.spec.id)
+		if requirement.keyed || requirement.key != "" || (requirement.minimum < 1 && !requirement.optional) || (requirement.optional && requirement.minimum != 0) {
+			return fmt.Errorf("%w: ChainSlot %q must have a positive minimum or be explicitly optional, without a key", ErrInvalidRequirement, requirement.spec.id)
 		}
 	default:
 		return fmt.Errorf("%w: slot %q has unknown kind", ErrInvalidRequirement, requirement.spec.id)

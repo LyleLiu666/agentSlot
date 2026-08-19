@@ -138,7 +138,30 @@ func ResolveOne[T any](resolver Resolver, slot OneSlot[T]) (T, error) {
 		var zero T
 		return zero, err
 	}
+	if len(values) == 0 {
+		var zero T
+		return zero, fmt.Errorf("%w: optional slot %q has no contribution", ErrRequirementUnsatisfied, slot.spec.id)
+	}
 	return resolvedValue[T](values[0])
+}
+
+// ResolveOptionalOne resolves a OneSlot declared with OptionalOne.
+func ResolveOptionalOne[T any](resolver Resolver, slot OneSlot[T]) (T, bool, error) {
+	values, err := resolver.resolve(slot.spec, "", false)
+	if err != nil {
+		var zero T
+		return zero, false, err
+	}
+	if len(values) == 0 {
+		var zero T
+		return zero, false, nil
+	}
+	value, err := resolvedValue[T](values[0])
+	if err != nil {
+		var zero T
+		return zero, false, err
+	}
+	return value, true, nil
 }
 
 // ResolveKey resolves one ManySlot key declared with RequireKey by the current
@@ -153,7 +176,7 @@ func ResolveKey[T any](resolver Resolver, slot ManySlot[T], key string) (T, erro
 }
 
 // ResolveMany resolves all ManySlot contributions when the owning module
-// declared a non-keyed RequireMany requirement for the slot.
+// declared a non-keyed RequireMany or OptionalMany dependency for the slot.
 func ResolveMany[T any](resolver Resolver, slot ManySlot[T]) ([]Named[T], error) {
 	values, err := resolver.resolve(slot.spec, "", false)
 	if err != nil {
@@ -171,7 +194,7 @@ func ResolveMany[T any](resolver Resolver, slot ManySlot[T]) ([]Named[T], error)
 }
 
 // ResolveChain resolves all ChainSlot contributions when the owning module
-// declared RequireChain for the slot.
+// declared RequireChain or OptionalChain for the slot.
 func ResolveChain[T any](resolver Resolver, slot ChainSlot[T]) ([]T, error) {
 	values, err := resolver.resolve(slot.spec, "", false)
 	if err != nil {

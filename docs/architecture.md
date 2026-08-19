@@ -37,7 +37,8 @@ keeps the same `Build`, `Start`, `Run`, and `Runtime.Stop` lifecycle.
 1. `Application` declares one name, module list, and profile. `Build`
    automatically mounts that list into its internal mutable `Builder`.
 2. Each `Module.Register` call works against an isolated registry copy.
-3. `Build` validates profile requirements and every module's optional `RequiredSlots` declaration.
+3. `Build` validates profile requirements and every module's `RequiredSlots`
+   declaration, including explicitly optional component dependencies.
 4. Slot providers create dependency edges; a stable topological sort rejects cycles before construction or startup.
 5. Deferred contributions are constructed in dependency order through a resolver limited to the owning module's declared requirements.
 6. Successful build returns an immutable `Assembly` and freezes the builder.
@@ -94,6 +95,9 @@ The runtime boundary below the Assembly is explicit:
    `Close`. Model configuration can change only while idle and is snapshotted
    for each Run. Resume only means restoring a Session; it is not an execution
    command.
+   `Send`, `Steer`, Queue edits, summary starts, and Hook follow-on proposals
+   carry identity-free `MessageInput`; only the fixed Runtime may allocate a
+   durable MessageID and Session/Run/Step containment.
 6. The fixed Gateway is shared by the Application and routes commands/events
    using `AgentID + WorkspaceID + SessionID + RunID`. Entrypoints receive only
    carrier-neutral Gateway access and never receive Runtime objects. In-process
@@ -119,6 +123,9 @@ operates it:
   Build time; the started Runtime binds package-private Runtime access only to
   the fixed Gateway and binds carrier-neutral Gateway access to standard
   Entrypoint Module wrappers;
+- standard Agent Entrypoints are installed through
+  `standardagent.NewEntrypointModule`; an internal build validator rejects an
+  otherwise profile-valid raw contribution that skipped Gateway attachment;
 - lifecycle dependency order starts the Runtime module before Entrypoint
   Modules. Shutdown first prevents new Entrypoint commands, then closes
   AgentRuntimes and the registry, then closes Gateway/adapters and shared
@@ -171,11 +178,15 @@ Modules optionally implement `SlotRequirer`. Requirements name slots, not provid
 - `RequireOne` adds an edge from the sole provider.
 - `RequireKey` adds an edge from the selected keyed provider.
 - `RequireMany` and `RequireChain` add edges from every registered contributor.
+- `OptionalOne`, `OptionalMany`, and `OptionalChain` permit no provider, but
+  add the same provider-to-consumer lifecycle edges when contributions exist.
 - A module's contribution can satisfy its own requirement without creating a self-edge.
 
 Independent modules retain installation precedence. Missing providers, invalid requirements, and cycles fail during `Build`; no lifecycle method has run at that point.
 
-Requirements do not silently inject fields. Ordinary Go constructors can
+Optional One dependencies use `ResolveOptionalOne`; optional Many and Chain
+dependencies use the same `ResolveMany` and `ResolveChain` calls and receive an
+empty slice when absent. Requirements do not silently inject fields. Ordinary Go constructors can
 still receive dependencies explicitly. When the provider module may be chosen
 only after installation, `SetWith`, `AddWith`, and `AppendWith` register an
 explicit build-time constructor. Its `Resolver` can resolve only dependencies
