@@ -10,6 +10,7 @@ import (
 	"io"
 	"strings"
 
+	agent "github.com/LyleLiu666/agentSlot/agent"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -116,7 +117,7 @@ type Definition struct {
 // values that must conform to the Definition's InputSchema; they are not a
 // schema document.
 type Call struct {
-	ID        string
+	ID        agent.ToolCallID
 	Name      string
 	Arguments json.RawMessage
 }

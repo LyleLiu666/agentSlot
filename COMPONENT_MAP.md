@@ -26,15 +26,16 @@ Current repository reality:
 | --- | ---: |
 | Mapped standard component ecosystems | 42 |
 | Standardized domain vocabularies | 2 |
-| Contracted AgentSlot-owned domain interfaces | 0 |
+| Contracted AgentSlot-owned domain interfaces | 9 |
 | Conformant component ecosystems | 0 |
 | Proven component ecosystems | 0 |
 | Assembled standard component ecosystems | 0 |
 
-The separate composition protocol currently exports five Go interfaces:
-`Module`, `SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. They are
-framework mechanics, not substitutes for the 42 mapped agent component
-contracts.
+The generic composition protocol exports five Go interfaces: `Module`,
+`SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. The first nine
+domain contracts are now defined in the `session`, `model`, `tool`, `context`,
+`hook`, and `interaction` packages; they are Contracted but not yet Conformant
+or Proven.
 
 ## Runnable standard profile
 
@@ -133,9 +134,10 @@ method-level contract is an engineering result.
 | **Proven** | At least two semantically independent implementations pass the conformance suite. Wrappers over the same implementation count once. |
 | **Assembled** | A reference application exchanges proven implementations through the Slot without concrete-type branches. |
 
-Every domain row below is currently **Mapped** unless a later scorecard update
-explicitly records a higher level with links to its contract, conformance
-suite, implementations, and reference assembly.
+Nine foundational domain rows are now **Contracted**: each has a public domain
+interface, typed Slot, and contract tests. They do not yet have independent
+implementations or a reusable conformance suite, so none is Conformant or
+Proven. Every other domain row remains **Mapped**.
 
 The score is measured by proven component ecosystems, not by the number of
 modules, packages, or interface methods. One module may contribute to several
@@ -147,10 +149,10 @@ Slots, and several modules may contribute to one `Many` or `Chain` Slot.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `session.manager` | `SessionManager` | `One` | globally required | Creates, resumes, fully forks, or summary-starts stable Sessions while depending on replaceable SessionStore persistence. | Mapped |
-| `interaction.entrypoint` | `Entrypoint` | `Many` | globally requires at least 1 | Adapts a caller-facing protocol, function API, or UI to the fixed Gateway without receiving Runtime access. | Mapped |
-| `interaction.command` | `InteractionCommand` | `Many` | optional | Registers a keyed UI-neutral command with the fixed Gateway; Entrypoints render the shared descriptor as slash commands, menus, buttons, forms, or command palettes. | Mapped |
-| `agent.hook` | `AgentHook` | `Chain` | optional | Runs ordered, controlled hooks: proposes follow-on input before run completion or observes committed facts, without mutating Session or Runtime state directly. | Mapped |
+| `session.manager` | `SessionManager` | `One` | globally required | Creates, resumes, fully forks, or summary-starts stable Sessions while depending on replaceable SessionStore persistence. | Contracted |
+| `interaction.entrypoint` | `Entrypoint` | `Many` | globally requires at least 1 | Adapts a caller-facing protocol, function API, or UI to the fixed Gateway without receiving Runtime access. | Contracted |
+| `interaction.command` | `InteractionCommand` | `Many` | optional | Registers a keyed UI-neutral command with the fixed Gateway; Entrypoints render the shared descriptor as slash commands, menus, buttons, forms, or command palettes. | Contracted |
+| `agent.hook` | `AgentHook` | `Chain` | optional | Runs ordered, controlled hooks: proposes follow-on input before run completion or observes committed facts, without mutating Session or Runtime state directly. | Contracted |
 | `runtime.observer` | `RuntimeObserver` | `Chain` | optional | Passively observes typed agent, run, message, tool, retry, and lifecycle events without controlling the Runtime. | Mapped |
 
 The fixed AgentRuntime and Gateway are deliberately absent from this table: the
@@ -163,7 +165,7 @@ not a conforming standard LLM Agent application.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `model.executor` | `ModelExecutor` | `One` | globally required | Executes one logical model request and emits provider-neutral temporary output, reset, complete result, or final failure while owning physical attempts and recovery. | Mapped |
+| `model.executor` | `ModelExecutor` | `One` | globally required | Executes one logical model request and emits provider-neutral temporary output, reset, complete result, or final failure while owning physical attempts and recovery. | Contracted |
 | `model.provider` | `ModelProvider` | `Many` | optional; required only by an Executor that declares it | Implements named provider access for Executors that compose local adapters. | Mapped |
 | `model.selector` | `ModelSelector` | `One` | optional; conditional for dynamic routing | Selects a provider/model using explicit request and policy inputs. | Mapped |
 | `model.catalog` | `ModelCatalog` | `Many` | optional | Describes available models and their declared capabilities without exposing credentials. | Mapped |
@@ -197,7 +199,7 @@ wire objects.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `tool` | `Tool` | `Many` | optional globally; profiles may require keys | Declares and invokes a named capability available to AgentRuntime. | Mapped |
+| `tool` | `Tool` | `Many` | optional globally; profiles may require keys | Declares and invokes a named capability available to AgentRuntime. | Contracted |
 | `skill` | `Skill` | `Many` | optional | Supplies discoverable instructions, resources, or component bundles without pretending natural-language keyword matching is semantic routing. | Mapped |
 | `tool.middleware` | `ToolMiddleware` | `Chain` | optional | Wraps invocation for policy, telemetry, normalization, or recovery. | Mapped |
 | `tool.output-store` | `ToolOutputStore` | `One` | optional | Stores oversized or binary tool results and returns stable references. | Mapped |
@@ -224,9 +226,9 @@ decisions must use policy/approval components rather than concrete UI checks.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `session.store` | `SessionStore` | `One` | globally required | Persists the whole Session aggregate, including SessionModelConfig, and its atomic revision/CAS transactions; History remains the unique append-only fact view inside that aggregate. | Mapped |
-| `context.source` | `ContextSource` | `Chain` | optional | Contributes ordered context for a model turn. | Mapped |
-| `context.compactor` | `ContextCompactor` | `One` | optional | Replaces the current full Context with a smaller conversation-message projection without rewriting History; AgentRuntime reattaches fixed prompts/tools and validates protocol and hard token limits. | Mapped |
+| `session.store` | `SessionStore` | `One` | globally required | Persists the whole Session aggregate, including SessionModelConfig, and its atomic revision/CAS transactions; History remains the unique append-only fact view inside that aggregate. | Contracted |
+| `context.source` | `ContextSource` | `Chain` | optional | Contributes ordered context for a model turn. | Contracted |
+| `context.compactor` | `ContextCompactor` | `One` | optional | Replaces the current full Context with a smaller conversation-message projection without rewriting History; AgentRuntime reattaches fixed prompts/tools and validates protocol and hard token limits. | Contracted |
 | `memory.store` | `MemoryStore` | `Many` | optional | Reads and writes durable recall outside the authoritative conversation history. | Mapped |
 | `checkpoint.store` | `CheckpointStore` | `One` | optional | Saves resumable execution state without pretending it is user-visible history. | Mapped |
 

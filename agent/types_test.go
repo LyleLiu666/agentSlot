@@ -40,6 +40,10 @@ func TestMessageAndToolCallKeepStableContainment(t *testing.T) {
 		RunID:     "run-1",
 		StepID:    "step-1",
 		Role:      agent.RoleAssistant,
+		Parts:     []agent.MessagePart{{Kind: agent.PartText, Text: "done"}},
+	}
+	if !message.Valid() {
+		t.Fatalf("message reported invalid: %#v", message)
 	}
 	call := agent.ToolCall{
 		ID:        "call-1",
@@ -51,6 +55,18 @@ func TestMessageAndToolCallKeepStableContainment(t *testing.T) {
 	}
 	if call.MessageID != message.ID || call.SessionID != message.SessionID || call.RunID != message.RunID || call.StepID != message.StepID {
 		t.Fatalf("tool call containment = %#v, want message containment", call)
+	}
+}
+
+func TestMessagePartsSeparateTextFromAttachmentReferences(t *testing.T) {
+	if !(agent.MessagePart{Kind: agent.PartText, Text: "hello"}).Valid() {
+		t.Fatal("text part reported invalid")
+	}
+	if !(agent.MessagePart{Kind: agent.PartAttachment, AttachmentID: "attachment-1", MediaType: "image/png"}).Valid() {
+		t.Fatal("attachment reference reported invalid")
+	}
+	if (agent.MessagePart{Kind: agent.PartText, AttachmentID: "attachment-1"}).Valid() {
+		t.Fatal("mixed part payload reported valid")
 	}
 }
 
@@ -75,5 +91,18 @@ func TestClassifiedErrorSupportsErrorsAs(t *testing.T) {
 	}
 	if agent.KindOf(base) != agent.ErrorInternal {
 		t.Fatalf("unclassified error kind = %q, want %q", agent.KindOf(base), agent.ErrorInternal)
+	}
+}
+
+func TestCodedErrorsExposeStableDomainReasons(t *testing.T) {
+	err := agent.NewCodedError(
+		agent.ErrorConflict,
+		agent.CodeRevisionConflict,
+		"session.commit",
+		"revision changed",
+		nil,
+	)
+	if !agent.IsKind(err, agent.ErrorConflict) || !agent.IsCode(err, agent.CodeRevisionConflict) {
+		t.Fatalf("classified error = %v, kind=%q code=%q", err, agent.KindOf(err), agent.CodeOf(err))
 	}
 }

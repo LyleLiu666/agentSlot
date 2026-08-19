@@ -251,8 +251,14 @@ coverage behind a family name.
 The first fixed domain vocabularies are available in the [`model`](model) and
 [`tool`](tool) leaf packages: model input/output modalities are text, image, and
 audio; model-facing tool inputs use self-contained JSON Schema Draft 2020-12.
-These stable value types do not imply that the complete `ModelProvider` or
-`Tool` component interfaces have reached contracted maturity.
+The first nine standard component contracts are now available in the
+`session`, `model`, `tool`, `context`, `hook`, and `interaction` packages. They
+are Contracted, but no domain ecosystem is yet Conformant or Proven.
+
+These packages define replaceable component boundaries only. The fixed
+AgentRuntime, Session lifecycle coordinator, Gateway, and concrete providers
+are implemented in later rounds; importing a contract package does not start
+anything or create a runtime.
 
 ## Relationship to previous-generation SDKs
 

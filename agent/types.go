@@ -6,6 +6,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -52,6 +53,11 @@ const (
 	RoleTool      Role = "tool"
 )
 
+// Valid reports whether role is a persisted History role.
+func (r Role) Valid() bool {
+	return r == RoleUser || r == RoleAssistant || r == RoleTool
+}
+
 // Message is a durable message fact. Provider-specific wire blocks are not
 // represented here; Context is responsible for projecting facts into a
 // provider's legal request format.
@@ -61,12 +67,58 @@ type Message struct {
 	RunID     RunID
 	StepID    StepID
 	Role      Role
+	Parts     []MessagePart
 	CreatedAt time.Time
 }
 
-// ToolCall is the durable identity and containment record for one model
-// requested tool invocation. Its arguments remain provider-neutral JSON in a
-// later Tool contract; this round only fixes its identity relationships.
+// Valid reports whether a durable message has stable identity, a known role,
+// and at least one valid provider-neutral content part.
+func (m Message) Valid() bool {
+	if !m.ID.Valid() || !m.SessionID.Valid() || !m.Role.Valid() || len(m.Parts) == 0 {
+		return false
+	}
+	for _, part := range m.Parts {
+		if !part.Valid() {
+			return false
+		}
+	}
+	return true
+}
+
+// MessagePartKind is the finite provider-neutral content vocabulary. Binary
+// data is never embedded in History; attachment parts carry stable references.
+type MessagePartKind string
+
+const (
+	PartText       MessagePartKind = "text"
+	PartAttachment MessagePartKind = "attachment"
+)
+
+// MessagePart is one text fragment or durable attachment reference. Provider
+// adapters project these facts into their own wire blocks.
+type MessagePart struct {
+	Kind         MessagePartKind
+	Text         string
+	AttachmentID string
+	MediaType    string
+	Name         string
+}
+
+// Valid reports whether a message part has exactly the payload required by
+// its kind.
+func (p MessagePart) Valid() bool {
+	switch p.Kind {
+	case PartText:
+		return p.Text != "" && p.AttachmentID == "" && p.MediaType == "" && p.Name == ""
+	case PartAttachment:
+		return p.Text == "" && p.AttachmentID != "" && p.MediaType != ""
+	default:
+		return false
+	}
+}
+
+// ToolCall is the durable identity, arguments, and containment record for one
+// model-requested tool invocation.
 type ToolCall struct {
 	ID        ToolCallID
 	MessageID MessageID
@@ -74,6 +126,7 @@ type ToolCall struct {
 	RunID     RunID
 	StepID    StepID
 	Name      string
+	Arguments json.RawMessage
 }
 
 // Agent identifies one configured capability set.
@@ -126,11 +179,25 @@ const (
 	ErrorInternal     ErrorKind = "internal"
 )
 
+// ErrorCode is the stable domain reason inside a broad reaction category.
+type ErrorCode string
+
+const (
+	CodeRevisionConflict     ErrorCode = "revision_conflict"
+	CodeQueueItemClaimed     ErrorCode = "queue_item_claimed"
+	CodeNoActiveRun          ErrorCode = "no_active_run"
+	CodeNoPendingWork        ErrorCode = "no_pending_work"
+	CodeRuntimeClosed        ErrorCode = "runtime_closed"
+	CodeCanceled             ErrorCode = "canceled"
+	CodeSessionUnrecoverable ErrorCode = "session_unrecoverable"
+)
+
 // ClassifiedError carries a safe operation-level message and an optional
 // implementation cause for logs and errors.Is. Callers should branch on Kind,
 // not on provider or database error strings.
 type ClassifiedError struct {
 	Kind    ErrorKind
+	Code    ErrorCode
 	Op      string
 	Message string
 	Cause   error
@@ -140,10 +207,14 @@ func (e *ClassifiedError) Error() string {
 	if e == nil {
 		return "<nil>"
 	}
-	if e.Op == "" {
-		return fmt.Sprintf("%s: %s", e.Kind, e.Message)
+	classification := string(e.Kind)
+	if e.Code != "" {
+		classification += "/" + string(e.Code)
 	}
-	return fmt.Sprintf("%s: %s: %s", e.Op, e.Kind, e.Message)
+	if e.Op == "" {
+		return fmt.Sprintf("%s: %s", classification, e.Message)
+	}
+	return fmt.Sprintf("%s: %s: %s", e.Op, classification, e.Message)
 }
 
 func (e *ClassifiedError) Unwrap() error {
@@ -162,6 +233,14 @@ func NewError(kind ErrorKind, op, message string, cause error) error {
 	return &ClassifiedError{Kind: kind, Op: op, Message: message, Cause: cause}
 }
 
+// NewCodedError creates a classified error with a stable domain reason.
+func NewCodedError(kind ErrorKind, code ErrorCode, op, message string, cause error) error {
+	if kind == "" {
+		kind = ErrorInternal
+	}
+	return &ClassifiedError{Kind: kind, Code: code, Op: op, Message: message, Cause: cause}
+}
+
 // KindOf returns the public reaction category of err. Unknown implementation
 // errors are intentionally treated as internal failures.
 func KindOf(err error) ErrorKind {
@@ -174,3 +253,16 @@ func KindOf(err error) ErrorKind {
 
 // IsKind reports whether err carries the requested public reaction category.
 func IsKind(err error, kind ErrorKind) bool { return KindOf(err) == kind }
+
+// CodeOf returns the stable domain reason, or an empty code for an
+// unclassified implementation error.
+func CodeOf(err error) ErrorCode {
+	var classified *ClassifiedError
+	if errors.As(err, &classified) {
+		return classified.Code
+	}
+	return ""
+}
+
+// IsCode reports whether err carries the requested domain reason.
+func IsCode(err error, code ErrorCode) bool { return CodeOf(err) == code }

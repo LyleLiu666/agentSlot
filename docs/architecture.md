@@ -277,13 +277,15 @@ implementation format.
 
 ## Current implementation frontier
 
-The published composition foundation currently defers implementation of:
+The published foundation now includes the first nine standard domain contracts
+and typed Slots for Session management/storage, model execution, tools, context,
+hooks, and interaction boundaries. It still defers:
 
-- the Session-scoped runtime objects and their standard domain method contracts;
-- the fixed standard Agent Gateway, GatewayAccess, and private RuntimeAccess binding;
-- configuration schemas and secret resolution;
+- Session-scoped runtime objects and concrete persistence behavior;
+- the fixed standard Agent Gateway and private RuntimeAccess binding;
+- configuration schemas, secret resolution, and provider adapters;
 - out-of-process discovery or loading;
-- the mapped standard domain method contracts and their conformance suites.
+- conformant independent implementations and proven component ecosystems.
 
 These are implemented in the order and maturity process defined by the
 [Standard Component Map](../COMPONENT_MAP.md). Dependency order controls

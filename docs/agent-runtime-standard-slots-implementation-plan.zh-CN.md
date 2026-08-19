@@ -142,16 +142,11 @@ Slot 和 Profile；它不属于标准 LLM Agent Profile，也不能冒充标准 
 ModelExecutor 模块如果需要 Provider，必须通过 `RequiredSlots` 显式声明
 `model.provider` 依赖；标准 Profile 不再全局强制 Provider 数量。
 
-## 6. 候选 Go 合同
+## 6. 第一批 Go 合同
 
-本节用来固定职责和数据流，编码前还要把命名、错误类型和最小方法集写成红测试。
-这些代码块不是已发布 API。
-
-其中 `SessionMutation`、`Commit`、`ModelEvent`、`ModelStream` 等名称只是职责占位符，
-不能直接照抄成公共 API。第一轮必须先用并发冲突、幂等重试、流 reset、最终失败和
-取消场景写出失败测试，再决定它们采用封闭枚举、结构化命令、迭代器还是其他 Go
-表达。`Entrypoint` 与 `InteractionCommand` 的 Slot ID、基数和绑定方向已经确定，
-方法名仍需由合同测试收敛。
+本节的第一批公共合同已经通过合同测试落地。它们固定职责、数据流、Slot ID、基数和
+扩展权限，但不代表已有真实实现或 Conformant/Proven 成熟度。后续实现可以增加不破坏
+这些边界的具体字段和适配器，不得绕过它们直接暴露 Runtime、Store 或 Provider。
 
 ### 6.1 固定 Gateway、GatewayAccess 与内部 RuntimeAccess
 
@@ -202,6 +197,9 @@ type SessionManager interface {
 	StartFromSummary(context.Context, SummarySessionCommand) (Session, error)
 }
 ```
+
+实际公共接口位于 `session`、`model`、`tool`、`context`、`hook` 和 `interaction` 包；
+本节代码用于说明合同，不是另一个平行 API。
 
 - 负责创建、恢复和派生 Session，不执行 Agent 循环。
 - Manager 的 `Resume` 必须完成恢复检查；不能把损坏或半恢复 Session 交给 Runtime。
@@ -644,26 +642,24 @@ History。
 - README、架构讨论、路线图和本计划不存在旧 `agent.loop` 标准语义。
 - Slash/菜单呈现与 SessionModelConfig 后端能力保持分层。
 - 所有 Entrypoint 只指向固定 Gateway，不存在 Entrypoint 到 RuntimeAccess 的直接边。
-- 所有新生态位仍为 Mapped，不把候选代码写成 Contracted。
+- 本轮 9 个已有公共合同标为 Contracted；其余生态位仍为 Mapped，不把候选代码写成
+  Conformant 或 Proven。
 
-### 阶段 1：公共类型、typed Slot 和合同测试
+### 阶段 1：公共类型、typed Slot 和合同测试（已完成）
 
-- 先写失败测试，固定身份、Revision、History/Context/Queue/RunJournal、
-  SessionModelConfig 值类型。
-- 固定最小错误分类，至少覆盖 revision conflict、消息已认领、无活跃 Run、无待处理
-  工作、Runtime 已关闭、取消和不可恢复 Session；具体 Go 包装方式由测试收敛。
-- 声明 `session.manager`、`session.store`、`model.executor`、`agent.hook`、
-  `interaction.command` 和关联 typed Slot。
-- 以失败测试确定 SessionStore 事务输入、幂等结果和原子提交表达；不得直接发布一个
-  无约束的 `SessionMutation` 万能对象。
-- 以失败测试确定 ModelEvent 的顺序、临时 chunk、reset、唯一完整结果、最终失败、
-  取消和流关闭规则；不得让不同 Executor 自行解释事件协议。
-- 使用 `Assembly`、`AssemblyDescription` 和 `agentslot.assembly/v0`；完成 cardinality、依赖、错误分类、秘密不进入
-  `Assembly.Describe` 的合同测试，不保留两套同义公共 API。
-- 提供最小假实现，只用于证明装配；不实现 AgentRuntime 循环。
-- 清理示例和测试夹具中把 `agent.loop` 当作标准 Slot 的旧叙述；通用 Slot 测试使用
-  明确的示例 ID，避免继续传播已经删除的标准语义。
-- 阶段完成后单独评审，不打 tag、不发布。
+- 已固定身份、Revision、History/Context/Queue/RunJournal、SessionModelConfig 所需的
+  公共值边界，并完成最小错误分类。
+- 已声明并测试 `session.manager`、`session.store`、`model.executor`、`tool`、
+  `context.source`、`context.compactor`、`agent.hook`、`interaction.entrypoint` 和
+  `interaction.command` 的 typed Slot。
+- 已固定 SessionStore 的 expected revision、幂等键和结构化 Change 输入；CAS 决策仍由
+  Store 实现负责，未发布无约束的万能 SessionMutation。
+- 已固定 ModelEvent/ModelStream 的临时 delta、reset、唯一完整结果和最终失败边界；
+  Executor 可以在内部管理 Provider 的多次物理请求。
+- 已完成 Assembly 描述安全性、Slot 基数、重复键、依赖和错误分类合同测试；没有实现
+  AgentRuntime、Gateway、真实 Provider、Bash 或 UI。
+- 9 个生态位标为 Contracted，尚未标为 Conformant 或 Proven；阶段提交后再进入应用级
+  Runtime 与 Gateway 主链路。
 
 ### 阶段 2：应用级 Runtime、Registry 与 Gateway 主链路
 

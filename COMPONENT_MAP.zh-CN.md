@@ -24,7 +24,7 @@
 | --- | ---: |
 | 已映射的标准组件生态位 | 42 |
 | 已标准化的领域词汇 | 2 |
-| 已定义契约的 AgentSlot 自有领域接口 | 0 |
+| 已定义契约的 AgentSlot 自有领域接口 | 9 |
 | 通过一致性验证的组件生态位 | 0 |
 | 已由独立实现证明的组件生态位 | 0 |
 | 已进入标准装配的组件生态位 | 0 |
@@ -117,8 +117,9 @@ flowchart LR
 | **已证明（Proven）** | 至少两个语义上独立的实现通过一致性测试；同一实现的不同包装只能算一个。 |
 | **已装配（Assembled）** | 参考应用能够通过 Slot 替换已证明的实现，不包含具体类型分支。 |
 
-除非后续成绩单明确链接到接口、测试套件、独立实现和参考装配，否则下表所有
-领域生态位当前都只处于**已映射（Mapped）**阶段。
+本轮已有 9 个基础领域生态位进入**已定义契约（Contracted）**：它们拥有公开
+领域接口、typed Slot 和合同测试，但还没有独立实现或真实参考装配，因此不能标为
+**已通过一致性验证**或**已证明**。其他生态位仍处于**已映射（Mapped）**阶段。
 
 成绩以已经证明的组件生态位计算，不按 Module、包或接口方法的数量计算。
 一个 Module 可以向多个 Slot 提供组件，多个 Module 也可以共同向一个
@@ -130,10 +131,10 @@ flowchart LR
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `session.manager` | `SessionManager` | `One` | 全局必需 | 创建、恢复、完整 fork 或摘要启动稳定 Session，并依赖可替换的 SessionStore 持久化。 | 已映射 |
-| `interaction.entrypoint` | `Entrypoint` | `Many` | 全局至少 1 个 | 把调用方协议、函数 API 或 UI 适配到固定 Gateway，不能取得 RuntimeAccess。 | 已映射 |
-| `interaction.command` | `InteractionCommand` | `Many` | 可选 | 向固定 Gateway 注册具名、UI-neutral 的结构化命令；Entrypoint 把共享描述渲染为 Slash、菜单、按钮、表单或命令面板。 | 已映射 |
-| `agent.hook` | `AgentHook` | `Chain` | 可选 | 有序执行受控 Hook：在 Run 完成前提出后续输入，或观察已提交事实，但不能直接修改 Session 或 Runtime 状态。 | 已映射 |
+| `session.manager` | `SessionManager` | `One` | 全局必需 | 创建、恢复、完整 fork 或摘要启动稳定 Session，并依赖可替换的 SessionStore 持久化。 | 已定义契约 |
+| `interaction.entrypoint` | `Entrypoint` | `Many` | 全局至少 1 个 | 把调用方协议、函数 API 或 UI 适配到固定 Gateway，不能取得 RuntimeAccess。 | 已定义契约 |
+| `interaction.command` | `InteractionCommand` | `Many` | 可选 | 向固定 Gateway 注册具名、UI-neutral 的结构化命令；Entrypoint 把共享描述渲染为 Slash、菜单、按钮、表单或命令面板。 | 已定义契约 |
+| `agent.hook` | `AgentHook` | `Chain` | 可选 | 有序执行受控 Hook：在 Run 完成前提出后续输入，或观察已提交事实，但不能直接修改 Session 或 Runtime 状态。 | 已定义契约 |
 | `runtime.observer` | `RuntimeObserver` | `Chain` | 可选 | 被动观察 Agent、Run、消息、工具、重试和生命周期事件，但不控制 Runtime。 | 已映射 |
 
 固定 AgentRuntime 和 Gateway 有意不出现在表中：组件地图只记录定制边界，不罗列
@@ -144,7 +145,7 @@ flowchart LR
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `model.executor` | `ModelExecutor` | `One` | 全局必需 | 执行一次逻辑模型请求，在内部管理真实请求和恢复，并统一发出临时输出、reset、完整结果或最终失败。 | 已映射 |
+| `model.executor` | `ModelExecutor` | `One` | 全局必需 | 执行一次逻辑模型请求，在内部管理真实请求和恢复，并统一发出临时输出、reset、完整结果或最终失败。 | 已定义契约 |
 | `model.provider` | `ModelProvider` | `Many` | 可选；仅由声明依赖的 Executor 要求 | 为组合本地适配器的 Executor 提供具名 Provider 访问。 | 已映射 |
 | `model.selector` | `ModelSelector` | `One` | 可选；动态路由时按条件要求 | 根据明确的请求和策略输入选择 Provider/模型。 | 已映射 |
 | `model.catalog` | `ModelCatalog` | `Many` | 可选 | 描述可用模型及其声明能力，但不暴露凭证。 | 已映射 |
@@ -172,7 +173,7 @@ OpenAI 专属的网络数据结构。
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `tool` | `Tool` | `Many` | 全局可选；Profile 可要求指定键 | 声明并调用一个可供 AgentRuntime 使用的具名能力。 | 已映射 |
+| `tool` | `Tool` | `Many` | 全局可选；Profile 可要求指定键 | 声明并调用一个可供 AgentRuntime 使用的具名能力。 | 已定义契约 |
 | `skill` | `Skill` | `Many` | 可选 | 提供可发现的指令、资源或组件包，不能用自然语言关键字匹配冒充语义路由。 | 已映射 |
 | `tool.middleware` | `ToolMiddleware` | `Chain` | 可选 | 为调用过程增加策略、遥测、标准化或恢复处理。 | 已映射 |
 | `tool.output-store` | `ToolOutputStore` | `One` | 可选 | 存储超大或二进制工具结果，并返回稳定引用。 | 已映射 |
@@ -198,9 +199,9 @@ OpenAI 专属的网络数据结构。
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `session.store` | `SessionStore` | `One` | 全局必需 | 持久化包含 SessionModelConfig 的完整 Session 聚合及其 revision/CAS 原子事务；History 是聚合内唯一、append-only 的事实视图。 | 已映射 |
-| `context.source` | `ContextSource` | `Chain` | 可选 | 为一次模型调用按顺序提供上下文。 | 已映射 |
-| `context.compactor` | `ContextCompactor` | `One` | 可选 | 把当前完整 Context 转为更小的会话消息投影且不改写 History；AgentRuntime 重新装配固定 Prompt/Tool，并校验协议和硬 Token 上限。 | 已映射 |
+| `session.store` | `SessionStore` | `One` | 全局必需 | 持久化包含 SessionModelConfig 的完整 Session 聚合及其 revision/CAS 原子事务；History 是聚合内唯一、append-only 的事实视图。 | 已定义契约 |
+| `context.source` | `ContextSource` | `Chain` | 可选 | 为一次模型调用按顺序提供上下文。 | 已定义契约 |
+| `context.compactor` | `ContextCompactor` | `One` | 可选 | 把当前完整 Context 转为更小的会话消息投影且不改写 History；AgentRuntime 重新装配固定 Prompt/Tool，并校验协议和硬 Token 上限。 | 已定义契约 |
 | `memory.store` | `MemoryStore` | `Many` | 可选 | 读写权威对话历史之外的持久化召回信息。 | 已映射 |
 | `checkpoint.store` | `CheckpointStore` | `One` | 可选 | 保存可恢复的执行状态，但不把它冒充为用户可见的历史。 | 已映射 |
 
