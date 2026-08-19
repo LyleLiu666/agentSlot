@@ -26,7 +26,7 @@ func (m testModule) Register(registrar agentslot.Registrar) error {
 }
 
 func TestOneSlotAcceptsAtMostOneContribution(t *testing.T) {
-	loop := agentslot.One[string]("agent.loop")
+	loop := agentslot.One[string]("example.loop")
 	builder := agentslot.NewBuilder()
 
 	if err := builder.Install(testModule{
@@ -44,11 +44,11 @@ func TestOneSlotAcceptsAtMostOneContribution(t *testing.T) {
 		t.Fatalf("install second loop error = %v, want ErrSlotOccupied", err)
 	}
 
-	plan, err := builder.Build(agentslot.RequireOne(loop))
+	assembly, err := builder.Build(agentslot.RequireOne(loop))
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	got, ok := agentslot.Get(plan, loop)
+	got, ok := agentslot.Get(assembly, loop)
 	if !ok || got != "react" {
 		t.Fatalf("Get() = %q, %v; want react, true", got, ok)
 	}
@@ -75,7 +75,7 @@ func TestManySlotAcceptsDistinctKeysAndRejectsDuplicates(t *testing.T) {
 		t.Fatalf("install duplicate tool error = %v, want ErrDuplicateKey", err)
 	}
 
-	plan, err := builder.Build(agentslot.RequireMany(tools, 2))
+	assembly, err := builder.Build(agentslot.RequireMany(tools, 2))
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -83,10 +83,10 @@ func TestManySlotAcceptsDistinctKeysAndRejectsDuplicates(t *testing.T) {
 		{Key: "shell", Value: "shell-tool"},
 		{Key: "files", Value: "files-tool"},
 	}
-	if got := agentslot.All(plan, tools); !reflect.DeepEqual(got, want) {
+	if got := agentslot.All(assembly, tools); !reflect.DeepEqual(got, want) {
 		t.Fatalf("All() = %#v, want %#v", got, want)
 	}
-	if got, ok := agentslot.Lookup(plan, tools, "files"); !ok || got != "files-tool" {
+	if got, ok := agentslot.Lookup(assembly, tools, "files"); !ok || got != "files-tool" {
 		t.Fatalf("Lookup(files) = %q, %v; want files-tool, true", got, ok)
 	}
 }
@@ -105,11 +105,11 @@ func TestChainSlotPreservesContributionOrder(t *testing.T) {
 		}
 	}
 
-	plan, err := builder.Build(agentslot.RequireChain(hooks, 3))
+	assembly, err := builder.Build(agentslot.RequireChain(hooks, 3))
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	if got, want := agentslot.Ordered(plan, hooks), []string{"audit", "metrics", "guard"}; !reflect.DeepEqual(got, want) {
+	if got, want := agentslot.Ordered(assembly, hooks), []string{"audit", "metrics", "guard"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("Ordered() = %#v, want %#v", got, want)
 	}
 }
@@ -134,7 +134,7 @@ func TestRequirementsFailWithoutFreezingBuilder(t *testing.T) {
 }
 
 func TestRegistrationIsTransactional(t *testing.T) {
-	loop := agentslot.One[string]("agent.loop")
+	loop := agentslot.One[string]("example.loop")
 	tools := agentslot.Many[string]("tool")
 	builder := agentslot.NewBuilder()
 

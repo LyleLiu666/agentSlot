@@ -8,8 +8,8 @@ import (
 )
 
 var (
-	// ErrPlanStarted means lifecycle startup was already attempted for a Plan.
-	ErrPlanStarted = errors.New("agentslot: plan startup was already attempted")
+	// ErrAssemblyStarted means lifecycle startup was already attempted for an Assembly.
+	ErrAssemblyStarted = errors.New("agentslot: assembly startup was already attempted")
 )
 
 // Lifecycle is an optional Module capability. Successfully started modules are
@@ -24,32 +24,32 @@ type activeModule struct {
 	lifecycle Lifecycle
 }
 
-// Runtime owns the successfully started module lifecycles for one Plan.
+// Runtime owns the successfully started module lifecycles for one Assembly.
 type Runtime struct {
-	mu      sync.Mutex
-	plan    *Plan
-	active  []activeModule
-	stopped bool
-	stopErr error
+	mu       sync.Mutex
+	assembly *Assembly
+	active   []activeModule
+	stopped  bool
+	stopErr  error
 }
 
 // Start starts lifecycle-aware modules in the dependency order computed by
-// Build. Each Plan allows one startup attempt because modules may own
+// Build. Each Assembly allows one startup attempt because modules may own
 // non-repeatable resources.
-func (p *Plan) Start(ctx context.Context) (*Runtime, error) {
-	if p == nil {
-		panic("agentslot: nil Plan")
+func (a *Assembly) Start(ctx context.Context) (*Runtime, error) {
+	if a == nil {
+		panic("agentslot: nil Assembly")
 	}
-	p.startMu.Lock()
-	if p.startAttempted {
-		p.startMu.Unlock()
-		return nil, ErrPlanStarted
+	a.startMu.Lock()
+	if a.startAttempted {
+		a.startMu.Unlock()
+		return nil, ErrAssemblyStarted
 	}
-	p.startAttempted = true
-	p.startMu.Unlock()
+	a.startAttempted = true
+	a.startMu.Unlock()
 
-	active := make([]activeModule, 0, len(p.modules))
-	for _, installed := range p.modules {
+	active := make([]activeModule, 0, len(a.modules))
+	for _, installed := range a.modules {
 		lifecycle, ok := installed.module.(Lifecycle)
 		if !ok {
 			continue
@@ -62,15 +62,15 @@ func (p *Plan) Start(ctx context.Context) (*Runtime, error) {
 		}
 		active = append(active, activeModule{id: installed.id, lifecycle: lifecycle})
 	}
-	return &Runtime{plan: p, active: active}, nil
+	return &Runtime{assembly: a, active: active}, nil
 }
 
-// Plan returns the immutable assembled plan owned by this runtime.
-func (r *Runtime) Plan() *Plan {
+// Assembly returns the immutable Assembly owned by this runtime.
+func (r *Runtime) Assembly() *Assembly {
 	if r == nil {
 		return nil
 	}
-	return r.plan
+	return r.assembly
 }
 
 func rollbackStart(ctx context.Context, active []activeModule, failedID string, startErr error) error {

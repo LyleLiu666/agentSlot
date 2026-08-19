@@ -22,13 +22,13 @@ var (
 // differences stay in the application name, module list, and profile
 // requirements rather than in custom bootstrap control flow.
 type Application struct {
-	mu      sync.Mutex
-	name    string
-	modules []Module
-	mounted int
-	builder *Builder
-	profile []Requirement
-	plan    *Plan
+	mu       sync.Mutex
+	name     string
+	modules  []Module
+	mounted  int
+	builder  *Builder
+	profile  []Requirement
+	assembly *Assembly
 }
 
 // NewApplication declares one named agent application. The module list and
@@ -54,15 +54,15 @@ func (a *Application) Name() string {
 
 // Build automatically mounts every declared module, validates their slot
 // requirements, and assembles their contributions. After the first successful
-// build, repeated calls return the same immutable Plan.
-func (a *Application) Build() (*Plan, error) {
+// build, repeated calls return the same immutable Assembly.
+func (a *Application) Build() (*Assembly, error) {
 	if a == nil {
 		panic("agentslot: nil Application")
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.plan != nil {
-		return a.plan, nil
+	if a.assembly != nil {
+		return a.assembly, nil
 	}
 	if a.name == "" || strings.TrimSpace(a.name) != a.name {
 		return nil, fmt.Errorf(
@@ -78,23 +78,23 @@ func (a *Application) Build() (*Plan, error) {
 		}
 		a.mounted++
 	}
-	plan, err := a.builder.Build(a.profile...)
+	assembly, err := a.builder.Build(a.profile...)
 	if err != nil {
 		return nil, fmt.Errorf("build application %q: %w", a.name, err)
 	}
-	a.plan = plan
-	return plan, nil
+	a.assembly = assembly
+	return assembly, nil
 }
 
 // Start builds the application when needed, then starts every lifecycle-aware
 // module in dependency order. Startup failure rolls back already-started
-// modules through the same guarantees as Plan.Start.
+// modules through the same guarantees as Assembly.Start.
 func (a *Application) Start(ctx context.Context) (*Runtime, error) {
-	plan, err := a.Build()
+	assembly, err := a.Build()
 	if err != nil {
 		return nil, err
 	}
-	runtime, err := plan.Start(ctx)
+	runtime, err := assembly.Start(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("start application %q: %w", a.name, err)
 	}

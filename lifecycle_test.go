@@ -38,12 +38,12 @@ func TestStartFailureRollsBackStartedModulesInReverseOrder(t *testing.T) {
 			t.Fatalf("install %s: %v", module.id, err)
 		}
 	}
-	plan, err := builder.Build()
+	assembly, err := builder.Build()
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
 
-	runtime, err := plan.Start(context.Background())
+	runtime, err := assembly.Start(context.Background())
 	if err == nil || runtime != nil {
 		t.Fatalf("Start() = %#v, %v; want nil runtime and error", runtime, err)
 	}
@@ -64,11 +64,11 @@ func TestRuntimeStopsModulesInReverseOrderAndOnlyOnce(t *testing.T) {
 			t.Fatalf("install %s: %v", module.id, err)
 		}
 	}
-	plan, err := builder.Build()
+	assembly, err := builder.Build()
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	runtime, err := plan.Start(context.Background())
+	runtime, err := assembly.Start(context.Background())
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -83,8 +83,8 @@ func TestRuntimeStopsModulesInReverseOrderAndOnlyOnce(t *testing.T) {
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("events = %#v, want %#v", events, want)
 	}
-	if _, err := plan.Start(context.Background()); !errors.Is(err, agentslot.ErrPlanStarted) {
-		t.Fatalf("second Start() error = %v, want ErrPlanStarted", err)
+	if _, err := assembly.Start(context.Background()); !errors.Is(err, agentslot.ErrAssemblyStarted) {
+		t.Fatalf("second Start() error = %v, want ErrAssemblyStarted", err)
 	}
 }
 

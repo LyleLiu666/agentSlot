@@ -17,7 +17,7 @@ type tool interface {
 }
 
 var (
-	agentLoopSlot = agentslot.One[agentLoop]("agent.loop")
+	agentLoopSlot = agentslot.One[agentLoop]("example.loop")
 	toolSlot      = agentslot.Many[tool]("tool")
 )
 
@@ -78,7 +78,7 @@ func main() {
 		agentslot.RequireMany(toolSlot, 1),
 	)
 
-	plan, err := application.Build()
+	assembly, err := application.Build()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -93,10 +93,10 @@ func main() {
 		}
 	}()
 
-	if runtime.Plan() != plan {
-		log.Fatal("runtime did not start the built plan")
+	if runtime.Assembly() != assembly {
+		log.Fatal("runtime did not start the built Assembly")
 	}
-	loop, _ := agentslot.Get(plan, agentLoopSlot)
+	loop, _ := agentslot.Get(assembly, agentLoopSlot)
 	result, err := loop.Run(context.Background(), "assembled")
 	if err != nil {
 		log.Fatal(err)

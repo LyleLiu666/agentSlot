@@ -42,9 +42,8 @@
 只有最终 Assembly（应用装配结果）同时包含以下四类组件时，一个 AgentSlot 应用才符合
 “可运行标准 Agent Profile”：
 
-`Assembly` 是已经确定的 Build 结果架构名称。当前 pre-1.0 Go 实现仍导出 `Plan`，
-后续必须把类型、描述对象和格式标识一次性迁移为 `Assembly`、
-`AssemblyDescription` 和 `agentslot.assembly/v0`。
+`Assembly` 是当前 Go 实现导出的不可变 Build 结果。其描述对象为
+`AssemblyDescription`，格式标识为 `agentslot.assembly/v0`。
 
 | Slot ID | 标准契约 | 类型 | 必需基数 | 职责 |
 | --- | --- | --- | --- | --- |

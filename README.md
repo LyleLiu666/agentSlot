@@ -58,16 +58,14 @@ place in the final Assembly.
 | `Many[T]` | Zero or more implementations with unique keys, such as tools or model providers. |
 | `Chain[T]` | Zero or more ordered contributors, such as hooks or prompt contributors. |
 | `Requirement` | A profile constraint or a module dependency expressed against a slot, never a concrete provider type. |
-| `Assembly` | Target public name for the immutable result of validated composition. The current pre-1.0 Go type is still named `Plan` pending one atomic code migration. |
-| `AssemblyDescription` | Target public name for the versioned JSON-safe assembly description. The current code name is `PlanDescription`. |
+| `Assembly` | Immutable result of validated composition. `Application.Build()` returns this shared application-level assembly. |
+| `AssemblyDescription` | Versioned JSON-safe assembly description returned by `Assembly.Describe()`. |
 | `Runtime` | Started module lifecycles owned by one Assembly; the standard Agent layer will also attach its fixed Gateway and Runtime registry here. |
 | `AgentRuntime` | Framework-owned per-Session command and execution object created by explicit Session create/resume; it is not a Slot. |
 
-The code examples below retain `plan`, `Plan`, `PlanDescription`, and
-`Runtime.Plan()` only because those are the names implemented today. The
-architecture decision is to migrate them together to `assembly`, `Assembly`,
-`AssemblyDescription`, and `Runtime.Assembly()` before the standard Agent API is
-implemented; no long-lived compatibility aliases will be added pre-1.0.
+The code examples use `assembly`, `Assembly`, `AssemblyDescription`, and
+`Runtime.Assembly()`. No compatibility aliases for the removed `Plan` names are
+provided before 1.0.
 
 The generic `Module` interface is deliberately not the component interface. The slot's `T` is the component interface:
 

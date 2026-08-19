@@ -17,7 +17,7 @@ surface without clarifying or mechanically enforcing one of those properties.
 
 - `Module` is only the registration and lifecycle envelope. Component ecosystems are represented by typed slots.
 - Express module dependencies against typed slots, never concrete module IDs. Build must reject missing providers and cycles before startup.
-- Target `Assembly.Describe()` may expose IDs, kinds, types, keys, ownership, requirements, and order. It must never expose component values, configurations, credentials, or other secrets. Until the atomic pre-1.0 rename, the implemented name `Plan.Describe()` follows the same rule.
+- Target `Assembly.Describe()` may expose IDs, kinds, types, keys, ownership, requirements, and order. It must never expose component values, configurations, credentials, or other secrets.
 - Keep the composition core free of product, provider, UI, storage, and transport dependencies.
 - Keep core documentation product-neutral. Describe capability roles here; document named framework migrations and adapters in their consuming repositories.
 - Fix finite, cross-provider semantic vocabulary in AgentSlot leaf packages;

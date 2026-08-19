@@ -47,10 +47,8 @@ Slots.
 An AgentSlot application conforms to the runnable standard agent profile only
 when its Assembly contains all four of these component ecosystems:
 
-`Assembly` is the decided architecture name for the build result. The current
-pre-1.0 Go implementation still exports `Plan` until the type, description, and
-schema identifier are migrated together to `Assembly`, `AssemblyDescription`,
-and `agentslot.assembly/v0`.
+`Assembly` is the immutable build result exposed by the current Go implementation.
+Its description uses `AssemblyDescription` and the `agentslot.assembly/v0` schema.
 
 | Slot ID | Standard contract | Kind | Required cardinality | Responsibility |
 | --- | --- | --- | --- | --- |

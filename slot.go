@@ -140,8 +140,8 @@ type Named[T any] struct {
 }
 
 // Get resolves the optional contribution to a OneSlot.
-func Get[T any](plan *Plan, slot OneSlot[T]) (T, bool) {
-	record, ok := plan.find(slot.spec)
+func Get[T any](assembly *Assembly, slot OneSlot[T]) (T, bool) {
+	record, ok := assembly.find(slot.spec)
 	if !ok || len(record.values) == 0 {
 		var zero T
 		return zero, false
@@ -154,8 +154,8 @@ func Get[T any](plan *Plan, slot OneSlot[T]) (T, bool) {
 }
 
 // Lookup resolves one keyed contribution from a ManySlot.
-func Lookup[T any](plan *Plan, slot ManySlot[T], key string) (T, bool) {
-	record, ok := plan.find(slot.spec)
+func Lookup[T any](assembly *Assembly, slot ManySlot[T], key string) (T, bool) {
+	record, ok := assembly.find(slot.spec)
 	if ok {
 		for _, registered := range record.values {
 			if registered.key == key {
@@ -172,8 +172,8 @@ func Lookup[T any](plan *Plan, slot ManySlot[T], key string) (T, bool) {
 }
 
 // All resolves a copy of all keyed contributions in registration order.
-func All[T any](plan *Plan, slot ManySlot[T]) []Named[T] {
-	record, ok := plan.find(slot.spec)
+func All[T any](assembly *Assembly, slot ManySlot[T]) []Named[T] {
+	record, ok := assembly.find(slot.spec)
 	if !ok {
 		return nil
 	}
@@ -189,8 +189,8 @@ func All[T any](plan *Plan, slot ManySlot[T]) []Named[T] {
 }
 
 // Ordered resolves a copy of all ChainSlot contributions in registration order.
-func Ordered[T any](plan *Plan, slot ChainSlot[T]) []T {
-	record, ok := plan.find(slot.spec)
+func Ordered[T any](assembly *Assembly, slot ChainSlot[T]) []T {
+	record, ok := assembly.find(slot.spec)
 	if !ok {
 		return nil
 	}

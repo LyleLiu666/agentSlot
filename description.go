@@ -2,12 +2,12 @@ package agentslot
 
 import "sort"
 
-// PlanDescriptionSchema identifies the current exported plan format.
-const PlanDescriptionSchema = "agentslot.plan/v0"
+// AssemblyDescriptionSchema identifies the exported Assembly description format.
+const AssemblyDescriptionSchema = "agentslot.assembly/v0"
 
-// PlanDescription is a deterministic, JSON-safe view of an assembled plan. It
+// AssemblyDescription is a deterministic, JSON-safe view of an assembled Assembly. It
 // contains ownership and type metadata but never component values.
-type PlanDescription struct {
+type AssemblyDescription struct {
 	Schema  string                   `json:"schema"`
 	Modules []ModuleDescription      `json:"modules"`
 	Slots   []SlotDescription        `json:"slots"`
@@ -42,32 +42,32 @@ type RequirementDescription struct {
 	Minimum int    `json:"minimum"`
 }
 
-// Describe returns a fresh deterministic description of the plan. Module order
+// Describe returns a fresh deterministic description of the Assembly. Module order
 // is lifecycle start order; slot order is lexical by stable slot ID.
-func (p *Plan) Describe() PlanDescription {
-	if p == nil {
-		panic("agentslot: nil Plan")
+func (a *Assembly) Describe() AssemblyDescription {
+	if a == nil {
+		panic("agentslot: nil Assembly")
 	}
-	description := PlanDescription{
-		Schema:  PlanDescriptionSchema,
-		Modules: make([]ModuleDescription, 0, len(p.modules)),
-		Profile: describeRequirements(p.profile),
+	description := AssemblyDescription{
+		Schema:  AssemblyDescriptionSchema,
+		Modules: make([]ModuleDescription, 0, len(a.modules)),
+		Profile: describeRequirements(a.profile),
 	}
-	for _, module := range p.modules {
+	for _, module := range a.modules {
 		description.Modules = append(description.Modules, ModuleDescription{
 			ID:       module.id,
 			Requires: describeRequirements(module.requirements),
 		})
 	}
 
-	ids := make([]string, 0, len(p.state.byID))
-	for id := range p.state.byID {
+	ids := make([]string, 0, len(a.state.byID))
+	for id := range a.state.byID {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
 	description.Slots = make([]SlotDescription, 0, len(ids))
 	for _, id := range ids {
-		record := p.state.byID[id]
+		record := a.state.byID[id]
 		slot := SlotDescription{
 			ID:            id,
 			Kind:          record.spec.kind.String(),

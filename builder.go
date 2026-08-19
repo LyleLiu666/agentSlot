@@ -103,7 +103,7 @@ type installedModule struct {
 	requirements []Requirement
 }
 
-// Builder transactionally installs modules and freezes them into a Plan.
+// Builder transactionally installs modules and freezes them into an Assembly.
 type Builder struct {
 	mu      sync.Mutex
 	state   registryState
@@ -279,8 +279,8 @@ func RequireChain[T any](slot ChainSlot[T], minimum int) Requirement {
 	return Requirement{spec: slot.spec, minimum: minimum}
 }
 
-// Plan is an immutable set of resolved components and installed modules.
-type Plan struct {
+// Assembly is an immutable set of resolved components and installed modules.
+type Assembly struct {
 	state   registryState
 	modules []installedModule
 	profile []Requirement
@@ -291,7 +291,7 @@ type Plan struct {
 
 // Build validates requirements and freezes the builder after success.
 // A failed build remains mutable so missing components can be installed.
-func (b *Builder) Build(requirements ...Requirement) (*Plan, error) {
+func (b *Builder) Build(requirements ...Requirement) (*Assembly, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.frozen {
@@ -313,12 +313,12 @@ func (b *Builder) Build(requirements ...Requirement) (*Plan, error) {
 	}
 
 	b.frozen = true
-	return &Plan{state: state, modules: modules, profile: profile}, nil
+	return &Assembly{state: state, modules: modules, profile: profile}, nil
 }
 
-func (p *Plan) find(spec slotSpec) (*slotRecord, bool) {
+func (p *Assembly) find(spec slotSpec) (*slotRecord, bool) {
 	if p == nil {
-		panic("agentslot: nil Plan")
+		panic("agentslot: nil Assembly")
 	}
 	record, ok := p.state.byID[spec.id]
 	if !ok {

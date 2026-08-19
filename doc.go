@@ -1,17 +1,16 @@
-// Package agentslot composes typed agent components without defining an agent
-// loop, model protocol, tool protocol, or session format. Build validates
-// profile cardinality, module slot dependencies, and lifecycle cycles before
-// constructing deferred contributions and returning an immutable plan.
-// Build-scoped resolvers expose only dependencies declared by the current
-// module. Plan descriptions expose the assembled system without serializing
-// component values.
+// Package agentslot is the generic composition core for AgentSlot projects.
+// It defines typed slots, module registration, dependency validation, and the
+// common Build/Start/Run/Stop lifecycle. It deliberately does not define an
+// AgentRuntime, model protocol, tool protocol, session format, or Gateway.
+// Those are layered on top through standard contracts and product modules.
 //
-// Application is the named root host that automatically mounts its declared
-// module list and provides standard Build, Start, and Run entry points. It
-// delegates composition to Builder and keeps the immutable Plan as the source
-// of truth.
+// Application mounts a declared module set and builds one immutable Assembly.
+// Build validates profile cardinality, typed-slot dependencies, and lifecycle
+// ordering before resolving contributions. Assembly descriptions expose only
+// safe metadata; component values, configuration, and credentials are never
+// serialized.
 //
-// A Module is only a registration and lifecycle envelope. OneSlot, ManySlot,
-// and ChainSlot represent distinct component ecosystems with distinct
-// cardinality and ordering rules.
+// Module is the registration and lifecycle envelope. OneSlot, ManySlot, and
+// ChainSlot represent component ecosystems with different cardinality and
+// ordering rules.
 package agentslot

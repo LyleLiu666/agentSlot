@@ -164,8 +164,8 @@ AgentSlot 将建立显式 `ComponentCatalog`，记录每个标准 Slot 的：
 中英文组件地图由 Catalog 生成，并通过自动化检查防止代码、成绩单和文档互相
 矛盾。Catalog 只描述标准，不保存组件实例、产品配置或密钥。
 
-Catalog 展示整个行业地图；目标 `Assembly.Describe()` 展示某个应用实际装上的组件。
-当前代码中的 `Plan.Describe()` 需要在实现批次整体改名。
+Catalog 展示整个行业地图；`Assembly.Describe()` 展示某个应用实际装上的组件。
+当前实现已经使用 `Assembly` 名称和 `agentslot.assembly/v0` 描述格式。
 后者要标出组件来自开发者显式选择还是标准默认值，并展示依赖和启动顺序，但
 不能输出配置、组件值或凭据。
 
@@ -304,8 +304,8 @@ AgentSlot 参考这些行为，不复制 pi 的类型、聚合 Session 或产品
 - 保持模型模态和工具 JSON Schema 规则；
 - 声明 `session.manager`、`session.store`、`model.executor`、`agent.hook`、
   `interaction.command` 及第一批关联 typed Slot，并用红测试固定基数、依赖和错误语义；
-- 把当前 `Plan`、`PlanDescription` 和 `agentslot.plan/v0` 整体迁移为 `Assembly`、
-  `AssemblyDescription` 和 `agentslot.assembly/v0`，不保留两套同义 API；
+- 继续使用 `Assembly`、`AssemblyDescription` 和 `agentslot.assembly/v0`，不保留旧
+  `Plan` 名称的同义 API；
 - 清理示例和测试夹具中的旧 `agent.loop` 标准叙述，通用 Slot 示例使用明确的本地 ID；
 - 只提供最小假实现证明装配，不实现完整 AgentRuntime，不打 tag、不发布；
 - 接口批次通过评审后，才进入 Runtime 实现。

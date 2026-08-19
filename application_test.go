@@ -11,7 +11,7 @@ import (
 	agentslot "github.com/LyleLiu666/agentSlot"
 )
 
-func TestApplicationBuildsMountedModulesAndReusesPlan(t *testing.T) {
+func TestApplicationBuildsMountedModulesAndReusesAssembly(t *testing.T) {
 	dependency := agentslot.One[string]("application.dependency")
 	entry := agentslot.One[string]("application.entry")
 	application := agentslot.NewApplication(
@@ -48,7 +48,7 @@ func TestApplicationBuildsMountedModulesAndReusesPlan(t *testing.T) {
 		t.Fatalf("second build: %v", err)
 	}
 	if first != second {
-		t.Fatal("Build() did not reuse the successfully assembled plan")
+		t.Fatal("Build() did not reuse the successfully assembled Assembly")
 	}
 	if got, ok := agentslot.Get(first, entry); !ok || got != "mounted" {
 		t.Fatalf("entry = %q, %v; want mounted, true", got, ok)
@@ -63,16 +63,16 @@ func TestApplicationCopiesTheDeclaredModuleList(t *testing.T) {
 	application := agentslot.NewApplication("copied-agent", modules, agentslot.RequireOne(entry))
 	modules[0] = testModule{id: "replacement", contributions: []agentslot.Contribution{agentslot.Set(entry, "replacement")}}
 
-	plan, err := application.Build()
+	assembly, err := application.Build()
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	if got, ok := agentslot.Get(plan, entry); !ok || got != "original" {
+	if got, ok := agentslot.Get(assembly, entry); !ok || got != "original" {
 		t.Fatalf("entry = %q, %v; want original, true", got, ok)
 	}
 }
 
-func TestApplicationStartAutomaticallyBuildsAndExposesPlan(t *testing.T) {
+func TestApplicationStartAutomaticallyBuildsAndExposesAssembly(t *testing.T) {
 	entry := agentslot.One[string]("application.start.entry")
 	var events []string
 	application := agentslot.NewApplication(
@@ -93,7 +93,7 @@ func TestApplicationStartAutomaticallyBuildsAndExposesPlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	if got, ok := agentslot.Get(runtime.Plan(), entry); !ok || got != "ready" {
+	if got, ok := agentslot.Get(runtime.Assembly(), entry); !ok || got != "ready" {
 		t.Fatalf("runtime entry = %q, %v; want ready, true", got, ok)
 	}
 	if err := runtime.Stop(context.Background()); err != nil {
