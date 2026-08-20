@@ -245,8 +245,9 @@ ToolKeys 是严格白名单。nil、空列表和未配置都表示不暴露工�
 Context/Token Budget、GatewayChannel、严格 ExpectedRevision、SessionView、History 游标分页、
 单一职责 Hook、异步 SessionCommitObserver 和严格 ToolKeys 白名单均已落地。参考 Agent
 通过 FileStore、真实 OpenAI-compatible Executor、固定 Runtime/Gateway、多个 Channel、
-Bash、完整 Context、Attempt History 和 Gateway 游标分页的全链路测试。组件地图当前为
-37 个标准生态位、16 个 Contracted。
+Bash、完整 Context、Attempt History 和 Gateway 游标分页的全链路测试。随后新增的 Goal、
+Memory、Workflow、Billing 与同步模型 Attempt 边界已把组件地图推进为 40 个标准生态位、
+27 个 Contracted；这些新增项仍需 LAS 与独立实现继续验证。
 
 Contracted 仍不等于 Conformant 或 Proven。共享一致性套件、第二个独立实现、生产认证、
 远程 wire protocol 和分布式 Session 所有权属于后续成熟度工作，不反向否定本轮架构完成。

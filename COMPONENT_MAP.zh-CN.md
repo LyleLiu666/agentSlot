@@ -22,16 +22,19 @@
 
 | 资产 | 数量 |
 | --- | ---: |
-| 已映射的标准组件生态位 | 37 |
-| 已标准化的领域词汇 | 4 |
-| 已定义契约的 AgentSlot 自有领域接口 | 16 |
+| 已映射的标准组件生态位 | 40 |
+| 已标准化的领域词汇 | 8 |
+| 已定义契约的 AgentSlot 自有领域接口 | 27 |
 | 通过一致性验证的组件生态位 | 0 |
 | 已由独立实现证明的组件生态位 | 0 |
 | 已进入标准装配的组件生态位 | 0 |
 
 独立的组装协议目前导出了五个 Go 接口：`Module`、`SlotRequirer`、
 `Registrar`、`Contribution` 和 `Lifecycle`。它们是框架机制，不能代替
-地图中 37 个 Agent 领域组件生态位；其中 16 个已经具备公开合同。
+地图中 40 个 Agent 领域组件生态位；其中 27 个已经具备公开合同。
+
+表中 8 组有限领域词汇分别是：模型能力、工具调用、策略/审批、观察、Goal、Memory、
+Workflow 和 Billing。这个数字只统计为了互操作而固定的有限词汇和事实，不统计普通常量。
 
 ## 可运行标准 Profile
 
@@ -117,7 +120,7 @@ flowchart LR
 | **已证明（Proven）** | 至少两个语义上独立的实现通过一致性测试；同一实现的不同包装只能算一个。 |
 | **已装配（Assembled）** | 参考应用能够通过 Slot 替换已证明的实现，不包含具体类型分支。 |
 
-当前已有 16 个基础领域生态位进入**已定义契约（Contracted）**：它们拥有公开
+当前已有 27 个领域生态位进入**已定义契约（Contracted）**：它们拥有公开
 领域接口、typed Slot 和合同测试。仓库已经包含相互独立的内存/崩溃安全文件
 SessionStore、确定性 Fake/OpenAI Chat Compatible Executor、Bash/文件/HTTP 工具、
 进程内/CLI GatewayChannel、确定性的工具策略与审批组件，以及 JSON Lines 观察模块；固定
@@ -138,17 +141,26 @@ Runtime 不按具体类型分支即可消费它们。由于尚未建立可复用
 | `gateway.channel` | `GatewayChannel` | `Many` | 全局至少 1 个 | 把调用方协议、函数 API 或 UI 绑定到固定 Gateway，并且只能取得 `GatewayAccess`。 | 已定义契约 |
 | `interaction.command` | `InteractionCommand` | `Many` | 可选 | 向固定 Gateway 注册具名、UI-neutral 的结构化命令；Channel 把共享描述渲染为 Slash、菜单、按钮、表单或命令面板。 | 已定义契约 |
 | `agent.hook` | `AgentHook` | `Chain` | 可选 | 在 Run 完成前提出受控的后续输入；不能修改 Session 状态，也不能成为第二个 Runtime 控制者。 | 已定义契约 |
+| `goal.store` | `goal.Store` | `One` | 可选；与 `goal.evaluator` 同时安装 | 为每个 Session 保存一份受 CAS 保护的目标生命周期，与仅追加的会话 History 分离。 | 已定义契约 |
+| `goal.evaluator` | `goal.Evaluator` | `One` | 可选；与 `goal.store` 同时安装 | 在本来准备结束的 Run 关闭前，给出结构化的继续、阻塞或完成判断。 | 已定义契约 |
 | `session.commit.observer` | `SessionCommitObserver` | `Chain` | 可选 | 异步观察已经生效的 Session revision 及其新增 History sequence 范围；错误和 panic 不能回滚提交。 | 已定义契约 |
 
 固定 AgentRuntime 和 Gateway 有意不出现在表中：组件地图只记录定制边界，不罗列
 全部框架对象。确实需要完全不同循环或交互后端的产品可以在通用装配核心上定义项目
 本地 Slot 和明确的非标准 Profile，但不能宣称符合标准 LLM Agent 应用。
 
+Goal 贴在固定完成边界上，而不是只做增删改查。存在 active Goal 时，assistant
+本来要停止之际必须评估：`continue` 产生一条无身份的后续输入，`blocked` 暂停目标，
+`done` 完成目标。原因码是有限词汇；模型型 Evaluator 复用同一受限
+AttemptRecorder；评估失败时暂停，不能猜测；评估期间到达的用户 steer 优先。
+Goal 状态不写进会话 History。
+
 ### 2. 模型访问
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
 | `model.executor` | `ModelExecutor` | `One` | 全局必需 | 校验所选模型能力、计量完整请求并执行一次逻辑模型调用；通过受限 AttemptRecorder 持久记录每次真实请求。 | 已定义契约 |
+| `model.attempt.observer` | `AttemptObserver` | `Chain` | 可选 | 在每次真实 Provider 请求发送前和结束后同步记录或拒绝；与被动遥测不同，它可以 fail closed。 | 已定义契约 |
 | `model.provider` | `ModelProvider` | `Many` | 可选；仅由声明依赖的 Executor 要求 | 为组合本地适配器的 Executor 提供具名 Provider 访问。 | 已映射 |
 | `model.selector` | `ModelSelector` | `One` | 可选；动态路由时按条件要求 | 根据明确的请求和策略输入选择 Provider/模型。 | 已映射 |
 | `model.catalog` | `ModelCatalog` | `Many` | 可选 | 描述可用模型及其声明能力，但不暴露凭证。 | 已定义契约 |
@@ -205,7 +217,7 @@ OpenAI 专属的网络数据结构。
 | `session.store` | `SessionStore` | `One` | 全局必需 | 持久化包含 SessionModelConfig 的完整 Session 聚合及其 revision/CAS 原子事务；History 是聚合内唯一、append-only 的事实视图。 | 已定义契约 |
 | `context.source` | `ContextSource` | `Chain` | 可选 | 为一次模型调用按顺序提供上下文。 | 已定义契约 |
 | `context.compactor` | `ContextCompactor` | `One` | 可选 | 把当前完整 Context 转为更小的会话消息投影且不改写 History；AgentRuntime 重新装配固定 Prompt/Tool，并校验协议和硬 Token 上限。 | 已定义契约 |
-| `memory.store` | `MemoryStore` | `Many` | 可选 | 读写权威对话历史之外的持久化召回信息。 | 已映射 |
+| `memory.store` | `MemoryStore` | `Many` | 可选 | 在权威会话 History 之外召回、记住和遗忘受治理的长期记忆。 | 已定义契约 |
 | `checkpoint.store` | `CheckpointStore` | `One` | 可选 | 保存可恢复的执行状态，但不把它冒充为用户可见的历史。 | 已映射 |
 
 术语必须严格区分：
@@ -224,6 +236,9 @@ Context、Queue、RunJournal 和 revision/CAS 边界。上下文压缩只能产�
 Context，绝不能改写 History。
 标准 Compactor 契约允许整体替换；“摘要 + 最近三条 inbound”只是默认实现，
 不是框架不变量。
+`memory` 包固定可移植的 scope 与 memory kind 词汇，并提供可选的
+recall/remember/forget 工具和预召回 ContextSource。适配器可以把这些事实映射到更丰富
+的 Memory SDK，但不能制造第二份 Session History，也不能从 prompt 文本猜写入作用域。
 
 ### 5. 工作区、执行与产物
 
@@ -251,10 +266,14 @@ Context，绝不能改写 History。
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `agent.provider` | `AgentProvider` | `Many` | 可选 | 暴露具名的子 Agent 或远程 Agent 能力。 | 已映射 |
-| `workflow.scheduler` | `WorkflowScheduler` | `One` | 可选 | 调度多步骤或多 Agent 工作，但不替代框架固定的每 Session AgentRuntime。 | 已映射 |
-| `job.store` | `JobStore` | `One` | 可选 | 持久化排队中、运行中和已完成的工作流任务状态。 | 已映射 |
-| `mailbox` | `Mailbox` | `One` | 可选 | 在 Agent 或任务之间传递有明确收件人的异步消息。 | 已映射 |
+| `agent.provider` | `AgentProvider` | `Many` | 可选 | 通过具名的子 Agent 或远程 Agent 实现执行任务。 | 已定义契约 |
+| `workflow.scheduler` | `Scheduler` | `One` | 可选 | 异步调度多 Agent 工作，但不替代框架固定的每 Session AgentRuntime。 | 已定义契约 |
+| `job.store` | `JobStore` | `One` | 可选 | 持久化带 CAS version 的排队、运行和终态 Job，并提供等待通知。 | 已定义契约 |
+| `mailbox` | `Mailbox` | `One` | 可选 | 在 Session 与 Job 之间传递仅追加、有明确收件人的异步消息。 | 已定义契约 |
+
+参考 Scheduler 只依赖这些 Slot；可选的标准 `agent.*` 工具包只消费
+`workflow.scheduler` 和 `mailbox`。内存 Store 证明生命周期与替换边界，不宣称具备
+跨进程恢复或生产持久性；耐久实现必须保留同样的终态事实和定向消息语义。
 
 ### 8. Gateway 与消息投递
 
@@ -288,9 +307,14 @@ Gateway 只发送 `SessionID + Revision`，客户端再刷新 View。临时 chun
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
 | `usage.recorder` | `UsageRecorder` | `Chain` | 可选 | 接收由 Provider 报告、属于某次具名物理模型 Attempt 的 Token 用量。 | 已定义契约 |
-| `price.resolver` | `PriceResolver` | `One` | 可选 | 为标准化用量解析带版本的价格。 | 已映射 |
-| `quota.guard` | `QuotaGuard` | `One` | 可选 | 根据明确的预算和配额接受或拒绝工作。 | 已映射 |
-| `billing.ledger` | `BillingLedger` | `One` | 可选 | 持久化可审计的费用、抵扣和额度预留结果。 | 已映射 |
+| `price.resolver` | `PriceResolver` | `One` | 可选 | 为标准化用量解析带币种、版本和整数微单位的价格。 | 已定义契约 |
+| `quota.guard` | `QuotaGuard` | `One` | 可选 | 在 Provider 工作发生前，对明确归属的额度执行检查、预留、提交或释放。 | 已定义契约 |
+| `billing.ledger` | `BillingLedger` | `One` | 可选 | 持久化每次真实模型 Attempt 的不可变 intent 与 outcome，供审计和后续结算。 | 已定义契约 |
+
+`usage.recorder` 仍然是被动、尽力投递的观察面，不能执行额度守门，也不能充当耐久
+账务交接。`billing` attempt module 会贡献同步 `model.attempt.observer`：网络字节发送前
+完成额度预留和 durable intent，重试或逻辑完成前写完终态账务并结算额度。账户、租户、
+套餐、价目表和凭据指纹策略继续由显式适配器或产品配置负责。
 
 ### 10. 运维与审计
 
@@ -301,7 +325,7 @@ Gateway 只发送 `SessionID + Revision`，客户端再刷新 View。临时 chun
 | `metric.sink` | `MetricSink` | `Chain` | 可选 | 接收带隔离属性副本的标准化计数与耗时度量。 | 已定义契约 |
 | `health.contributor` | `HealthContributor` | `Chain` | 可选 | 报告组件就绪状态与健康状况，但不暴露配置值。 | 已映射 |
 
-`observe` 包固定第四组有限词汇：相互关联的 Runtime/Run/模型 Attempt/工具 Trace 事实、
+`observe` 包固定另一组有限词汇：相互关联的 Runtime/Run/模型 Attempt/工具 Trace 事实、
 计数或耗时 Metric、模型配置/工具决策 Audit，以及由 Provider 报告的模型 Token Usage。
 这些 Chain 是被动、尽力投递的观察面，不接收消息内容、工具参数、凭据、组件值或修改
 能力，也不是第二份 Session 账本。必须拒绝动作的产品应在执行前使用 Policy/Approval，

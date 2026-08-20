@@ -364,7 +364,7 @@ sequenceDiagram
 
 - [x] 参考 Agent 显式配置 ContextRetentionMode、MaxTokensPerRun、ToolKeys、Channel、ActorIdentity；
 - [x] 跑通 FileStore、真实 Executor、Runtime、Channel、工具、Context、Attempt History 和分页 View；
-- [x] 最终组件地图为 37 个生态位、16 个 Contracted，中英文一致；
+- [x] 当轮收口时组件地图为 37 个生态位、16 个 Contracted；后续 Goal、Memory、Workflow、Billing 扩展已推进为 40 个生态位、27 个 Contracted，中英文一致；
 - [x] 更新 README、ROADMAP 和实现状态；删除交接文档及链接；
 - [x] 不创建 tag，不发布版本，不新增 `documentation_test.go`。
 

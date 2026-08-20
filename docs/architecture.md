@@ -103,6 +103,13 @@ The runtime boundary below the Assembly is explicit:
    `Send`, `Steer`, Queue edits, summary starts, and Hook follow-on proposals
    carry identity-free `MessageInput`; only the fixed Runtime may allocate a
    durable MessageID and Session/Run/Step containment.
+   When an optional Goal Store and Evaluator pair is installed, an active Goal
+   is evaluated at the otherwise-complete Run boundary. Only a validated
+   continue proposal may add another step to that same Run. Blocked or failed
+   evaluation pauses the Goal; done completes it. A user steer accepted while
+   evaluation runs invalidates the stale decision at the following Session
+   View linearization point. Goal state remains separate from append-only
+   Session History.
    A complete fork copies canonical History at a stable idle revision, rewrites
    child fact identities, and re-derives Context for the child's final model;
    it never copies source Queue or RunJournal execution state. A summary start
@@ -184,6 +191,13 @@ named stores.
 `Chain[T]` allows ordered values. Installation order is semantic and is preserved by the Assembly.
 
 Use it only when every contributor participates in an explicit pipeline, such as hooks, policy checks, or prompt contributors. Do not use it as an unordered registry.
+
+`model.attempt.observer` is the exceptional synchronous fail-closed chain. Its
+start phase finishes before provider request bytes may be sent; a later start
+rejection receives reverse-order compensation in every earlier observer. Its
+finish phase completes before retry or logical completion, while the Runtime
+still persists the real physical outcome if an observer fails. Passive
+Trace/Metric/Audit/Usage chains cannot reject work.
 
 ## Dependency rules
 
@@ -269,6 +283,12 @@ standard values and their JSON representation uses those exact names, while
 provider wire blocks and model IDs are not. Tool input is another: JSON Schema
 Draft 2020-12 is standard, while provider-specific keyword and size limits are
 not.
+
+The same rule now fixes Goal decisions and reasons, Memory scopes and kinds,
+Workflow job states and mailbox addresses, and Billing attempt/price/quota
+facts. Account ownership, plans, provider credentials, durable storage engines,
+child-agent implementations, and product UI remain explicit replaceable
+components or product configuration.
 
 Replaceable behavior, policy, storage, transport, and provider implementation
 remain Slot components. Stable semantics are not made configurable merely to

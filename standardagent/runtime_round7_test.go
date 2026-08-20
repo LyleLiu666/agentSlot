@@ -220,6 +220,11 @@ func TestBeforeRunCompleteMayOnlyProposeInput(t *testing.T) {
 	if h.beforeCalls() != 2 {
 		t.Fatalf("BeforeRunComplete calls = %d, want 2", h.beforeCalls())
 	}
+	for _, view := range h.completionViews() {
+		if view.ModelConfig.ModelID != "default" || view.ModelConfig.Reasoning != model.ReasoningDefault {
+			t.Fatalf("completion hook model config = %#v", view.ModelConfig)
+		}
+	}
 }
 
 func TestModelSwitchRequiresExecutorSupportAndExplicitAttachmentLossConfirmation(t *testing.T) {
@@ -399,18 +404,25 @@ type recordingHook struct {
 	mu       sync.Mutex
 	proposal agent.MessageInput
 	before   int
+	views    []hook.RunCompleteView
 }
 
-func (h *recordingHook) BeforeRunComplete(context.Context, hook.RunCompleteView) (hook.FollowOnProposal, error) {
+func (h *recordingHook) BeforeRunComplete(_ context.Context, view hook.RunCompleteView) (hook.FollowOnProposal, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.before++
+	h.views = append(h.views, view)
 	if h.before == 1 {
 		return hook.FollowOnProposal{Messages: []agent.MessageInput{h.proposal}}, nil
 	}
 	return hook.FollowOnProposal{}, nil
 }
 func (h *recordingHook) beforeCalls() int { h.mu.Lock(); defer h.mu.Unlock(); return h.before }
+func (h *recordingHook) completionViews() []hook.RunCompleteView {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]hook.RunCompleteView(nil), h.views...)
+}
 
 func waitRuntimeIdle(t *testing.T, access interaction.GatewayAccess, id agent.SessionID) {
 	t.Helper()

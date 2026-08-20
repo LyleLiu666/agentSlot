@@ -24,18 +24,21 @@ Current repository reality:
 
 | Inventory | Count |
 | --- | ---: |
-| Mapped standard component ecosystems | 37 |
-| Standardized domain vocabularies | 4 |
-| Contracted AgentSlot-owned domain interfaces | 16 |
+| Mapped standard component ecosystems | 40 |
+| Standardized domain vocabularies | 8 |
+| Contracted AgentSlot-owned domain interfaces | 27 |
 | Conformant component ecosystems | 0 |
 | Proven component ecosystems | 0 |
 | Assembled standard component ecosystems | 0 |
 
 The generic composition protocol exports five Go interfaces: `Module`,
-`SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. Sixteen domain
-contracts are now defined in the `session`, `model`, `tool`, `context`, `hook`,
-`interaction`, `policy`, and `observe` packages; they are Contracted but not
-yet Conformant or Proven.
+`SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. Twenty-seven
+domain contracts are now defined across the standard leaf packages; they are
+Contracted but not yet Conformant or Proven.
+
+The eight counted vocabulary families are model capability, tool calls,
+policy/approval, observation, Goal, Memory, Workflow, and Billing. This count
+tracks finite interoperable words and facts, not arbitrary constants.
 
 ## Runnable standard profile
 
@@ -134,7 +137,7 @@ method-level contract is an engineering result.
 | **Proven** | At least two semantically independent implementations pass the conformance suite. Wrappers over the same implementation count once. |
 | **Assembled** | A reference application exchanges proven implementations through the Slot without concrete-type branches. |
 
-Sixteen foundational domain rows are now **Contracted**: each has a public
+Twenty-seven domain rows are now **Contracted**: each has a public
 domain interface, typed Slot, and contract tests. The repository now contains
 independent memory and crash-safe file Session stores, deterministic Fake and
 OpenAI Chat Compatible executors, Bash/file/HTTP tools, in-process and CLI
@@ -157,6 +160,8 @@ Slots, and several modules may contribute to one `Many` or `Chain` Slot.
 | `gateway.channel` | `GatewayChannel` | `Many` | globally requires at least 1 | Binds one caller-facing protocol, function API, or UI to the fixed Gateway and receives only `GatewayAccess`. | Contracted |
 | `interaction.command` | `InteractionCommand` | `Many` | optional | Registers a keyed UI-neutral command with the fixed Gateway; Channels render the shared descriptor as slash commands, menus, buttons, forms, or command palettes. | Contracted |
 | `agent.hook` | `AgentHook` | `Chain` | optional | Proposes controlled follow-on input before run completion; it cannot mutate Session state or become a second Runtime controller. | Contracted |
+| `goal.store` | `goal.Store` | `One` | optional; installed with `goal.evaluator` | Owns one CAS-protected objective lifecycle per Session, separate from append-only conversation History. | Contracted |
+| `goal.evaluator` | `goal.Evaluator` | `One` | optional; installed with `goal.store` | Makes a structured continue/blocked/done decision before an otherwise finished Run closes. | Contracted |
 | `session.commit.observer` | `SessionCommitObserver` | `Chain` | optional | Asynchronously observes applied Session revisions and their appended History sequence ranges; failures and panics cannot roll back a commit. | Contracted |
 
 The fixed AgentRuntime and Gateway are deliberately absent from this table: the
@@ -165,11 +170,20 @@ needs a wholly different loop or interaction backend may define a local Slot
 and explicit non-standard profile on the generic composition core, but it is
 not a conforming standard LLM Agent application.
 
+Goal is deliberately attached to the fixed completion boundary rather than
+implemented as CRUD alone. An active Goal is evaluated after the assistant
+would otherwise stop. `continue` supplies one identity-free follow-on input;
+`blocked` pauses the Goal; `done` completes it. The finite reason vocabulary is
+validated, model-backed evaluators receive the same restricted AttemptRecorder,
+and evaluator failure pauses rather than guessing. User steer arriving during
+evaluation takes precedence. Goal state remains outside conversation History.
+
 ### 2. Model access
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
 | `model.executor` | `ModelExecutor` | `One` | globally required | Validates selected-model capabilities, counts complete requests, and executes one logical model call while durably recording each physical attempt through the restricted AttemptRecorder. | Contracted |
+| `model.attempt.observer` | `AttemptObserver` | `Chain` | optional | Synchronously records or rejects one physical provider attempt before dispatch and after completion; unlike passive telemetry it may fail closed. | Contracted |
 | `model.provider` | `ModelProvider` | `Many` | optional; required only by an Executor that declares it | Implements named provider access for Executors that compose local adapters. | Mapped |
 | `model.selector` | `ModelSelector` | `One` | optional; conditional for dynamic routing | Selects a provider/model using explicit request and policy inputs. | Mapped |
 | `model.catalog` | `ModelCatalog` | `Many` | optional | Describes available models and their declared capabilities without exposing credentials. | Contracted |
@@ -233,7 +247,7 @@ decisions must use policy/approval components rather than concrete UI checks.
 | `session.store` | `SessionStore` | `One` | globally required | Persists the whole Session aggregate, including SessionModelConfig, and its atomic revision/CAS transactions; History remains the unique append-only fact view inside that aggregate. | Contracted |
 | `context.source` | `ContextSource` | `Chain` | optional | Contributes ordered context for a model turn. | Contracted |
 | `context.compactor` | `ContextCompactor` | `One` | optional | Replaces the current full Context with a smaller conversation-message projection without rewriting History; AgentRuntime reattaches fixed prompts/tools and validates protocol and hard token limits. | Contracted |
-| `memory.store` | `MemoryStore` | `Many` | optional | Reads and writes durable recall outside the authoritative conversation history. | Mapped |
+| `memory.store` | `MemoryStore` | `Many` | optional | Recalls, remembers, and forgets governed long-term memory outside authoritative conversation History. | Contracted |
 | `checkpoint.store` | `CheckpointStore` | `One` | optional | Saves resumable execution state without pretending it is user-visible history. | Mapped |
 
 Terminology is strict:
@@ -254,6 +268,10 @@ context; it never rewrites History.
 The standard Compactor contract is replaceable: any “summary plus last three
 inbound messages” algorithm is a default implementation, not a framework
 invariant.
+The `memory` package fixes portable scope and memory-kind vocabularies and
+provides optional recall/remember/forget tools plus a pre-recall ContextSource.
+An adapter may map those facts into a richer memory SDK, but it may not turn
+memory into a second Session history or infer write scope from prompt text.
 
 ### 5. Workspace, execution, and artifacts
 
@@ -284,10 +302,16 @@ map.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `agent.provider` | `AgentProvider` | `Many` | optional | Exposes named child-agent or remote-agent capabilities. | Mapped |
-| `workflow.scheduler` | `WorkflowScheduler` | `One` | optional | Schedules multi-step or multi-agent work without replacing the fixed per-Session AgentRuntime. | Mapped |
-| `job.store` | `JobStore` | `One` | optional | Persists queued/running/completed workflow job state. | Mapped |
-| `mailbox` | `Mailbox` | `One` | optional | Carries addressed asynchronous messages between agents or jobs. | Mapped |
+| `agent.provider` | `AgentProvider` | `Many` | optional | Executes a task through a named child-agent or remote-agent implementation. | Contracted |
+| `workflow.scheduler` | `Scheduler` | `One` | optional | Schedules asynchronous multi-agent work without replacing the fixed per-Session AgentRuntime. | Contracted |
+| `job.store` | `JobStore` | `One` | optional | Persists CAS-versioned queued/running/terminal workflow job state and wait notifications. | Contracted |
+| `mailbox` | `Mailbox` | `One` | optional | Carries append-only, addressed asynchronous messages between Sessions and jobs. | Contracted |
+
+The reference Scheduler depends only on these Slots and the optional standard
+`agent.*` tool pack consumes only `workflow.scheduler` and `mailbox`. Its
+in-memory stores prove the lifecycle and replacement boundary; they do not
+claim cross-process recovery or production durability. A durable implementation
+must preserve the same terminal-state and addressed-message facts.
 
 ### 8. Gateway and delivery
 
@@ -334,9 +358,17 @@ and cannot change Run completion.
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
 | `usage.recorder` | `UsageRecorder` | `Chain` | optional | Receives Provider-reported token usage for one identified physical model attempt. | Contracted |
-| `price.resolver` | `PriceResolver` | `One` | optional | Resolves versioned prices for normalized usage. | Mapped |
-| `quota.guard` | `QuotaGuard` | `One` | optional | Accepts or rejects work against declared budgets and quotas. | Mapped |
-| `billing.ledger` | `BillingLedger` | `One` | optional | Persists auditable charges, credits, and reservation outcomes. | Mapped |
+| `price.resolver` | `PriceResolver` | `One` | optional | Resolves an integer-micro, currency- and version-labelled price for normalized usage. | Contracted |
+| `quota.guard` | `QuotaGuard` | `One` | optional | Checks, reserves, commits, or releases explicitly attributed quota before provider work. | Contracted |
+| `billing.ledger` | `BillingLedger` | `One` | optional | Persists immutable physical-attempt intent and outcome facts for audit and later settlement. | Contracted |
+
+`usage.recorder` remains passive and best-effort; it cannot enforce quota or
+serve as the durable billing handoff. The `billing` attempt module instead
+contributes a synchronous `model.attempt.observer`: quota reservation and
+durable intent finish before request bytes may be sent, and terminal ledger and
+quota settlement finish before retry or logical completion. Account, tenant,
+plan, price-table, and credential-fingerprint policy remain explicit adapter or
+product configuration.
 
 ### 10. Operations and audit
 
@@ -347,7 +379,7 @@ and cannot change Run completion.
 | `metric.sink` | `MetricSink` | `Chain` | optional | Receives normalized counters and duration measurements with detached attributes. | Contracted |
 | `health.contributor` | `HealthContributor` | `Chain` | optional | Reports component readiness and health without exposing configuration values. | Mapped |
 
-The `observe` package fixes the fourth finite vocabulary family: correlated
+The `observe` package fixes another finite vocabulary family: correlated
 Runtime/Run/model-attempt/tool trace facts, counter or duration metrics,
 model-config/tool-decision audits, and Provider-reported model token usage.
 These chains are passive and best-effort. They receive no message content,

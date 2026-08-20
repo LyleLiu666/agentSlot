@@ -6,6 +6,7 @@ import (
 
 	agentslot "github.com/LyleLiu666/agentSlot"
 	agentcontext "github.com/LyleLiu666/agentSlot/context"
+	"github.com/LyleLiu666/agentSlot/goal"
 	"github.com/LyleLiu666/agentSlot/hook"
 	"github.com/LyleLiu666/agentSlot/interaction"
 	"github.com/LyleLiu666/agentSlot/model"
@@ -53,9 +54,12 @@ func (m *runtimeModule) RequiredSlots() []agentslot.Requirement {
 		agentslot.RequireOne(model.ExecutorSlot),
 		agentslot.OptionalMany(tool.ToolSlot),
 		agentslot.OptionalMany(model.CatalogSlot),
+		agentslot.OptionalChain(model.AttemptObserverSlot),
 		agentslot.OptionalChain(agentcontext.SourceSlot),
 		agentslot.OptionalOne(agentcontext.CompactorSlot),
 		agentslot.OptionalChain(hook.HookSlot),
+		agentslot.OptionalOne(goal.StoreSlot),
+		agentslot.OptionalOne(goal.EvaluatorSlot),
 		agentslot.OptionalChain(session.CommitObserverSlot),
 		agentslot.OptionalChain(policy.GuardSlot),
 		agentslot.OptionalOne(policy.ApprovalSlot),
@@ -89,6 +93,10 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 				return nil, err
 			}
 			executor, err := agentslot.ResolveOne(resolver, model.ExecutorSlot)
+			if err != nil {
+				return nil, err
+			}
+			attemptObservers, err := agentslot.ResolveChain(resolver, model.AttemptObserverSlot)
 			if err != nil {
 				return nil, err
 			}
@@ -147,6 +155,17 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 			if err != nil {
 				return nil, err
 			}
+			goalStore, hasGoalStore, err := agentslot.ResolveOptionalOne(resolver, goal.StoreSlot)
+			if err != nil {
+				return nil, err
+			}
+			goalEvaluator, hasGoalEvaluator, err := agentslot.ResolveOptionalOne(resolver, goal.EvaluatorSlot)
+			if err != nil {
+				return nil, err
+			}
+			if hasGoalStore != hasGoalEvaluator {
+				return nil, fmt.Errorf("standardagent: goal.store and goal.evaluator must be installed together")
+			}
 			commitObservers, err := agentslot.ResolveChain(resolver, session.CommitObserverSlot)
 			if err != nil {
 				return nil, err
@@ -168,10 +187,10 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 				return nil, err
 			}
 			state := newApplicationRuntime(runtimeDependencies{
-				manager: manager, store: store, executor: executor,
+				manager: manager, store: store, executor: executor, attemptObservers: attemptObservers,
 				commands: commands, commandDescriptors: commandDescriptors,
 				tools: selectedTools, dispatcher: dispatcher, catalogs: catalogs, config: cloneAgentRuntimeConfig(m.config), sources: sources,
-				compactor: compactor, hooks: hooks, commitObservers: commitObservers,
+				compactor: compactor, hooks: hooks, goalStore: goalStore, goalEvaluator: goalEvaluator, commitObservers: commitObservers,
 				traces: traces, metrics: metrics, audits: audits, usages: usages,
 			})
 			m.state = state
@@ -203,6 +222,7 @@ type runtimeDependencies struct {
 	manager            *session.Manager
 	store              session.SessionStore
 	executor           model.ModelExecutor
+	attemptObservers   []model.AttemptObserver
 	commands           []agentslot.Named[interaction.InteractionCommand]
 	commandDescriptors []interaction.CommandDescriptor
 	tools              []agentslot.Named[tool.Tool]
@@ -212,6 +232,8 @@ type runtimeDependencies struct {
 	sources            []agentcontext.ContextSource
 	compactor          agentcontext.ContextCompactor
 	hooks              []hook.AgentHook
+	goalStore          goal.Store
+	goalEvaluator      goal.Evaluator
 	commitObservers    []session.SessionCommitObserver
 	traces             []observe.TraceSink
 	metrics            []observe.MetricSink
@@ -223,33 +245,39 @@ type runtimeDependencies struct {
 // by every Session Runtime. Runtime instances retain component references;
 // they do not copy tools, stores, executors, or clients per Session.
 type runtimeComponents struct {
-	store           session.SessionStore
-	executor        model.ModelExecutor
-	tools           []agentslot.Named[tool.Tool]
-	sources         []agentcontext.ContextSource
-	compactor       agentcontext.ContextCompactor
-	hooks           []hook.AgentHook
-	commitObservers []session.SessionCommitObserver
-	dispatcher      *toolDispatcher
-	catalogs        []agentslot.Named[model.ModelCatalog]
-	config          AgentRuntimeConfig
-	observations    *observationHub
+	store            session.SessionStore
+	executor         model.ModelExecutor
+	attemptObservers []model.AttemptObserver
+	tools            []agentslot.Named[tool.Tool]
+	sources          []agentcontext.ContextSource
+	compactor        agentcontext.ContextCompactor
+	hooks            []hook.AgentHook
+	goalStore        goal.Store
+	goalEvaluator    goal.Evaluator
+	commitObservers  []session.SessionCommitObserver
+	dispatcher       *toolDispatcher
+	catalogs         []agentslot.Named[model.ModelCatalog]
+	config           AgentRuntimeConfig
+	observations     *observationHub
 }
 
 func (d runtimeDependencies) runtimeComponents(observations *observationHub) *runtimeComponents {
 	dispatcher := d.dispatcher.withObservations(observations)
 	return &runtimeComponents{
-		store:           d.store,
-		executor:        d.executor,
-		tools:           append([]agentslot.Named[tool.Tool](nil), d.tools...),
-		sources:         append([]agentcontext.ContextSource(nil), d.sources...),
-		compactor:       d.compactor,
-		hooks:           append([]hook.AgentHook(nil), d.hooks...),
-		commitObservers: append([]session.SessionCommitObserver(nil), d.commitObservers...),
-		dispatcher:      dispatcher,
-		catalogs:        append([]agentslot.Named[model.ModelCatalog](nil), d.catalogs...),
-		config:          cloneAgentRuntimeConfig(d.config),
-		observations:    observations,
+		store:            d.store,
+		executor:         d.executor,
+		attemptObservers: append([]model.AttemptObserver(nil), d.attemptObservers...),
+		tools:            append([]agentslot.Named[tool.Tool](nil), d.tools...),
+		sources:          append([]agentcontext.ContextSource(nil), d.sources...),
+		compactor:        d.compactor,
+		hooks:            append([]hook.AgentHook(nil), d.hooks...),
+		goalStore:        d.goalStore,
+		goalEvaluator:    d.goalEvaluator,
+		commitObservers:  append([]session.SessionCommitObserver(nil), d.commitObservers...),
+		dispatcher:       dispatcher,
+		catalogs:         append([]agentslot.Named[model.ModelCatalog](nil), d.catalogs...),
+		config:           cloneAgentRuntimeConfig(d.config),
+		observations:     observations,
 	}
 }
 
