@@ -12,27 +12,18 @@ import (
 	"github.com/LyleLiu666/agentSlot/tool"
 )
 
-func TestMemoryModuleExplicitlyContributesSessionSlots(t *testing.T) {
-	module, err := session.NewMemoryModule(defaultConfig())
-	if err != nil {
-		t.Fatalf("new memory module: %v", err)
-	}
+func TestMemoryModuleExplicitlyContributesOnlySessionStore(t *testing.T) {
+	module := session.NewMemoryModule()
 	builder := agentslot.NewBuilder()
 	if err := builder.Install(module); err != nil {
 		t.Fatalf("install memory module: %v", err)
 	}
-	assembly, err := builder.Build(
-		agentslot.RequireOne(session.StoreSlot),
-		agentslot.RequireOne(session.ManagerSlot),
-	)
+	assembly, err := builder.Build(agentslot.RequireOne(session.StoreSlot))
 	if err != nil {
 		t.Fatalf("build memory slots: %v", err)
 	}
 	if _, ok := agentslot.Get(assembly, session.StoreSlot); !ok {
 		t.Fatal("memory session.store missing")
-	}
-	if _, ok := agentslot.Get(assembly, session.ManagerSlot); !ok {
-		t.Fatal("memory session.manager missing")
 	}
 }
 
@@ -280,7 +271,7 @@ func TestMemoryStoreRecoveryPairsUnknownOutcomeAndEndsRunOnce(t *testing.T) {
 	if ordinary.RunState != session.RunRunning || len(ordinary.History) != 2 {
 		t.Fatalf("ordinary Load performed recovery: %#v", ordinary)
 	}
-	manager, err := session.NewMemoryManager(store, defaultConfig())
+	manager, err := session.NewManager(store, defaultConfig())
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
@@ -348,9 +339,9 @@ func TestMemoryStoreRecoveryAppendsInterruptedRunFactWithFrozenConfig(t *testing
 	}
 }
 
-func TestMemoryManagerCreateResumeForkAndSummaryPreserveModelRules(t *testing.T) {
+func TestFixedManagerCreateResumeForkAndSummaryPreserveModelRules(t *testing.T) {
 	store := session.NewMemoryStore()
-	manager, err := session.NewMemoryManager(store, defaultConfig())
+	manager, err := session.NewManager(store, defaultConfig())
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
@@ -442,9 +433,9 @@ func TestMemoryManagerCreateResumeForkAndSummaryPreserveModelRules(t *testing.T)
 	}
 }
 
-func TestMemoryManagerCompleteForkRewritesToolFactIdentity(t *testing.T) {
+func TestFixedManagerCompleteForkRewritesToolFactIdentity(t *testing.T) {
 	store := session.NewMemoryStore()
-	manager, err := session.NewMemoryManager(store, defaultConfig())
+	manager, err := session.NewManager(store, defaultConfig())
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
@@ -478,6 +469,55 @@ func TestMemoryManagerCompleteForkRewritesToolFactIdentity(t *testing.T) {
 	}
 	if history[1].ToolCall.MessageID != history[0].Message.ID || history[1].ToolCall.RunID != history[0].Message.RunID || history[1].ToolCall.StepID != history[0].Message.StepID || history[2].ToolResult.CallID != history[1].ToolCall.ID {
 		t.Fatalf("fork broke tool fact references: %#v", history)
+	}
+}
+
+func TestFixedManagerForksAtCompletedHistoryCheckpoint(t *testing.T) {
+	store := session.NewMemoryStore()
+	manager, err := session.NewManager(store, defaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assistant := message("assistant-1", "checkpoint-source", agent.RoleAssistant, "calling")
+	assistant.RunID, assistant.StepID = "run-1", "step-1"
+	call := agent.ToolCall{
+		ID: "call-1", MessageID: assistant.ID, SessionID: assistant.SessionID,
+		RunID: assistant.RunID, StepID: assistant.StepID, Name: "lookup", Arguments: []byte(`{}`),
+	}
+	result := tool.ToolResult{CallID: call.ID, Status: tool.ResultSucceeded, Output: []byte(`{"ok":true}`)}
+	later := message("message-2", assistant.SessionID, agent.RoleUser, "later")
+	later.RunID, later.StepID = "run-2", "step-2"
+	journal := session.JournalEntry{RunID: call.RunID, StepID: call.StepID, ToolCall: &call, ToolResult: &result, Status: session.JournalSucceeded}
+	created, err := store.Create(context.Background(), session.NewSession{
+		Session:    agent.Session{ID: assistant.SessionID, AgentID: "agent-1", WorkspaceID: "workspace-1"},
+		History:    []session.HistoryFact{{Message: &assistant}, {ToolCall: &call}, {ToolResult: &result}, {Message: &later}},
+		RunJournal: []session.JournalEntry{journal}, ModelConfig: defaultConfig(), RunState: session.RunIdle,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Fork(context.Background(), session.ForkRequest{
+		SourceSessionID: created.Session.ID, CutoffSequence: 2, AgentID: "agent-1", WorkspaceID: "workspace-2",
+	}); err == nil {
+		t.Fatal("fork accepted a cutoff inside an unpaired tool exchange")
+	}
+	forked, err := manager.Fork(context.Background(), session.ForkRequest{
+		SourceSessionID: created.Session.ID, CutoffSequence: 3, AgentID: "agent-1", WorkspaceID: "workspace-2",
+	})
+	if err != nil {
+		t.Fatalf("checkpoint fork: %v", err)
+	}
+	view := view(t, forked)
+	if view.Fork == nil || view.Fork.ParentSessionID != created.Session.ID || view.Fork.CutoffSequence != 3 {
+		t.Fatalf("fork provenance = %#v", view.Fork)
+	}
+	if len(view.History) != 3 || len(view.Queue) != 0 || len(view.RunJournal) != 0 || view.RunState != session.RunIdle {
+		t.Fatalf("fork state = history %d queue %d journal %d state %q", len(view.History), len(view.Queue), len(view.RunJournal), view.RunState)
+	}
+	for index, fact := range view.History {
+		if fact.OriginFactID != created.History[index].FactID || fact.FactID == fact.OriginFactID {
+			t.Fatalf("fact %d lineage = fact %q origin %q source %q", index, fact.FactID, fact.OriginFactID, created.History[index].FactID)
+		}
 	}
 }
 

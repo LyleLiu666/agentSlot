@@ -34,21 +34,21 @@ type mountedEntrypoint struct{}
 type entrypointValidation struct{}
 
 type runtimeModule struct {
-	binding *gatewayBinding
-	state   *applicationRuntime
-	config  AgentRuntimeConfig
+	binding      *gatewayBinding
+	state        *applicationRuntime
+	config       AgentRuntimeConfig
+	defaultModel model.Config
 }
 
-func newRuntimeModule(config AgentRuntimeConfig) *runtimeModule {
+func newRuntimeModule(config AgentRuntimeConfig, defaultModel model.Config) *runtimeModule {
 	config = cloneAgentRuntimeConfig(config)
-	return &runtimeModule{binding: &gatewayBinding{}, config: config}
+	return &runtimeModule{binding: &gatewayBinding{}, config: config, defaultModel: defaultModel}
 }
 
 func (m *runtimeModule) ID() string { return runtimeModuleID }
 
 func (m *runtimeModule) RequiredSlots() []agentslot.Requirement {
 	return []agentslot.Requirement{
-		agentslot.RequireOne(session.ManagerSlot),
 		agentslot.RequireOne(session.StoreSlot),
 		agentslot.RequireOne(model.ExecutorSlot),
 		agentslot.OptionalMany(tool.ToolSlot),
@@ -73,11 +73,11 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 			if m.config.Context.HardTokenLimit < 0 {
 				return nil, fmt.Errorf("standardagent: Context HardTokenLimit cannot be negative")
 			}
-			manager, err := agentslot.ResolveOne(resolver, session.ManagerSlot)
+			store, err := agentslot.ResolveOne(resolver, session.StoreSlot)
 			if err != nil {
 				return nil, err
 			}
-			store, err := agentslot.ResolveOne(resolver, session.StoreSlot)
+			manager, err := session.NewManager(store, m.defaultModel)
 			if err != nil {
 				return nil, err
 			}
@@ -182,7 +182,7 @@ func (m *runtimeModule) Stop(ctx stdcontext.Context) error {
 }
 
 type runtimeDependencies struct {
-	manager            session.SessionManager
+	manager            *session.Manager
 	store              session.SessionStore
 	executor           model.ModelExecutor
 	commands           []agentslot.Named[interaction.InteractionCommand]

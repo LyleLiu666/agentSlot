@@ -17,12 +17,10 @@ import (
 )
 
 func TestSlashMenuAndStructuredClientsShareOneGatewayCommandBackend(t *testing.T) {
-	memory, err := session.NewMemoryModule(model.Config{
+	defaultModel := model.Config{
 		ProviderKey: "provider-a", ModelID: "model-a", Reasoning: model.ReasoningDefault,
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
+	memory := session.NewMemoryModule()
 	catalog, err := model.NewStaticCatalog(model.Descriptor{
 		ProviderKey: "provider-b", ModelID: "model-b", Title: "Model B",
 		Capabilities: textCapabilities(128_000),
@@ -33,7 +31,7 @@ func TestSlashMenuAndStructuredClientsShareOneGatewayCommandBackend(t *testing.T
 	functionEntry := inprocess.New()
 	menuEntry := inprocess.New()
 	application := NewApplication(ApplicationSpec{
-		Name: "round8-interaction",
+		Name: "round8-interaction", DefaultModelConfig: defaultModel,
 		Modules: []agentslot.Module{
 			memory,
 			executorModule{executor: model.NewFakeModelExecutor()},

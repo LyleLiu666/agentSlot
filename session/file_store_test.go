@@ -58,6 +58,56 @@ func TestFileStorePersistsSnapshotAndIdempotencyAcrossReopen(t *testing.T) {
 	}
 }
 
+func TestFixedManagerForkPersistsHistoryLineageInFileStore(t *testing.T) {
+	directory := t.TempDir()
+	store := openFileStore(t, directory)
+	configuration := model.Config{ProviderKey: "provider", ModelID: "model", Reasoning: model.ReasoningDefault}
+	manager, err := session.NewManager(store, configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := manager.Create(context.Background(), session.CreateRequest{AgentID: "agent-1", WorkspaceID: "workspace-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := agent.Message{
+		ID: "message-1", SessionID: source.ID(), Role: agent.RoleUser,
+		Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "persisted lineage"}},
+	}
+	if _, err := store.Commit(context.Background(), session.CommitRequest{
+		SessionID: source.ID(), ExpectedRevision: source.Revision(), IdempotencyKey: "source-message",
+		Changes: []session.Change{{Kind: session.AppendMessage, Message: &message}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sourceView, err := store.Load(context.Background(), session.SessionRef{SessionID: source.ID()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	forked, err := manager.Fork(context.Background(), session.ForkRequest{
+		SourceSessionID: source.ID(), AgentID: "agent-1", WorkspaceID: "workspace-2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened := openFileStore(t, directory)
+	defer reopened.Close(context.Background())
+	forkView, err := reopened.Load(context.Background(), session.SessionRef{SessionID: forked.ID()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if forkView.Fork == nil || forkView.Fork.ParentSessionID != source.ID() || len(forkView.History) != 1 {
+		t.Fatalf("fork snapshot = %#v", forkView)
+	}
+	if forkView.History[0].OriginFactID != sourceView.History[0].FactID || forkView.History[0].FactID == forkView.History[0].OriginFactID {
+		t.Fatalf("fork lineage = %#v, source = %#v", forkView.History[0], sourceView.History[0])
+	}
+}
+
 func TestFileStoreCASPublishesOnlyOneConcurrentCommit(t *testing.T) {
 	store := openFileStore(t, t.TempDir())
 	t.Cleanup(func() { _ = store.Close(context.Background()) })

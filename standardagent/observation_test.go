@@ -107,15 +107,13 @@ func TestToolPolicyAndExecutionPublishAuditTraceAndMetricWithoutGivingSinksContr
 
 func startObservedApplication(t *testing.T, executor model.ModelExecutor, records *observationRecords, extras ...agentslot.Module) (interaction.GatewayAccess, func()) {
 	t.Helper()
-	memory, err := session.NewMemoryModule(model.Config{ProviderKey: "provider", ModelID: "first", Reasoning: model.ReasoningDefault})
-	if err != nil {
-		t.Fatal(err)
-	}
+	defaultModel := model.Config{ProviderKey: "provider", ModelID: "first", Reasoning: model.ReasoningDefault}
+	memory := session.NewMemoryModule()
 	entry := &captureEntrypoint{}
 	modules := []agentslot.Module{memory, executorModule{executor: executor}, observationModule{records: records}}
 	modules = append(modules, extras...)
 	modules = append(modules, NewEntrypointModule("entrypoint.observation-test", "test", entry))
-	application := NewApplication(ApplicationSpec{Name: "observation-test", Modules: modules})
+	application := NewApplication(ApplicationSpec{Name: "observation-test", Modules: modules, DefaultModelConfig: defaultModel})
 	running, err := application.Start(context.Background())
 	if err != nil {
 		t.Fatal(err)

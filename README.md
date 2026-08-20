@@ -24,8 +24,8 @@ Typed component slots and deterministic composition for agent systems.
 > A module unifies registration and lifecycle. A slot defines the component ecosystem, interface, cardinality, and ordering rule.
 
 The standard AgentRuntime and its model/tool loop are framework behavior, not a
-replaceable Slot. The replaceable parts are narrower: one SessionManager, one
-SessionStore, one ModelExecutor, zero or more Tools, ordered Context and Hook
+replaceable Slot. The replaceable parts are narrower: one SessionStore, one
+ModelExecutor, zero or more Tools, ordered Context and Hook
 components, one or more Entrypoints, optional keyed InteractionCommands,
 Policy/Approval, and passive observation chains.
 AgentSlot makes those cardinalities explicit and validates the assembled system
@@ -223,10 +223,10 @@ for the agent architecture. It currently maps runtime, model, tools, context,
 history, memory, execution, policy, multi-agent workflow, gateway, billing, and
 operations ecosystems.
 
-A runnable standard LLM agent requires exactly one SessionManager, exactly one
-SessionStore, exactly one ModelExecutor, and at least one Entrypoint. The fixed
-AgentRuntime and fixed in-process Gateway are supplied by the framework rather
-than selected through Slots.
+A runnable standard LLM agent requires exactly one SessionStore, exactly one
+ModelExecutor, and at least one Entrypoint. The fixed SessionManager,
+AgentRuntime, and in-process Gateway are supplied by the framework rather than
+selected through Slots.
 Standard applications install each Entrypoint with
 `standardagent.NewEntrypointModule`; Build rejects a raw Entrypoint contribution
 that would bypass GatewayAccess attachment or lifecycle ordering.
@@ -256,8 +256,9 @@ settings do not change during one Runtime lifetime; the Session's provider,
 model, reasoning, and model parameters can be changed explicitly while idle
 and are snapshotted for each Run.
 
-The `session` package includes a reference `MemoryStore` and `MemoryManager`.
-They implement append-only History facts, Context, Queue, RunJournal,
+The `session` package includes a reference `MemoryStore`; the standard framework
+constructs its fixed SessionManager over the installed Store and the
+Application default model. Together they implement append-only History facts, Context, Queue, RunJournal,
 SessionModelConfig inheritance, Run lifecycle facts, revision/CAS commits, and
 the basic crash recovery transition. These are development and
 contract-reference implementations, not a production database; production
@@ -277,7 +278,7 @@ audio; model-facing tool inputs use self-contained JSON Schema Draft 2020-12.
 Caller and Hook input uses `agent.MessageInput`, which carries content only;
 the fixed Runtime allocates MessageID, Session/Run/Step containment, role, and
 timestamp atomically when it creates a durable `agent.Message` fact.
-Sixteen standard component contracts are now available in the `session`,
+Fifteen standard component contracts are now available in the `session`,
 `model`, `tool`, `context`, `hook`, `interaction`, `policy`, and `observe`
 packages. They are Contracted, but no domain ecosystem is yet Conformant or
 Proven.

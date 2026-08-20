@@ -16,9 +16,9 @@ func TestStandardApplicationLifecycleSurroundsEntrypoints(t *testing.T) {
 	events := &eventLog{}
 	entry := &lifecycleEntrypoint{captureEntrypoint: captureEntrypoint{}, events: events}
 	application := NewApplication(ApplicationSpec{
-		Name: "lifecycle-agent",
+		Name: "lifecycle-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
-			&lifecycleComponentsModule{componentsModule: componentsModule{manager: newFakeManager()}, events: events},
+			&lifecycleComponentsModule{componentsModule: componentsModule{store: newSeededStore()}, events: events},
 			NewEntrypointModule("entrypoint.test", "test", entry),
 		},
 	})
@@ -40,9 +40,9 @@ func TestEntrypointStartFailureRollsBackGatewayAndComponents(t *testing.T) {
 	startErr := errors.New("listener failed")
 	entry := &lifecycleEntrypoint{captureEntrypoint: captureEntrypoint{}, events: events, startErr: startErr}
 	application := NewApplication(ApplicationSpec{
-		Name: "rollback-agent",
+		Name: "rollback-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
-			&lifecycleComponentsModule{componentsModule: componentsModule{manager: newFakeManager()}, events: events},
+			&lifecycleComponentsModule{componentsModule: componentsModule{store: newSeededStore()}, events: events},
 			NewEntrypointModule("entrypoint.test", "test", entry),
 		},
 	})

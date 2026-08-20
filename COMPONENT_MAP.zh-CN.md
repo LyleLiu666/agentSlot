@@ -22,16 +22,16 @@
 
 | 资产 | 数量 |
 | --- | ---: |
-| 已映射的标准组件生态位 | 42 |
+| 已映射的标准组件生态位 | 41 |
 | 已标准化的领域词汇 | 4 |
-| 已定义契约的 AgentSlot 自有领域接口 | 16 |
+| 已定义契约的 AgentSlot 自有领域接口 | 15 |
 | 通过一致性验证的组件生态位 | 0 |
 | 已由独立实现证明的组件生态位 | 0 |
 | 已进入标准装配的组件生态位 | 0 |
 
 独立的组装协议目前导出了五个 Go 接口：`Module`、`SlotRequirer`、
 `Registrar`、`Contribution` 和 `Lifecycle`。它们是框架机制，不能代替
-地图中 42 个 Agent 领域组件生态位；其中 16 个已经具备公开合同。
+地图中 41 个 Agent 领域组件生态位；其中 15 个已经具备公开合同。
 
 ## 可运行标准 Profile
 
@@ -39,7 +39,7 @@
 `*agentslot.Application`，自动挂载固定 AgentRuntime/Gateway 层；通用
 `agentslot.NewApplication` 不会根据已安装 Slot 隐式推断标准 Agent。
 
-只有最终 Assembly（应用装配结果）同时包含以下四类组件时，一个 AgentSlot 应用才符合
+只有最终 Assembly（应用装配结果）同时包含以下三类组件时，一个 AgentSlot 应用才符合
 “可运行标准 Agent Profile”：
 
 `Assembly` 是当前 Go 实现导出的不可变 Build 结果。其描述对象为
@@ -47,7 +47,6 @@
 
 | Slot ID | 标准契约 | 类型 | 必需基数 | 职责 |
 | --- | --- | --- | --- | --- |
-| `session.manager` | `SessionManager` | `One` | 恰好 1 个 | 创建、恢复、完整 fork 或摘要启动稳定 Session，但不吞并可替换的持久化实现。 |
 | `session.store` | `SessionStore` | `One` | 恰好 1 个 | 持久化 Session 聚合中的 History、Context、Queue、RunJournal、SessionModelConfig、revision 和原子 CAS 事务。 |
 | `model.executor` | `ModelExecutor` | `One` | 恰好 1 个 | 执行一次逻辑模型调用，并封装 Provider 专属的真实请求、流恢复和最终失败语义。 |
 | `interaction.entrypoint` | `Entrypoint` | `Many` | 至少 1 个 | 把 TUI、Web、桌面端、函数、HTTP、ACP 或其他调用界面适配到固定 Gateway。 |
@@ -92,8 +91,8 @@ flowchart LR
     E["Entrypoint（1..n）"] --> G
     IC["InteractionCommand（0..n）"] --> G
     G --> RC
-    RC --> SM["SessionManager（1）"]
-    SM --> SS["SessionStore（1）"]
+    RC --> SM["固定 SessionManager"]
+    SM --> SS["SessionStore Slot（1）"]
     REG -->|"CreateSession / ResumeSession"| R["框架 AgentRuntime"]
     R --> ME["ModelExecutor（1）"]
     ME -. "可选依赖" .-> MP["ModelProvider（0..n）"]
@@ -117,7 +116,7 @@ flowchart LR
 | **已证明（Proven）** | 至少两个语义上独立的实现通过一致性测试；同一实现的不同包装只能算一个。 |
 | **已装配（Assembled）** | 参考应用能够通过 Slot 替换已证明的实现，不包含具体类型分支。 |
 
-当前已有 16 个基础领域生态位进入**已定义契约（Contracted）**：它们拥有公开
+当前已有 15 个基础领域生态位进入**已定义契约（Contracted）**：它们拥有公开
 领域接口、typed Slot 和合同测试。仓库已经包含相互独立的内存/崩溃安全文件
 SessionStore、确定性 Fake/OpenAI Chat Compatible Executor、Bash/文件/HTTP 工具、
 进程内/CLI Entrypoint、确定性的工具策略与审批组件，以及 JSON Lines 观察模块；固定
@@ -135,7 +134,6 @@ Runtime 不按具体类型分支即可消费它们。由于尚未建立可复用
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `session.manager` | `SessionManager` | `One` | 全局必需 | 创建、恢复、完整 fork 或摘要启动稳定 Session，并依赖可替换的 SessionStore 持久化。 | 已定义契约 |
 | `interaction.entrypoint` | `Entrypoint` | `Many` | 全局至少 1 个 | 把调用方协议、函数 API 或 UI 适配到固定 Gateway，不能取得 RuntimeAccess。 | 已定义契约 |
 | `interaction.command` | `InteractionCommand` | `Many` | 可选 | 向固定 Gateway 注册具名、UI-neutral 的结构化命令；Entrypoint 把共享描述渲染为 Slash、菜单、按钮、表单或命令面板。 | 已定义契约 |
 | `agent.hook` | `AgentHook` | `Chain` | 可选 | 有序执行受控 Hook：在 Run 完成前提出后续输入，或观察已提交事实，但不能直接修改 Session 或 Runtime 状态。 | 已定义契约 |

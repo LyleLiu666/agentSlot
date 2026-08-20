@@ -9,52 +9,39 @@ import (
 
 	agentslot "github.com/LyleLiu666/agentSlot"
 	agent "github.com/LyleLiu666/agentSlot/agent"
+	"github.com/LyleLiu666/agentSlot/model"
 )
 
 const memoryModuleID = "session.memory"
 
-// NewMemoryModule returns an explicitly installable development module that
-// contributes one paired MemoryStore and MemoryManager. Standard applications
-// never install it implicitly; products remain free to provide either Slot
-// with an independent implementation.
-func NewMemoryModule(defaultConfig SessionModelConfig) (agentslot.Module, error) {
-	store := NewMemoryStore()
-	manager, err := NewMemoryManager(store, defaultConfig)
-	if err != nil {
-		return nil, err
-	}
-	return memoryModule{store: store, manager: manager}, nil
+// NewMemoryModule returns an explicitly installable development Store module.
+// The standard framework constructs its fixed Manager from this Store and the
+// Application default model configuration.
+func NewMemoryModule() agentslot.Module {
+	return memoryModule{store: NewMemoryStore()}
 }
 
 type memoryModule struct {
-	store   *MemoryStore
-	manager *MemoryManager
+	store *MemoryStore
 }
 
 func (memoryModule) ID() string { return memoryModuleID }
 
 func (m memoryModule) Register(registrar agentslot.Registrar) error {
-	return registrar.Contribute(
-		agentslot.Set(StoreSlot, SessionStore(m.store)),
-		agentslot.Set(ManagerSlot, SessionManager(m.manager)),
-	)
+	return registrar.Contribute(agentslot.Set(StoreSlot, SessionStore(m.store)))
 }
 
-// MemoryManager is the reference SessionManager paired with MemoryStore. It
-// owns only ID allocation and aggregate derivation; all durable state remains
-// behind SessionStore.
-type MemoryManager struct {
+// Manager is the fixed Session lifecycle implementation. It owns only ID
+// allocation and derivation rules; all durable state remains behind Store.
+type Manager struct {
 	store         SessionStore
 	defaultConfig SessionModelConfig
 	idPrefix      string
 	sequence      atomic.Uint64
 }
 
-var _ SessionManager = (*MemoryManager)(nil)
-
-// NewMemoryManager validates the default model configuration once at assembly
-// time. A Session may explicitly override it at creation or derivation.
-func NewMemoryManager(store SessionStore, defaultConfig SessionModelConfig) (*MemoryManager, error) {
+// NewManager validates the fixed Manager dependencies once at assembly time.
+func NewManager(store SessionStore, defaultConfig SessionModelConfig) (*Manager, error) {
 	if store == nil {
 		return nil, invalid("session.manager", "store is required")
 	}
@@ -65,10 +52,10 @@ func NewMemoryManager(store SessionStore, defaultConfig SessionModelConfig) (*Me
 	if err != nil {
 		return nil, agent.NewError(agent.ErrorInternal, "session.manager", "cannot initialize ID allocator", err)
 	}
-	return &MemoryManager{store: store, defaultConfig: cloneModelConfig(defaultConfig), idPrefix: prefix}, nil
+	return &Manager{store: store, defaultConfig: cloneModelConfig(defaultConfig), idPrefix: prefix}, nil
 }
 
-func (m *MemoryManager) Create(ctx context.Context, request CreateRequest) (Session, error) {
+func (m *Manager) Create(ctx context.Context, request CreateRequest) (Session, error) {
 	if err := validateScope(request.AgentID, request.WorkspaceID); err != nil {
 		return nil, invalid("session.manager.create", err.Error())
 	}
@@ -88,7 +75,7 @@ func (m *MemoryManager) Create(ctx context.Context, request CreateRequest) (Sess
 	return newMemorySession(m.store, snapshot), nil
 }
 
-func (m *MemoryManager) Resume(ctx context.Context, request ResumeRequest) (Session, error) {
+func (m *Manager) Resume(ctx context.Context, request ResumeRequest) (Session, error) {
 	if !request.SessionID.Valid() {
 		return nil, invalid("session.manager.resume", "session ID is required")
 	}
@@ -99,7 +86,7 @@ func (m *MemoryManager) Resume(ctx context.Context, request ResumeRequest) (Sess
 	return newMemorySession(m.store, snapshot), nil
 }
 
-func (m *MemoryManager) Fork(ctx context.Context, request ForkRequest) (Session, error) {
+func (m *Manager) Fork(ctx context.Context, request ForkRequest) (Session, error) {
 	if !request.SourceSessionID.Valid() || !request.AgentID.Valid() || !request.WorkspaceID.Valid() {
 		return nil, invalid("session.manager.fork", "source session, agent, and workspace are required")
 	}
@@ -107,8 +94,12 @@ func (m *MemoryManager) Fork(ctx context.Context, request ForkRequest) (Session,
 	if err != nil {
 		return nil, err
 	}
-	if source.RunState == RunRunning {
+	if request.CutoffSequence == 0 && source.RunState == RunRunning {
 		return nil, agent.NewCodedError(agent.ErrorConflict, agent.CodeActiveRun, "session.manager.fork", "cannot fork a session while a run is active", nil)
+	}
+	cutoff, history, err := selectForkHistory(source.History, request.CutoffSequence)
+	if err != nil {
+		return nil, err
 	}
 	config, err := chooseConfig(request.ModelConfig, source.ModelConfig)
 	if err != nil {
@@ -116,6 +107,7 @@ func (m *MemoryManager) Fork(ctx context.Context, request ForkRequest) (Session,
 	}
 	newID := agent.SessionID(m.nextID("session"))
 	derived := cloneSnapshot(source)
+	derived.History = history
 	derived = rewriteForFork(derived, newID, request.AgentID, request.WorkspaceID, m)
 	derived.ModelConfig = config
 	derived.Session.ParentSessionID = source.Session.ID
@@ -124,6 +116,7 @@ func (m *MemoryManager) Fork(ctx context.Context, request ForkRequest) (Session,
 	derived.Revision = 0
 	derived.RunState = RunIdle
 	derived.ActiveRunID = ""
+	derived.Fork = &ForkProvenance{ParentSessionID: source.Session.ID, CutoffSequence: cutoff}
 	created, err := m.store.Create(ctx, NewSession{
 		Session:     derived.Session,
 		History:     derived.History,
@@ -133,6 +126,7 @@ func (m *MemoryManager) Fork(ctx context.Context, request ForkRequest) (Session,
 		ModelConfig: derived.ModelConfig,
 		RunState:    derived.RunState,
 		ActiveRunID: derived.ActiveRunID,
+		Fork:        derived.Fork,
 	})
 	if err != nil {
 		return nil, err
@@ -140,7 +134,7 @@ func (m *MemoryManager) Fork(ctx context.Context, request ForkRequest) (Session,
 	return newMemorySession(m.store, created), nil
 }
 
-func (m *MemoryManager) StartFromSummary(ctx context.Context, request SummaryRequest) (Session, error) {
+func (m *Manager) StartFromSummary(ctx context.Context, request SummaryRequest) (Session, error) {
 	if err := validateScope(request.AgentID, request.WorkspaceID); err != nil {
 		return nil, invalid("session.manager.summary", err.Error())
 	}
@@ -194,7 +188,7 @@ func (m *MemoryManager) StartFromSummary(ctx context.Context, request SummaryReq
 	return newMemorySession(m.store, created), nil
 }
 
-func (m *MemoryManager) nextID(prefix string) string {
+func (m *Manager) nextID(prefix string) string {
 	return fmt.Sprintf("%s-%s-%d", prefix, m.idPrefix, m.sequence.Add(1))
 }
 
@@ -227,11 +221,12 @@ func (s *memorySession) View(ctx context.Context) (Snapshot, error) {
 	return snapshot, nil
 }
 
-func rewriteForFork(source Snapshot, newSessionID agent.SessionID, agentID agent.AgentID, workspaceID agent.WorkspaceID, manager *MemoryManager) Snapshot {
+func rewriteForFork(source Snapshot, newSessionID agent.SessionID, agentID agent.AgentID, workspaceID agent.WorkspaceID, manager *Manager) Snapshot {
 	messageIDs := make(map[agent.MessageID]agent.MessageID)
 	callIDs := make(map[agent.ToolCallID]agent.ToolCallID)
 	runIDs := make(map[agent.RunID]agent.RunID)
 	stepIDs := make(map[agent.StepID]agent.StepID)
+	attemptIDs := make(map[agent.AttemptID]agent.AttemptID)
 	messageID := func(old agent.MessageID) agent.MessageID {
 		if old == "" {
 			return ""
@@ -273,8 +268,17 @@ func rewriteForFork(source Snapshot, newSessionID agent.SessionID, agentID agent
 		stepIDs[old] = mapped
 		return mapped
 	}
+	attemptID := func(old agent.AttemptID) agent.AttemptID {
+		if mapped, ok := attemptIDs[old]; ok {
+			return mapped
+		}
+		mapped := agent.AttemptID(manager.nextID("attempt"))
+		attemptIDs[old] = mapped
+		return mapped
+	}
 	for index := range source.History {
 		fact := &source.History[index]
+		fact.OriginFactID = fact.FactID
 		if fact.Message != nil {
 			message := cloneMessage(*fact.Message)
 			message.ID = messageID(message.ID)
@@ -304,6 +308,25 @@ func rewriteForFork(source Snapshot, newSessionID agent.SessionID, agentID agent
 			run.ModelConfig = cloneModelConfig(run.ModelConfig)
 			fact.Run = &run
 		}
+		if fact.ModelAttempt != nil {
+			attempt := *fact.ModelAttempt
+			attempt.AttemptID = attemptID(attempt.AttemptID)
+			attempt.RunID = runID(attempt.RunID)
+			attempt.StepID = stepID(attempt.StepID)
+			fact.ModelAttempt = &attempt
+		}
+		if fact.ContextContribution != nil {
+			contribution := *fact.ContextContribution
+			contribution.RunID = runID(contribution.RunID)
+			contribution.StepID = stepID(contribution.StepID)
+			contribution.Inputs = rewriteForkInputs(contribution.Inputs, newSessionID, messageID, callID, runID, stepID)
+			fact.ContextContribution = &contribution
+		}
+		if fact.RunBudgetExceeded != nil {
+			budget := *fact.RunBudgetExceeded
+			budget.RunID = runID(budget.RunID)
+			fact.RunBudgetExceeded = &budget
+		}
 	}
 	// A complete-history fork copies canonical conversation facts. Model-facing
 	// Context is re-derived for the child's selected model; pending delivery and
@@ -318,6 +341,112 @@ func rewriteForFork(source Snapshot, newSessionID agent.SessionID, agentID agent
 	source.RunState = RunIdle
 	source.ActiveRunID = ""
 	return source
+}
+
+func selectForkHistory(history []HistoryFact, requested HistorySequence) (HistorySequence, []HistoryFact, error) {
+	if len(history) == 0 {
+		if requested != 0 {
+			return 0, nil, invalid("session.manager.fork", "fork cutoff does not exist")
+		}
+		return 0, nil, nil
+	}
+	cutoff := requested
+	if cutoff == 0 {
+		cutoff = history[len(history)-1].Sequence
+	}
+	end := -1
+	for index := range history {
+		if history[index].Sequence == cutoff {
+			end = index
+			break
+		}
+	}
+	if end < 0 {
+		return 0, nil, invalid("session.manager.fork", "fork cutoff does not exist")
+	}
+	if requested != 0 && !completedForkBoundary(history, end) {
+		return 0, nil, invalid("session.manager.fork", "fork cutoff is not a completed Step boundary")
+	}
+	selected := make([]HistoryFact, end+1)
+	for index := range selected {
+		selected[index] = cloneHistoryFact(history[index])
+	}
+	if err := validateForkProtocol(selected); err != nil {
+		return 0, nil, invalid("session.manager.fork", err.Error())
+	}
+	return cutoff, selected, nil
+}
+
+func completedForkBoundary(history []HistoryFact, index int) bool {
+	fact := history[index]
+	if fact.StepID.Valid() {
+		return index == len(history)-1 || history[index+1].StepID != fact.StepID
+	}
+	return fact.Run != nil && fact.Run.Kind != RunStarted
+}
+
+func validateForkProtocol(history []HistoryFact) error {
+	calls := make(map[agent.ToolCallID]bool)
+	results := make(map[agent.ToolCallID]bool)
+	attempts := make(map[agent.AttemptID]bool)
+	terminals := make(map[agent.AttemptID]bool)
+	for _, fact := range history {
+		if fact.ToolCall != nil {
+			calls[fact.ToolCall.ID] = true
+		}
+		if fact.ToolResult != nil {
+			results[fact.ToolResult.CallID] = true
+		}
+		if fact.ModelAttempt != nil {
+			if fact.ModelAttempt.Kind == AttemptStarted {
+				attempts[fact.ModelAttempt.AttemptID] = true
+			} else {
+				terminals[fact.ModelAttempt.AttemptID] = true
+			}
+		}
+	}
+	for id := range calls {
+		if !results[id] {
+			return fmt.Errorf("fork cutoff leaves tool call %q unpaired", id)
+		}
+	}
+	for id := range attempts {
+		if !terminals[id] {
+			return fmt.Errorf("fork cutoff leaves model attempt %q unterminated", id)
+		}
+	}
+	return nil
+}
+
+func rewriteForkInputs(
+	inputs []model.Input,
+	sessionID agent.SessionID,
+	messageID func(agent.MessageID) agent.MessageID,
+	callID func(agent.ToolCallID) agent.ToolCallID,
+	runID func(agent.RunID) agent.RunID,
+	stepID func(agent.StepID) agent.StepID,
+) []model.Input {
+	result := make([]model.Input, len(inputs))
+	for index, input := range inputs {
+		result[index] = cloneModelInput(input)
+		if result[index].Message != nil {
+			result[index].Message.ID = messageID(result[index].Message.ID)
+			result[index].Message.SessionID = sessionID
+			result[index].Message.RunID = runID(result[index].Message.RunID)
+			result[index].Message.StepID = stepID(result[index].Message.StepID)
+		}
+		if result[index].ToolCall != nil {
+			result[index].ToolCall.ID = callID(result[index].ToolCall.ID)
+			result[index].ToolCall.MessageID = messageID(result[index].ToolCall.MessageID)
+			result[index].ToolCall.SessionID = sessionID
+			result[index].ToolCall.RunID = runID(result[index].ToolCall.RunID)
+			result[index].ToolCall.StepID = stepID(result[index].ToolCall.StepID)
+		}
+		if result[index].ToolResult != nil {
+			result[index].ToolResult.CallID = callID(result[index].ToolResult.CallID)
+		}
+	}
+	return result
 }
 
 func validateScope(agentID agent.AgentID, workspaceID agent.WorkspaceID) error {

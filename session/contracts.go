@@ -20,20 +20,8 @@ import (
 // stable domain name; provider addresses and credentials are not included.
 type SessionModelConfig = model.Config
 
-// ManagerSlot is the standard Session creation and recovery ecosystem.
-var ManagerSlot = agentslot.One[SessionManager]("session.manager")
-
 // StoreSlot is the standard durable Session aggregate ecosystem.
 var StoreSlot = agentslot.One[SessionStore]("session.store")
-
-// Manager creates, restores, and derives complete Session aggregates. It does
-// not execute a model or tool loop.
-type SessionManager interface {
-	Create(context.Context, CreateRequest) (Session, error)
-	Resume(context.Context, ResumeRequest) (Session, error)
-	Fork(context.Context, ForkRequest) (Session, error)
-	StartFromSummary(context.Context, SummaryRequest) (Session, error)
-}
 
 // CreateRequest describes the stable identity needed to create a Session.
 // Product-specific defaults are resolved by the standard Agent layer.
@@ -52,6 +40,7 @@ type ResumeRequest struct {
 // choice between a complete history fork and a summary start is explicit.
 type ForkRequest struct {
 	SourceSessionID agent.SessionID
+	CutoffSequence  HistorySequence
 	AgentID         agent.AgentID
 	WorkspaceID     agent.WorkspaceID
 	ModelConfig     *SessionModelConfig
@@ -81,6 +70,12 @@ type Snapshot struct {
 	ModelConfig SessionModelConfig
 	RunState    RunState
 	ActiveRunID agent.RunID
+	Fork        *ForkProvenance
+}
+
+type ForkProvenance struct {
+	ParentSessionID agent.SessionID
+	CutoffSequence  HistorySequence
 }
 
 // SessionEvent is durable aggregate metadata that must not be projected into
@@ -139,14 +134,15 @@ const (
 // HistoryFact is one ordered, append-only fact in a complete Session History.
 // Store assigns its envelope; callers supply exactly one typed payload.
 type HistoryFact struct {
-	FactID    agent.FactID
-	Sequence  HistorySequence
-	SessionID agent.SessionID
-	RunID     agent.RunID
-	StepID    agent.StepID
-	At        time.Time
-	Actor     agent.ActorIdentity
-	Kind      HistoryFactKind
+	FactID       agent.FactID
+	OriginFactID agent.FactID
+	Sequence     HistorySequence
+	SessionID    agent.SessionID
+	RunID        agent.RunID
+	StepID       agent.StepID
+	At           time.Time
+	Actor        agent.ActorIdentity
+	Kind         HistoryFactKind
 
 	Message             *agent.Message
 	ToolCall            *agent.ToolCall
@@ -161,6 +157,9 @@ type HistoryFact struct {
 // Validate checks the payload and its Session containment. Tool results do
 // not carry a SessionID themselves; the store pairs them with their call.
 func (f HistoryFact) Validate(sessionID agent.SessionID) error {
+	if f.OriginFactID != "" && !f.OriginFactID.Valid() {
+		return fmt.Errorf("session: history origin fact ID is invalid")
+	}
 	if f.FactID.Valid() || f.Sequence != 0 || f.SessionID.Valid() || !f.At.IsZero() || f.Actor.Valid() || f.Kind != "" || f.RunID.Valid() || f.StepID.Valid() {
 		if !f.FactID.Valid() || f.Sequence == 0 || f.SessionID != sessionID || f.At.IsZero() || !f.Actor.Valid() || f.Kind != f.payloadKind() {
 			return fmt.Errorf("session: history fact envelope is invalid")
@@ -531,7 +530,7 @@ type HistoryPage struct {
 	HasMore bool
 }
 
-// NewSession is the complete initial aggregate supplied by SessionManager.
+// NewSession is the complete initial aggregate supplied by the fixed framework Manager.
 // The Store persists it atomically and does not invent product defaults or
 // stable IDs.
 type NewSession struct {
@@ -543,6 +542,7 @@ type NewSession struct {
 	ModelConfig SessionModelConfig
 	RunState    RunState
 	ActiveRunID agent.RunID
+	Fork        *ForkProvenance
 }
 
 // SessionRef is the narrow durable identity accepted by Store.Load.

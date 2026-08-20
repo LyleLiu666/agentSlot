@@ -57,8 +57,8 @@ build attempt and must remain free of lifecycle side effects. A failed start
 rolls back only modules whose `Start` completed successfully.
 
 An Application Assembly is the application scope, not a Session scope. One Assembly can
-serve many Workspaces and Sessions. It owns shared components such as
-SessionManager, SessionStore, ModelExecutor, optional Provider adapters, Tools,
+serve many Workspaces and Sessions. It owns the fixed SessionManager and shared
+components such as SessionStore, ModelExecutor, optional Provider adapters, Tools,
 Context components, Hooks, InteractionCommands, Entrypoints, and Gateway
 adapters. When the Assembly starts, the resulting application Runtime owns one
 process-local Session-to-AgentRuntime registry and one fixed in-process Gateway.
@@ -77,8 +77,10 @@ Closing it never deletes the Session or its durable views.
 
 The runtime boundary below the Assembly is explicit:
 
-1. `SessionManager` creates, resumes, fully forks, or summary-starts a stable
-   Session and performs recovery through the replaceable `SessionStore`.
+1. The fixed framework `SessionManager` creates, resumes, fully forks, or
+   summary-starts a stable Session and performs recovery through the replaceable
+   `SessionStore`. It is constructed from the Store, the Application default
+   model configuration, and an internal ID generator; it is not a Slot.
 2. The Session aggregate durably owns History, Context, Queue, RunJournal, and
    SessionModelConfig together with revision/CAS transaction state.
    `SessionStore.Recover` is the explicit resume-time crash boundary; ordinary
@@ -161,7 +163,7 @@ assembly before any lifecycle side effect begins.
 
 `One[T]` allows zero or one value. Optionality and uniqueness are separate rules: the slot enforces uniqueness, while the selected product profile decides whether the value is required.
 
-Use it for a selected SessionManager, SessionStore, ModelExecutor, policy
+Use it for a selected SessionStore, ModelExecutor, policy
 arbiter, scheduler, or execution environment. Framework-owned AgentRuntime is
 not represented by `One[T]` because it is not replaceable.
 

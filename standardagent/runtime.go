@@ -229,7 +229,7 @@ func (r *runtimeRegistry) closeAll(ctx context.Context) error {
 }
 
 type runtimeCoordinator struct {
-	manager    session.SessionManager
+	manager    *session.Manager
 	registry   *runtimeRegistry
 	components *runtimeComponents
 }
@@ -276,7 +276,7 @@ func (c *runtimeCoordinator) resume(ctx context.Context, request interaction.Res
 			return nil, errors.Join(err, runtime.close(context.WithoutCancel(ctx)))
 		}
 		if runtime.id() != request.SessionID {
-			return nil, agent.NewError(agent.ErrorInternal, "gateway.resume_session", "SessionManager returned a different SessionID", nil)
+			return nil, agent.NewError(agent.ErrorInternal, "gateway.resume_session", "framework Manager returned a different SessionID", nil)
 		}
 		return runtime, nil
 	})
@@ -297,6 +297,7 @@ func (c *runtimeCoordinator) fork(ctx context.Context, request interaction.ForkS
 	}
 	s, err := c.manager.Fork(ctx, session.ForkRequest{
 		SourceSessionID: request.SourceSessionID,
+		CutoffSequence:  request.CutoffSequence,
 		AgentID:         request.AgentID, WorkspaceID: request.WorkspaceID,
 		ModelConfig: request.ModelConfig,
 	})
@@ -459,7 +460,7 @@ type runtimeInstance struct {
 
 func newRuntimeInstance(s session.Session, components *runtimeComponents) (*runtimeInstance, error) {
 	if nilSession(s) {
-		return nil, agent.NewError(agent.ErrorInternal, "standardagent.runtime", "SessionManager returned a nil Session", nil)
+		return nil, agent.NewError(agent.ErrorInternal, "standardagent.runtime", "framework Manager returned a nil Session", nil)
 	}
 	if components == nil {
 		return nil, agent.NewError(agent.ErrorInternal, "standardagent.runtime", "Runtime components were not assembled", nil)
@@ -476,7 +477,7 @@ func newRuntimeInstance(s session.Session, components *runtimeComponents) (*runt
 	}
 	runtime.revisionValue.Store(uint64(s.Revision()))
 	if !runtime.id().Valid() {
-		return nil, agent.NewError(agent.ErrorInternal, "standardagent.runtime", "SessionManager returned an invalid SessionID", nil)
+		return nil, agent.NewError(agent.ErrorInternal, "standardagent.runtime", "framework Manager returned an invalid SessionID", nil)
 	}
 	runtime.observer = newHookObserver(components.hooks)
 	components.observations.publishTrace(observe.TraceRecord{

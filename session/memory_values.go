@@ -28,6 +28,10 @@ func cloneSnapshot(source Snapshot) Snapshot {
 		copy.Events[index] = cloneSessionEvent(event)
 	}
 	copy.ModelConfig = cloneModelConfig(source.ModelConfig)
+	if source.Fork != nil {
+		fork := *source.Fork
+		copy.Fork = &fork
+	}
 	return copy
 }
 

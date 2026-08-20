@@ -24,15 +24,15 @@ Current repository reality:
 
 | Inventory | Count |
 | --- | ---: |
-| Mapped standard component ecosystems | 42 |
+| Mapped standard component ecosystems | 41 |
 | Standardized domain vocabularies | 4 |
-| Contracted AgentSlot-owned domain interfaces | 16 |
+| Contracted AgentSlot-owned domain interfaces | 15 |
 | Conformant component ecosystems | 0 |
 | Proven component ecosystems | 0 |
 | Assembled standard component ecosystems | 0 |
 
 The generic composition protocol exports five Go interfaces: `Module`,
-`SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. Sixteen domain
+`SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. Fifteen domain
 contracts are now defined in the `session`, `model`, `tool`, `context`, `hook`,
 `interaction`, `policy`, and `observe` packages; they are Contracted but not
 yet Conformant or Proven.
@@ -46,14 +46,13 @@ mounts the fixed AgentRuntime/Gateway layer. The generic
 Slots.
 
 An AgentSlot application conforms to the runnable standard agent profile only
-when its Assembly contains all four of these component ecosystems:
+when its Assembly contains all three of these component ecosystems:
 
 `Assembly` is the immutable build result exposed by the current Go implementation.
 Its description uses `AssemblyDescription` and the `agentslot.assembly/v0` schema.
 
 | Slot ID | Standard contract | Kind | Required cardinality | Responsibility |
 | --- | --- | --- | --- | --- |
-| `session.manager` | `SessionManager` | `One` | exactly 1 | Creates, resumes, forks, or summary-starts a stable Session without absorbing its replaceable persistence implementation. |
 | `session.store` | `SessionStore` | `One` | exactly 1 | Persists the Session aggregate—History, Context, Queue, RunJournal, SessionModelConfig, revisions, and atomic CAS transactions. |
 | `model.executor` | `ModelExecutor` | `One` | exactly 1 | Executes one logical model call while containing provider-specific physical attempts, streaming recovery, and final failure semantics. |
 | `interaction.entrypoint` | `Entrypoint` | `Many` | at least 1 | Adapts TUI, Web, desktop, function, HTTP, ACP, or another caller-facing surface to the fixed Gateway. |
@@ -108,8 +107,8 @@ flowchart LR
     E["Entrypoint (1..n)"] --> G
     IC["InteractionCommand (0..n)"] --> G
     G --> RC
-    RC --> SM["SessionManager (1)"]
-    SM --> SS["SessionStore (1)"]
+    RC --> SM["fixed SessionManager"]
+    SM --> SS["SessionStore Slot (1)"]
     REG -->|"CreateSession / ResumeSession"| R["framework AgentRuntime"]
     R --> ME["ModelExecutor (1)"]
     ME -. "optional dependency" .-> MP["ModelProvider (0..n)"]
@@ -134,7 +133,7 @@ method-level contract is an engineering result.
 | **Proven** | At least two semantically independent implementations pass the conformance suite. Wrappers over the same implementation count once. |
 | **Assembled** | A reference application exchanges proven implementations through the Slot without concrete-type branches. |
 
-Sixteen foundational domain rows are now **Contracted**: each has a public
+Fifteen foundational domain rows are now **Contracted**: each has a public
 domain interface, typed Slot, and contract tests. The repository now contains
 independent memory and crash-safe file Session stores, deterministic Fake and
 OpenAI Chat Compatible executors, Bash/file/HTTP tools, in-process and CLI
@@ -154,7 +153,6 @@ Slots, and several modules may contribute to one `Many` or `Chain` Slot.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `session.manager` | `SessionManager` | `One` | globally required | Creates, resumes, fully forks, or summary-starts stable Sessions while depending on replaceable SessionStore persistence. | Contracted |
 | `interaction.entrypoint` | `Entrypoint` | `Many` | globally requires at least 1 | Adapts a caller-facing protocol, function API, or UI to the fixed Gateway without receiving Runtime access. | Contracted |
 | `interaction.command` | `InteractionCommand` | `Many` | optional | Registers a keyed UI-neutral command with the fixed Gateway; Entrypoints render the shared descriptor as slash commands, menus, buttons, forms, or command palettes. | Contracted |
 | `agent.hook` | `AgentHook` | `Chain` | optional | Runs ordered, controlled hooks: proposes follow-on input before run completion or observes committed facts, without mutating Session or Runtime state directly. | Contracted |

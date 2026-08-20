@@ -77,6 +77,7 @@ func (s *MemoryStore) Create(ctx context.Context, initial NewSession) (Snapshot,
 		ModelConfig: initial.ModelConfig,
 		RunState:    initial.RunState,
 		ActiveRunID: initial.ActiveRunID,
+		Fork:        initial.Fork,
 	})
 	copy.Session.Revision = copy.Revision
 	s.sessions[copy.Session.ID] = &memoryAggregate{snapshot: copy, idempotency: make(map[string]memoryCommit)}
@@ -200,6 +201,16 @@ func validateNewSession(initial NewSession) error {
 	}
 	if initial.Session.ParentSessionID != "" && initial.Session.ParentRevision == 0 {
 		return invalid("session.create", "derived session requires a parent revision")
+	}
+	if initial.Fork != nil {
+		if initial.Fork.ParentSessionID != initial.Session.ParentSessionID || !initial.Fork.ParentSessionID.Valid() {
+			return invalid("session.create", "fork provenance does not match parent session")
+		}
+		for _, fact := range initial.History {
+			if !fact.OriginFactID.Valid() {
+				return invalid("session.create", "forked history fact requires source identity")
+			}
+		}
 	}
 	if err := initial.ModelConfig.Validate(); err != nil {
 		return invalid("session.create", fmt.Sprintf("invalid model config: %v", err))

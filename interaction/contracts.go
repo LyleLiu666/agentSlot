@@ -84,6 +84,7 @@ type ResumeSessionRequest struct {
 
 type ForkSessionRequest struct {
 	SourceSessionID agent.SessionID
+	CutoffSequence  session.HistorySequence
 	AgentID         agent.AgentID
 	WorkspaceID     agent.WorkspaceID
 	ModelConfig     *session.SessionModelConfig

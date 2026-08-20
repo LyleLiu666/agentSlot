@@ -17,10 +17,11 @@ import (
 // package adds its private Runtime/Gateway module; product modules remain
 // explicit and are mounted through the same generic Application lifecycle.
 type ApplicationSpec struct {
-	Name          string
-	Modules       []agentslot.Module
-	Requirements  []agentslot.Requirement
-	RuntimeConfig AgentRuntimeConfig
+	Name               string
+	Modules            []agentslot.Module
+	Requirements       []agentslot.Requirement
+	RuntimeConfig      AgentRuntimeConfig
+	DefaultModelConfig model.Config
 }
 
 // AgentRuntimeConfig is copied into every Session Runtime. Nil ToolKeys selects
@@ -41,11 +42,10 @@ type ContextConfig struct {
 // Agent module and profile mounted. It has no registration side effects.
 func NewApplication(spec ApplicationSpec) *agentslot.Application {
 	modules := make([]agentslot.Module, 0, len(spec.Modules)+2)
-	modules = append(modules, newRuntimeModule(spec.RuntimeConfig))
+	modules = append(modules, newRuntimeModule(spec.RuntimeConfig, spec.DefaultModelConfig))
 	modules = append(modules, spec.Modules...)
 	modules = append(modules, entrypointValidationModule{})
 	requirements := []agentslot.Requirement{
-		agentslot.RequireOne(session.ManagerSlot),
 		agentslot.RequireOne(session.StoreSlot),
 		agentslot.RequireOne(model.ExecutorSlot),
 		agentslot.RequireMany(interaction.EntrypointSlot, 1),

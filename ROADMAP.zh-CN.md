@@ -62,12 +62,11 @@ Module 只是组件注册和生命周期的载体，不代表一个新的组件�
 
 标准 Profile 必须安装：
 
-- 一个 `SessionManager`；
 - 一个 `SessionStore`；
 - 一个 `ModelExecutor`；
 - 至少一个 `Entrypoint`。
 
-`AgentRuntime` 和内部循环由框架提供，不是 Slot。`ModelProvider`、Tool、Context
+`SessionManager`、`AgentRuntime` 和内部循环由框架提供，不是 Slot。`ModelProvider`、Tool、Context
 组件、AgentHook 和 InteractionCommand 全局可选；固定 Gateway 同样由框架提供，
 不是 Slot。所有 Entrypoint 只能通过 Gateway 接入。如果某个 ModelExecutor 需要本地
 Provider 集合，由它通过 Slot 依赖显式声明。
@@ -115,7 +114,7 @@ Tool 不作为所有 Agent 的强制要求：
 
 ## 4. 当前地图如何演进
 
-当前中英文组件地图中的 42 个生态位是正式基线。在完成逐项评审之前，不用一张
+当前中英文组件地图中的 41 个生态位是正式基线。在完成逐项评审之前，不用一张
 新表直接覆盖它，也不为了追求数量随意增加或删除 Slot。
 
 以下规则已经确定：
@@ -128,8 +127,8 @@ Tool 不作为所有 Agent 的强制要求：
 - Gateway 核心固定；其传输、身份、路由策略和投递组件可以独立替换，不能把某个
   HTTP/WebSocket 服务误当成 Gateway 本身；
 - 标准 `agent.loop` 已删除，因为固定 AgentRuntime 不是开发者可替换的生态位；
-- `session.manager` 与 `session.store` 分离，前者管理 Session 生命周期，后者负责完整
-  Session 聚合的持久化和原子事务；
+- 固定 SessionManager 与 `session.store` 分离，前者是框架能力，后者是负责完整
+  Session 聚合持久化和原子事务的可替换 Slot；
 - `model.executor` 是标准必需 `One` Slot，`model.provider` 是由具体 Executor
   选择性依赖的可选 `Many` Slot；
 - `agent.hook` 是可选 `Chain` Slot，只允许受控 proposal 和提交后观察；
@@ -270,7 +269,7 @@ JSON Lines 观察模块和无具体 Runtime 分支的参考 Agent。所有这些
   UpdateModelConfig/Cancel/WhenIdle/Close；
 - 无密钥确定性 ModelExecutor，用于自动化测试；
 - 正式的 OpenAI Chat Compatible 配置入口；
-- 支持多 Session 隔离的内存 SessionManager/SessionStore；
+- 支持多 Session 隔离的固定 SessionManager 与内存 SessionStore；
 - 一个最小交互入口；
 - Tool 为零也能完成任务。
 
@@ -303,7 +302,7 @@ AgentSlot 参考这些行为，不复制 pi 的类型、聚合 Session 或产品
 - 建立 ComponentCatalog；
 - 从 Catalog 生成中英文地图；
 - 建立防漂移测试；
-- 所有现有 42 项先保持 `mapped`，不虚报接口完成度；
+- 所有候选生态位先保持诚实成熟度，不虚报接口完成度；
 - 对每项 Slot 增删改记录业务理由和兼容影响。
 
 ### 阶段 1：建立共同语言
@@ -317,7 +316,7 @@ AgentSlot 参考这些行为，不复制 pi 的类型、聚合 Session 或产品
 - 用临时 chunk、reset、唯一完整结果、最终失败、取消和关闭场景收敛 ModelEvent
   协议，不能让不同 Executor 各自解释流语义；
 - 保持模型模态和工具 JSON Schema 规则；
-- 声明 `session.manager`、`session.store`、`model.executor`、`agent.hook`、
+- 声明 `session.store`、`model.executor`、`agent.hook`、
   `interaction.command` 及第一批关联 typed Slot，并用红测试固定基数、依赖和错误语义；
 - 继续使用 `Assembly`、`AssemblyDescription` 和 `agentslot.assembly/v0`，不保留旧
   `Plan` 名称的同义 API；
@@ -327,7 +326,7 @@ AgentSlot 参考这些行为，不复制 pi 的类型、聚合 Session 或产品
 
 ### 阶段 2：先证明 Session 合同（参考实现已完成）
 
-- 完成内存 SessionStore 与 SessionManager；当前实现位于 `session` 包，尚未标记
+- 完成内存 SessionStore 与固定 SessionManager；当前实现位于 `session` 包，尚未标记
   `Conformant` 或 `Proven`；
 - 验证 append-only、revision/CAS、幂等和跨 History/Context/Queue/RunJournal 的原子边界；
 - 验证 create、resume、完整 fork、摘要启动和崩溃恢复；
@@ -355,7 +354,7 @@ AgentSlot 参考这些行为，不复制 pi 的类型、聚合 Session 或产品
 - 已完成固定 ToolDispatcher、工具事实事务、Serial/ParallelSafe 调度和首个显式安装的
   Bash Tool；Events、Context、Policy 和 Approval 继续按各自批次完成；
 - 完成持久化 Queue、RunJournal、Context 版本与完整 History 查询；
-- 验证固定 Runtime 更换 ModelExecutor、Provider、Tool、SessionManager、SessionStore、
+- 验证固定 Runtime 更换 ModelExecutor、Provider、Tool、SessionStore、
   Context、Hook 和 Policy
   时没有具体类型分支；
 - 验证工具 call 事实与 Journal pending 同事务、result 后续唯一终结、未知副作用恢复和跨 Session 文件版本冲突；

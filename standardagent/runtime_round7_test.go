@@ -294,27 +294,22 @@ func textCapabilities(limit int) model.ExecutionCapabilities {
 }
 
 type sessionPairModule struct {
-	store   *session.MemoryStore
-	manager *session.MemoryManager
+	store *session.MemoryStore
 }
 
 func (sessionPairModule) ID() string { return "test.session.round7" }
 func (m sessionPairModule) Register(reg agentslot.Registrar) error {
-	return reg.Contribute(agentslot.Set(session.StoreSlot, session.SessionStore(m.store)), agentslot.Set(session.ManagerSlot, session.SessionManager(m.manager)))
+	return reg.Contribute(agentslot.Set(session.StoreSlot, session.SessionStore(m.store)))
 }
 
 func startRound7Application(t *testing.T, executor model.ModelExecutor, config AgentRuntimeConfig, extras ...agentslot.Module) (interaction.GatewayAccess, *session.MemoryStore, func()) {
 	t.Helper()
 	store := session.NewMemoryStore()
-	manager, err := session.NewMemoryManager(store, model.Config{ModelID: "default", Reasoning: model.ReasoningDefault})
-	if err != nil {
-		t.Fatal(err)
-	}
 	entry := &captureEntrypoint{}
-	modules := []agentslot.Module{sessionPairModule{store: store, manager: manager}, executorModule{executor: executor}}
+	modules := []agentslot.Module{sessionPairModule{store: store}, executorModule{executor: executor}}
 	modules = append(modules, extras...)
 	modules = append(modules, NewEntrypointModule("entrypoint.round7", "round7", entry))
-	running, err := NewApplication(ApplicationSpec{Name: "round7", Modules: modules, RuntimeConfig: config}).Start(context.Background())
+	running, err := NewApplication(ApplicationSpec{Name: "round7", Modules: modules, RuntimeConfig: config, DefaultModelConfig: model.Config{ModelID: "default", Reasoning: model.ReasoningDefault}}).Start(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

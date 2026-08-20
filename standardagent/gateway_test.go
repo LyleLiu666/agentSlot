@@ -14,9 +14,9 @@ import (
 func TestGatewayPublishesAndInvokesOneSharedCommandCatalog(t *testing.T) {
 	entry := &captureEntrypoint{}
 	application := NewApplication(ApplicationSpec{
-		Name: "commands-agent",
+		Name: "commands-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
-			componentsModule{manager: newFakeManager()},
+			componentsModule{store: newSeededStore()},
 			commandModule{commands: map[string]interaction.InteractionCommand{
 				"zeta": fakeCommand{descriptor: interaction.CommandDescriptor{Key: "zeta", Title: "Zeta"}},
 				"alpha": fakeCommand{descriptor: interaction.CommandDescriptor{
@@ -61,9 +61,9 @@ func TestGatewayPublishesAndInvokesOneSharedCommandCatalog(t *testing.T) {
 
 func TestBuildRejectsCommandWhoseDescriptorDoesNotMatchSlotKey(t *testing.T) {
 	application := NewApplication(ApplicationSpec{
-		Name: "bad-command-agent",
+		Name: "bad-command-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
-			componentsModule{manager: newFakeManager()},
+			componentsModule{store: newSeededStore()},
 			commandModule{commands: map[string]interaction.InteractionCommand{
 				"model": fakeCommand{descriptor: interaction.CommandDescriptor{Key: "other"}},
 			}},
@@ -78,9 +78,9 @@ func TestBuildRejectsCommandWhoseDescriptorDoesNotMatchSlotKey(t *testing.T) {
 func TestGatewayRoutesExecutionOnlyToAnOpenRuntime(t *testing.T) {
 	entry := &captureEntrypoint{}
 	application := NewApplication(ApplicationSpec{
-		Name: "routing-agent",
+		Name: "routing-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
-			componentsModule{manager: newFakeManager()},
+			componentsModule{store: newSeededStore()},
 			NewEntrypointModule("entrypoint.test", "test", entry),
 		},
 	})
@@ -98,7 +98,7 @@ func TestGatewayRoutesExecutionOnlyToAnOpenRuntime(t *testing.T) {
 		t.Fatalf("resume: %v", err)
 	}
 	_, err = entry.Access().Send(context.Background(), interaction.SendRequest{
-		SessionID: "session-1", ExpectedRevision: 3,
+		SessionID: "session-1", ExpectedRevision: 1,
 		Input: agent.MessageInput{Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "hello"}}},
 	})
 	if err != nil {
@@ -110,9 +110,9 @@ func TestInteractionCommandCannotRetainActionsAfterInvocation(t *testing.T) {
 	entry := &captureEntrypoint{}
 	command := &retainingCommand{}
 	application := NewApplication(ApplicationSpec{
-		Name: "command-scope-agent",
+		Name: "command-scope-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
-			componentsModule{manager: newFakeManager()},
+			componentsModule{store: newSeededStore()},
 			commandModule{commands: map[string]interaction.InteractionCommand{"retain": command}},
 			NewEntrypointModule("entrypoint.test", "test", entry),
 		},
@@ -147,9 +147,9 @@ func TestInteractionCommandCannotRetainActionsAfterInvocation(t *testing.T) {
 func TestCommandActionsAreBoundToInvocationSession(t *testing.T) {
 	entry := &captureEntrypoint{}
 	application := NewApplication(ApplicationSpec{
-		Name: "command-target-agent",
+		Name: "command-target-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
-			componentsModule{manager: newFakeManager()},
+			componentsModule{store: newSeededStore()},
 			commandModule{commands: map[string]interaction.InteractionCommand{"cancel": applyingCommand{}}},
 			NewEntrypointModule("entrypoint.test", "test", entry),
 		},

@@ -16,9 +16,9 @@ import (
 func TestNewApplicationBuildsStandardProfileAndAttachesGateway(t *testing.T) {
 	entry := &captureEntrypoint{}
 	application := NewApplication(ApplicationSpec{
-		Name: "test-agent",
+		Name: "test-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
-			componentsModule{manager: newFakeManager()},
+			componentsModule{store: newSeededStore()},
 			NewEntrypointModule("entrypoint.test", "test", entry),
 		},
 	})
@@ -46,12 +46,12 @@ func TestNewApplicationBuildsStandardProfileAndAttachesGateway(t *testing.T) {
 }
 
 func TestGatewaySnapshotUsesKnownRevisionForReconnectNotCAS(t *testing.T) {
-	manager := newFakeManager()
+	store := newSeededStore()
 	entry := &captureEntrypoint{}
 	application := NewApplication(ApplicationSpec{
-		Name: "snapshot-agent",
+		Name: "snapshot-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
-			componentsModule{manager: manager},
+			componentsModule{store: store},
 			NewEntrypointModule("entrypoint.test", "test", entry),
 		},
 	})
@@ -67,8 +67,8 @@ func TestGatewaySnapshotUsesKnownRevisionForReconnectNotCAS(t *testing.T) {
 	snapshot, err := access.Snapshot(context.Background(), interaction.SnapshotRequest{
 		SessionID: "session-1", KnownRevision: 1,
 	})
-	if err != nil || snapshot.Revision != 3 {
-		t.Fatalf("behind Snapshot = %#v, %v; want current revision 3", snapshot, err)
+	if err != nil || snapshot.Revision != 1 {
+		t.Fatalf("behind Snapshot = %#v, %v; want current revision 1", snapshot, err)
 	}
 	if len(snapshot.History) != 1 || snapshot.History[0].Message == nil || snapshot.History[0].Message.SessionID != "session-1" {
 		t.Fatalf("Snapshot history = %#v, want complete Session history projection", snapshot.History)
@@ -81,13 +81,13 @@ func TestGatewaySnapshotUsesKnownRevisionForReconnectNotCAS(t *testing.T) {
 	}
 }
 
-func TestGatewayRejectsInvalidResumeBeforeCallingManager(t *testing.T) {
-	manager := newFakeManager()
+func TestGatewayRejectsInvalidResumeBeforeCallingStore(t *testing.T) {
+	store := newSeededStore()
 	entry := &captureEntrypoint{}
 	application := NewApplication(ApplicationSpec{
-		Name: "validation-agent",
+		Name: "validation-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
-			componentsModule{manager: manager},
+			componentsModule{store: store},
 			NewEntrypointModule("entrypoint.test", "test", entry),
 		},
 	})
@@ -100,28 +100,8 @@ func TestGatewayRejectsInvalidResumeBeforeCallingManager(t *testing.T) {
 	if !agent.IsKind(err, agent.ErrorInvalidInput) {
 		t.Fatalf("ResumeSession error = %v, kind=%q", err, agent.KindOf(err))
 	}
-	if got := manager.ResumeCalls(); got != 0 {
-		t.Fatalf("SessionManager.Resume calls = %d, want 0", got)
-	}
-}
-
-func TestResumeRejectsTypedNilSessionFromManager(t *testing.T) {
-	entry := &captureEntrypoint{}
-	application := NewApplication(ApplicationSpec{
-		Name: "nil-session-agent",
-		Modules: []agentslot.Module{
-			componentsModule{manager: typedNilResumeManager{fakeManager: newFakeManager()}},
-			NewEntrypointModule("entrypoint.test", "test", entry),
-		},
-	})
-	runtime, err := application.Start(context.Background())
-	if err != nil {
-		t.Fatalf("start: %v", err)
-	}
-	t.Cleanup(func() { _ = runtime.Stop(context.Background()) })
-	_, err = entry.Access().ResumeSession(context.Background(), interaction.ResumeSessionRequest{SessionID: "session-1"})
-	if !agent.IsKind(err, agent.ErrorInternal) {
-		t.Fatalf("ResumeSession error = %v, kind=%q", err, agent.KindOf(err))
+	if got := store.RecoverCalls(); got != 0 {
+		t.Fatalf("SessionStore.Recover calls = %d, want 0", got)
 	}
 }
 
@@ -137,10 +117,10 @@ func TestStandardProfileRejectsMissingRequiredComponents(t *testing.T) {
 
 func TestStandardApplicationRejectsNegativeContextLimitAtBuild(t *testing.T) {
 	application := NewApplication(ApplicationSpec{
-		Name:          "invalid-context-limit",
+		Name: "invalid-context-limit", DefaultModelConfig: testDefaultModel(),
 		RuntimeConfig: AgentRuntimeConfig{Context: ContextConfig{HardTokenLimit: -1}},
 		Modules: []agentslot.Module{
-			componentsModule{manager: newFakeManager()},
+			componentsModule{store: newSeededStore()},
 			NewEntrypointModule("entrypoint.test", "test", &captureEntrypoint{}),
 		},
 	})
@@ -149,9 +129,22 @@ func TestStandardApplicationRejectsNegativeContextLimitAtBuild(t *testing.T) {
 	}
 }
 
+func TestStandardApplicationRequiresValidDefaultModelConfigAtBuild(t *testing.T) {
+	application := NewApplication(ApplicationSpec{
+		Name: "missing-default-model",
+		Modules: []agentslot.Module{
+			componentsModule{store: newSeededStore()},
+			NewEntrypointModule("entrypoint.test", "test", &captureEntrypoint{}),
+		},
+	})
+	if _, err := application.Build(); err == nil {
+		t.Fatal("Build succeeded without a valid Application default model configuration")
+	}
+}
+
 func TestStandardApplicationRejectsEntrypointThatBypassesGatewayWrapper(t *testing.T) {
-	application := NewApplication(ApplicationSpec{Name: "raw-entrypoint", Modules: []agentslot.Module{
-		componentsModule{manager: newFakeManager()},
+	application := NewApplication(ApplicationSpec{Name: "raw-entrypoint", DefaultModelConfig: testDefaultModel(), Modules: []agentslot.Module{
+		componentsModule{store: newSeededStore()},
 		rawEntrypointModule{entrypoint: &captureEntrypoint{}},
 	}})
 	_, err := application.Build()
@@ -161,8 +154,8 @@ func TestStandardApplicationRejectsEntrypointThatBypassesGatewayWrapper(t *testi
 }
 
 func TestStandardApplicationRejectsRawEntrypointAlongsideWrappedEntrypoint(t *testing.T) {
-	application := NewApplication(ApplicationSpec{Name: "mixed-entrypoints", Modules: []agentslot.Module{
-		componentsModule{manager: newFakeManager()},
+	application := NewApplication(ApplicationSpec{Name: "mixed-entrypoints", DefaultModelConfig: testDefaultModel(), Modules: []agentslot.Module{
+		componentsModule{store: newSeededStore()},
 		NewEntrypointModule("entrypoint.wrapped", "wrapped", &captureEntrypoint{}),
 		rawEntrypointModule{entrypoint: &captureEntrypoint{}},
 	}})
@@ -172,12 +165,12 @@ func TestStandardApplicationRejectsRawEntrypointAlongsideWrappedEntrypoint(t *te
 }
 
 func TestConcurrentResumeCreatesOneRuntimePerSession(t *testing.T) {
-	manager := newFakeManager()
+	store := newSeededStore()
 	entry := &captureEntrypoint{}
 	application := NewApplication(ApplicationSpec{
-		Name: "resume-agent",
+		Name: "resume-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
-			componentsModule{manager: manager},
+			componentsModule{store: store},
 			NewEntrypointModule("entrypoint.test", "test", entry),
 		},
 	})
@@ -209,15 +202,15 @@ func TestConcurrentResumeCreatesOneRuntimePerSession(t *testing.T) {
 			t.Fatalf("resume: %v", err)
 		}
 	}
-	if got := manager.ResumeCalls(); got != 1 {
-		t.Fatalf("SessionManager.Resume calls = %d, want 1", got)
+	if got := store.RecoverCalls(); got != 1 {
+		t.Fatalf("SessionStore.Recover calls = %d, want 1", got)
 	}
 
 	snapshot, err := access.Snapshot(context.Background(), interaction.SnapshotRequest{SessionID: "session-1"})
 	if err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}
-	if snapshot.SessionID != "session-1" || snapshot.Revision != 3 {
+	if snapshot.SessionID != "session-1" || snapshot.Revision != 1 {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
 }
@@ -225,9 +218,9 @@ func TestConcurrentResumeCreatesOneRuntimePerSession(t *testing.T) {
 func TestSessionRuntimesShareOneAssembledComponentSet(t *testing.T) {
 	entry := &captureEntrypoint{}
 	application := NewApplication(ApplicationSpec{
-		Name: "component-sharing-agent",
+		Name: "component-sharing-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
-			componentsModule{manager: newFakeManager()},
+			componentsModule{store: newSeededStore()},
 			NewEntrypointModule("entrypoint.test", "test", entry),
 		},
 	})
@@ -271,12 +264,12 @@ func TestSessionRuntimesShareOneAssembledComponentSet(t *testing.T) {
 }
 
 func TestCanceledResumeLeaderDoesNotCancelOtherCallers(t *testing.T) {
-	manager := &cancelFirstResumeManager{fakeManager: newFakeManager(), firstEntered: make(chan struct{})}
+	store := &cancelFirstRecoverStore{seededStore: newSeededStore(), firstEntered: make(chan struct{})}
 	entry := &captureEntrypoint{}
 	application := NewApplication(ApplicationSpec{
-		Name: "resume-cancellation-agent",
+		Name: "resume-cancellation-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
-			componentsModule{manager: manager},
+			componentsModule{store: store},
 			NewEntrypointModule("entrypoint.test", "test", entry),
 		},
 	})
@@ -292,7 +285,7 @@ func TestCanceledResumeLeaderDoesNotCancelOtherCallers(t *testing.T) {
 		_, err := entry.Access().ResumeSession(leaderContext, interaction.ResumeSessionRequest{SessionID: "session-1"})
 		leaderDone <- err
 	}()
-	<-manager.firstEntered
+	<-store.firstEntered
 	followerDone := make(chan error, 1)
 	go func() {
 		_, err := entry.Access().ResumeSession(context.Background(), interaction.ResumeSessionRequest{SessionID: "session-1"})
@@ -305,17 +298,17 @@ func TestCanceledResumeLeaderDoesNotCancelOtherCallers(t *testing.T) {
 	if err := <-followerDone; err != nil {
 		t.Fatalf("follower resume: %v", err)
 	}
-	if got := manager.ResumeCalls(); got != 2 {
-		t.Fatalf("SessionManager.Resume calls = %d, want 2", got)
+	if got := store.RecoverCalls(); got != 2 {
+		t.Fatalf("SessionStore.Recover calls = %d, want 2", got)
 	}
 }
 
-func TestCreateRejectsSessionIDCollisionInsteadOfReturningExistingRuntime(t *testing.T) {
+func TestCreateAllocatesDistinctSessionIDs(t *testing.T) {
 	entry := &captureEntrypoint{}
 	application := NewApplication(ApplicationSpec{
-		Name: "create-collision-agent",
+		Name: "create-identity-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
-			componentsModule{manager: newFakeManager()},
+			componentsModule{store: newSeededStore()},
 			NewEntrypointModule("entrypoint.test", "test", entry),
 		},
 	})
@@ -325,22 +318,23 @@ func TestCreateRejectsSessionIDCollisionInsteadOfReturningExistingRuntime(t *tes
 	}
 	t.Cleanup(func() { _ = runtime.Stop(context.Background()) })
 	request := interaction.CreateSessionRequest{AgentID: "agent-1", WorkspaceID: "workspace-1"}
-	if _, err := entry.Access().CreateSession(context.Background(), request); err != nil {
+	first, err := entry.Access().CreateSession(context.Background(), request)
+	if err != nil {
 		t.Fatalf("first create: %v", err)
 	}
-	_, err = entry.Access().CreateSession(context.Background(), request)
-	if !agent.IsCode(err, agent.CodeSessionAlreadyOpen) {
-		t.Fatalf("second create error = %v, code=%q", err, agent.CodeOf(err))
+	second, err := entry.Access().CreateSession(context.Background(), request)
+	if err != nil || second.SessionID == first.SessionID {
+		t.Fatalf("second create = %#v, %v; first = %#v", second, err, first)
 	}
 }
 
 func TestCloseRemovesRuntimeWithoutDeletingSession(t *testing.T) {
-	manager := newFakeManager()
+	store := newSeededStore()
 	entry := &captureEntrypoint{}
 	application := NewApplication(ApplicationSpec{
-		Name: "close-agent",
+		Name: "close-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
-			componentsModule{manager: manager},
+			componentsModule{store: store},
 			NewEntrypointModule("entrypoint.test", "test", entry),
 		},
 	})
@@ -358,8 +352,8 @@ func TestCloseRemovesRuntimeWithoutDeletingSession(t *testing.T) {
 	if _, err := access.ResumeSession(context.Background(), interaction.ResumeSessionRequest{SessionID: "session-1"}); err != nil {
 		t.Fatalf("resume after close: %v", err)
 	}
-	if got := manager.ResumeCalls(); got != 2 {
-		t.Fatalf("SessionManager.Resume calls = %d, want 2", got)
+	if got := store.RecoverCalls(); got != 2 {
+		t.Fatalf("SessionStore.Recover calls = %d, want 2", got)
 	}
 	if err := runtime.Stop(context.Background()); err != nil {
 		t.Fatalf("stop: %v", err)
@@ -371,16 +365,16 @@ func TestCloseRemovesRuntimeWithoutDeletingSession(t *testing.T) {
 }
 
 func TestCloseWaitsForConcurrentResumeAndLeavesNoRuntimeBehind(t *testing.T) {
-	manager := &blockingResumeManager{
-		fakeManager: newFakeManager(),
+	store := &blockingRecoverStore{
+		seededStore: newSeededStore(),
 		entered:     make(chan struct{}),
 		release:     make(chan struct{}),
 	}
 	entry := &captureEntrypoint{}
 	application := NewApplication(ApplicationSpec{
-		Name: "resume-close-agent",
+		Name: "resume-close-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
-			componentsModule{manager: manager},
+			componentsModule{store: store},
 			NewEntrypointModule("entrypoint.test", "test", entry),
 		},
 	})
@@ -395,12 +389,12 @@ func TestCloseWaitsForConcurrentResumeAndLeavesNoRuntimeBehind(t *testing.T) {
 		_, err := entry.Access().ResumeSession(context.Background(), interaction.ResumeSessionRequest{SessionID: "session-1"})
 		resumeDone <- err
 	}()
-	<-manager.entered
+	<-store.entered
 	closeDone := make(chan error, 1)
 	go func() {
 		closeDone <- entry.Access().CloseSession(context.Background(), interaction.CloseSessionRequest{SessionID: "session-1"})
 	}()
-	close(manager.release)
+	close(store.release)
 	if err := <-resumeDone; err != nil {
 		t.Fatalf("resume: %v", err)
 	}
@@ -432,7 +426,7 @@ func (e *captureEntrypoint) Access() interaction.GatewayAccess {
 }
 
 type componentsModule struct {
-	manager session.SessionManager
+	store session.SessionStore
 }
 
 type rawEntrypointModule struct {
@@ -448,121 +442,95 @@ func (m rawEntrypointModule) Register(reg agentslot.Registrar) error {
 func (m componentsModule) ID() string { return "test.components" }
 func (m componentsModule) Register(reg agentslot.Registrar) error {
 	return reg.Contribute(
-		agentslot.Set(session.ManagerSlot, session.SessionManager(m.manager)),
-		agentslot.Set(session.StoreSlot, session.SessionStore(fakeStore{})),
+		agentslot.Set(session.StoreSlot, m.store),
 		agentslot.Set(model.ExecutorSlot, model.ModelExecutor(fakeExecutor{})),
 	)
 }
 
-type fakeManager struct {
-	mu          sync.Mutex
-	resumeCalls int
-}
-
-type blockingResumeManager struct {
-	*fakeManager
+type blockingRecoverStore struct {
+	*seededStore
 	entered chan struct{}
 	release chan struct{}
 }
 
-type cancelFirstResumeManager struct {
-	*fakeManager
+type cancelFirstRecoverStore struct {
+	*seededStore
 	firstEntered chan struct{}
 }
 
-type typedNilResumeManager struct {
-	*fakeManager
-}
-
-func (typedNilResumeManager) Resume(context.Context, session.ResumeRequest) (session.Session, error) {
-	var result *fakeSession
-	return result, nil
-}
-
-func (m *cancelFirstResumeManager) Resume(ctx context.Context, request session.ResumeRequest) (session.Session, error) {
-	m.mu.Lock()
-	m.resumeCalls++
-	call := m.resumeCalls
-	m.mu.Unlock()
+func (s *cancelFirstRecoverStore) Recover(ctx context.Context, request session.SessionRef) (session.Snapshot, error) {
+	call := s.markRecover()
 	if call == 1 {
-		close(m.firstEntered)
+		close(s.firstEntered)
 		<-ctx.Done()
-		return nil, ctx.Err()
+		return session.Snapshot{}, ctx.Err()
 	}
-	return fakeSession{id: request.SessionID, revision: 3}, nil
+	return s.inner.Recover(ctx, request)
 }
 
-func (m *blockingResumeManager) Resume(ctx context.Context, request session.ResumeRequest) (session.Session, error) {
-	m.mu.Lock()
-	m.resumeCalls++
-	m.mu.Unlock()
-	close(m.entered)
+func (s *blockingRecoverStore) Recover(ctx context.Context, request session.SessionRef) (session.Snapshot, error) {
+	s.markRecover()
+	close(s.entered)
 	select {
-	case <-m.release:
-		return fakeSession{id: request.SessionID, revision: 3}, nil
+	case <-s.release:
+		return s.inner.Recover(ctx, request)
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return session.Snapshot{}, ctx.Err()
 	}
 }
 
-func newFakeManager() *fakeManager { return &fakeManager{} }
-
-func (m *fakeManager) Create(context.Context, session.CreateRequest) (session.Session, error) {
-	return fakeSession{id: "created-session", revision: 1}, nil
-}
-func (m *fakeManager) Resume(_ context.Context, request session.ResumeRequest) (session.Session, error) {
-	m.mu.Lock()
-	m.resumeCalls++
-	m.mu.Unlock()
-	return fakeSession{id: request.SessionID, revision: 3}, nil
-}
-func (m *fakeManager) Fork(context.Context, session.ForkRequest) (session.Session, error) {
-	return fakeSession{id: "forked-session", revision: 1}, nil
-}
-func (m *fakeManager) StartFromSummary(context.Context, session.SummaryRequest) (session.Session, error) {
-	return fakeSession{id: "summary-session", revision: 1}, nil
-}
-func (m *fakeManager) ResumeCalls() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.resumeCalls
+type seededStore struct {
+	inner        *session.MemoryStore
+	mu           sync.Mutex
+	recoverCalls int
 }
 
-type fakeSession struct {
-	id       agent.SessionID
-	revision agent.Revision
-}
-
-func (s fakeSession) ID() agent.SessionID      { return s.id }
-func (s fakeSession) Revision() agent.Revision { return s.revision }
-func (s fakeSession) View(context.Context) (session.Snapshot, error) {
-	message := agent.Message{
-		ID: "message-1", SessionID: s.id, Role: agent.RoleUser,
-		Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "hello"}},
+func newSeededStore() *seededStore {
+	store := &seededStore{inner: session.NewMemoryStore()}
+	for _, id := range []agent.SessionID{"session-1", "session-2"} {
+		message := agent.Message{ID: agent.MessageID(id + "-message"), SessionID: id, Role: agent.RoleUser, Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "hello"}}}
+		if _, err := store.inner.Create(context.Background(), session.NewSession{
+			Session: agent.Session{ID: id, AgentID: "agent-1", WorkspaceID: "workspace-1"},
+			History: []session.HistoryFact{{Message: &message}}, ModelConfig: testDefaultModel(), RunState: session.RunIdle,
+		}); err != nil {
+			panic(err)
+		}
 	}
-	return session.Snapshot{
-		Session:  agent.Session{ID: s.id, Revision: s.revision},
-		Revision: s.revision,
-		History:  []session.HistoryFact{{Message: &message}},
-	}, nil
+	return store
 }
 
-type fakeStore struct{}
+func testDefaultModel() model.Config {
+	return model.Config{ModelID: "default", Reasoning: model.ReasoningDefault}
+}
 
-func (fakeStore) Create(context.Context, session.NewSession) (session.Snapshot, error) {
-	return session.Snapshot{}, nil
+func (s *seededStore) markRecover() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recoverCalls++
+	return s.recoverCalls
 }
-func (fakeStore) Load(context.Context, session.SessionRef) (session.Snapshot, error) {
-	return session.Snapshot{}, nil
+
+func (s *seededStore) RecoverCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.recoverCalls
 }
-func (fakeStore) Recover(context.Context, session.SessionRef) (session.Snapshot, error) {
-	return session.Snapshot{}, nil
+
+func (s *seededStore) Create(ctx context.Context, initial session.NewSession) (session.Snapshot, error) {
+	return s.inner.Create(ctx, initial)
 }
-func (fakeStore) Commit(context.Context, session.CommitRequest) (session.Commit, error) {
-	return session.Commit{}, nil
+func (s *seededStore) Load(ctx context.Context, ref session.SessionRef) (session.Snapshot, error) {
+	return s.inner.Load(ctx, ref)
 }
-func (fakeStore) HistoryPage(context.Context, session.HistoryPageRequest) (session.HistoryPage, error) {
-	return session.HistoryPage{}, nil
+func (s *seededStore) Recover(ctx context.Context, ref session.SessionRef) (session.Snapshot, error) {
+	s.markRecover()
+	return s.inner.Recover(ctx, ref)
+}
+func (s *seededStore) Commit(ctx context.Context, request session.CommitRequest) (session.Commit, error) {
+	return s.inner.Commit(ctx, request)
+}
+func (s *seededStore) HistoryPage(ctx context.Context, request session.HistoryPageRequest) (session.HistoryPage, error) {
+	return s.inner.HistoryPage(ctx, request)
 }
 
 type fakeExecutor struct{}

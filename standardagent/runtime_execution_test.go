@@ -370,9 +370,17 @@ func TestCloseSessionCancelsRunWithoutDeletingDurableSession(t *testing.T) {
 func TestRuntimeFailsClosedWhenDurableRunRecoveryFails(t *testing.T) {
 	runContext, cancelRun := context.WithCancel(context.Background())
 	run := &activeRun{id: "run-1", ctx: runContext, cancel: cancelRun, done: make(chan struct{})}
+	manager, err := session.NewManager(session.NewMemoryStore(), testDefaultModel())
+	if err != nil {
+		t.Fatalf("new fixed Manager: %v", err)
+	}
+	managedSession, err := manager.Create(context.Background(), session.CreateRequest{AgentID: "agent-1", WorkspaceID: "workspace-1"})
+	if err != nil {
+		t.Fatalf("create Session: %v", err)
+	}
 	runtime := &runtimeInstance{
-		session:    fakeSession{id: "session-1", revision: 1},
-		components: &runtimeComponents{store: recoveryFailStore{fakeStore: fakeStore{}}},
+		session:    managedSession,
+		components: &runtimeComponents{store: recoveryFailStore{SessionStore: session.NewMemoryStore()}},
 		state:      runtimeRunning, active: run, idleSignal: make(chan struct{}), closeDone: make(chan struct{}),
 	}
 	runtime.mu.Lock()
@@ -386,13 +394,13 @@ func TestRuntimeFailsClosedWhenDurableRunRecoveryFails(t *testing.T) {
 	default:
 		t.Fatal("failed-closed Runtime did not close its lifecycle signal")
 	}
-	err := runtime.cancel(context.Background(), interaction.CancelRequest{SessionID: "session-1"})
+	err = runtime.cancel(context.Background(), interaction.CancelRequest{SessionID: managedSession.ID()})
 	if !agent.IsCode(err, agent.CodeRuntimeClosed) {
 		t.Fatalf("command after failed recovery error = %v, code=%q", err, agent.CodeOf(err))
 	}
 }
 
-type recoveryFailStore struct{ fakeStore }
+type recoveryFailStore struct{ session.SessionStore }
 
 func (recoveryFailStore) Recover(context.Context, session.SessionRef) (session.Snapshot, error) {
 	return session.Snapshot{}, errors.New("recovery failed")
@@ -400,15 +408,12 @@ func (recoveryFailStore) Recover(context.Context, session.SessionRef) (session.S
 
 func startRuntimeTestApplication(t *testing.T, executor model.ModelExecutor, extra ...agentslot.Module) (interaction.GatewayAccess, func()) {
 	t.Helper()
-	memory, err := session.NewMemoryModule(model.Config{ModelID: "default", Reasoning: model.ReasoningDefault})
-	if err != nil {
-		t.Fatal(err)
-	}
+	memory := session.NewMemoryModule()
 	entry := &captureEntrypoint{}
 	modules := []agentslot.Module{memory, executorModule{executor: executor}}
 	modules = append(modules, extra...)
 	modules = append(modules, NewEntrypointModule("entrypoint.runtime-test", "test", entry))
-	application := NewApplication(ApplicationSpec{Name: "runtime-test", Modules: modules})
+	application := NewApplication(ApplicationSpec{Name: "runtime-test", Modules: modules, DefaultModelConfig: model.Config{ModelID: "default", Reasoning: model.ReasoningDefault}})
 	running, err := application.Start(context.Background())
 	if err != nil {
 		t.Fatalf("start: %v", err)

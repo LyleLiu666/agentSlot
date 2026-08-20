@@ -53,7 +53,7 @@ func buildReference(config referenceConfig) (*agentslot.Application, *cli.Entryp
 		return nil, nil, errors.New("reference: Session storage must be outside workspace tool access")
 	}
 	defaultModel := model.Config{ProviderKey: config.providerKey, ModelID: config.modelID, Reasoning: model.ReasoningDefault}
-	sessions, err := session.NewFileModule(config.sessionDir, defaultModel)
+	sessions, err := session.NewFileModule(config.sessionDir)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -121,7 +121,7 @@ func buildReference(config referenceConfig) (*agentslot.Application, *cli.Entryp
 		return nil, nil, err
 	}
 	application := standardagent.NewApplication(standardagent.ApplicationSpec{
-		Name: "reference-agent",
+		Name: "reference-agent", DefaultModelConfig: defaultModel,
 		RuntimeConfig: standardagent.AgentRuntimeConfig{
 			SystemPrompt: "You are a careful coding agent. Use installed tools only when they materially help the user.",
 			ToolKeys:     []string{bash.Key, files.ReadKey, files.WriteKey, files.EditKey, httptool.Key},

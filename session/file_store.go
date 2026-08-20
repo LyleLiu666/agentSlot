@@ -110,6 +110,7 @@ func (s *FileStore) Create(ctx context.Context, initial NewSession) (Snapshot, e
 		Session: initial.Session, Revision: 1, History: history,
 		Context: initial.Context, Queue: initial.Queue, RunJournal: initial.RunJournal,
 		ModelConfig: initial.ModelConfig, RunState: initial.RunState, ActiveRunID: initial.ActiveRunID,
+		Fork: initial.Fork,
 	})
 	snapshot.Session.Revision = snapshot.Revision
 	document := fileStoreDocument{Format: fileStoreFormat, Snapshot: snapshot, Idempotency: make(map[string]fileStoreCommit)}
@@ -357,6 +358,16 @@ func validateFileDocument(id agent.SessionID, document fileStoreDocument) error 
 	if !snapshot.Session.AgentID.Valid() || !snapshot.Session.WorkspaceID.Valid() {
 		return errors.New("session scope is incomplete")
 	}
+	if snapshot.Fork != nil && (snapshot.Fork.ParentSessionID != snapshot.Session.ParentSessionID || !snapshot.Fork.ParentSessionID.Valid()) {
+		return errors.New("fork provenance is inconsistent")
+	}
+	if snapshot.Fork != nil {
+		for _, fact := range snapshot.History {
+			if !fact.OriginFactID.Valid() {
+				return errors.New("forked history fact has no source identity")
+			}
+		}
+	}
 	if err := snapshot.ModelConfig.Validate(); err != nil {
 		return err
 	}
@@ -416,32 +427,23 @@ func unrecoverableFile(id agent.SessionID, message string, cause error) error {
 	return agent.NewCodedError(agent.ErrorInternal, agent.CodeSessionUnrecoverable, "session.file_store", fmt.Sprintf("%s: %s", message, id), cause)
 }
 
-// NewFileModule explicitly installs a lifecycle-owned FileStore and the
-// standard SessionManager over it.
-func NewFileModule(directory string, defaultConfig SessionModelConfig) (agentslot.Module, error) {
+// NewFileModule explicitly installs a lifecycle-owned FileStore.
+func NewFileModule(directory string) (agentslot.Module, error) {
 	store, err := NewFileStore(directory)
 	if err != nil {
 		return nil, err
 	}
-	manager, err := NewMemoryManager(store, defaultConfig)
-	if err != nil {
-		return nil, err
-	}
-	return &fileModule{store: store, manager: manager}, nil
+	return &fileModule{store: store}, nil
 }
 
 type fileModule struct {
-	store   *FileStore
-	manager *MemoryManager
+	store *FileStore
 }
 
 func (*fileModule) ID() string { return "session.file" }
 
 func (m *fileModule) Register(reg agentslot.Registrar) error {
-	return reg.Contribute(
-		agentslot.Set(StoreSlot, SessionStore(m.store)),
-		agentslot.Set(ManagerSlot, SessionManager(m.manager)),
-	)
+	return reg.Contribute(agentslot.Set(StoreSlot, SessionStore(m.store)))
 }
 
 func (m *fileModule) Start(ctx context.Context) error { return m.store.Open(ctx) }
