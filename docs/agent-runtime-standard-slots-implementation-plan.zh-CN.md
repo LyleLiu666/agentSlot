@@ -173,14 +173,14 @@ Fork 必须保存 ParentSessionID、CutoffHistorySequence 和来源 Fact 身份�
 ```go
 type ModelExecutor interface {
 	Execute(context.Context, ModelRequest, AttemptRecorder) (ModelStream, error)
-	Inspect(context.Context, SessionModelConfig) (ModelCapabilities, error)
-	CountTokens(context.Context, ModelRequest) (TokenCount, error)
+	Inspect(context.Context, Config) (ExecutionCapabilities, error)
+	CountTokens(context.Context, ModelRequest) (int, error)
 }
 
 type AttemptRecorder interface {
-	Started(context.Context, AttemptStarted) error
-	Finished(context.Context, AttemptFinished) error
-	RemainingTokenBudget() int64 // 0 表示无限
+	Started(context.Context, AttemptStart) error
+	Finished(context.Context, AttemptFinish) error
+	Budget() TokenBudget // MaxTokens == 0 表示无限
 }
 ```
 
@@ -192,11 +192,12 @@ Executor 负责物理重试、续传和终止。它向 Runtime 输出临时 chun
 
 ```go
 type ContextSource interface {
-	Contribute(context.Context, ContextContributionRequest) (ContextContribution, error)
+	Key() string
+	Contribute(context.Context, ContextInput) ([]model.Input, error)
 }
 
 type ContextCompactor interface {
-	Compact(context.Context, CompactionRequest) (CompactionResult, error)
+	Compact(context.Context, CompactionInput) (CompactionOutput, error)
 }
 ```
 

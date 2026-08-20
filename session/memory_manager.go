@@ -332,6 +332,7 @@ func rewriteForFork(source Snapshot, newSessionID agent.SessionID, agentID agent
 	// Context is re-derived for the child's selected model; pending delivery and
 	// execution recovery state never leak into the child.
 	source.Context = ContextView{}
+	source.RetainedContexts = nil
 	source.Queue = nil
 	source.RunJournal = nil
 	source.Events = nil

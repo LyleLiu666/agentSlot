@@ -3,7 +3,9 @@ package model
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
+	"sync/atomic"
 
 	agent "github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/tool"
@@ -15,6 +17,10 @@ type FakeExecution struct {
 	Events       []ModelEvent
 	ExecuteError error
 	Block        <-chan struct{}
+	// Usage applies to a single-attempt script. AttemptUsage is used when a
+	// script contains reset-delimited physical attempts.
+	Usage        TokenUsage
+	AttemptUsage map[agent.AttemptID]TokenUsage
 }
 
 // FakeModelExecutor is a deterministic development implementation of
@@ -25,6 +31,7 @@ type FakeModelExecutor struct {
 	executions []FakeExecution
 	requests   []ModelRequest
 	changed    chan struct{}
+	sequence   atomic.Uint64
 }
 
 var _ ModelExecutor = (*FakeModelExecutor)(nil)
@@ -39,9 +46,12 @@ func NewFakeModelExecutor(executions ...FakeExecution) *FakeModelExecutor {
 	return &FakeModelExecutor{executions: copy, changed: make(chan struct{})}
 }
 
-func (f *FakeModelExecutor) Execute(ctx context.Context, request ModelRequest) (ModelStream, error) {
+func (f *FakeModelExecutor) Execute(ctx context.Context, request ModelRequest, recorder AttemptRecorder) (ModelStream, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if recorder == nil {
+		return nil, agent.NewError(agent.ErrorInvalidInput, "model.fake.execute", "AttemptRecorder is required", nil)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -56,7 +66,48 @@ func (f *FakeModelExecutor) Execute(ctx context.Context, request ModelRequest) (
 	if execution.ExecuteError != nil {
 		return nil, execution.ExecuteError
 	}
-	return &fakeModelStream{events: execution.Events, block: execution.Block}, nil
+	events, attempts, err := f.normalizeAttempts(execution.Events)
+	if err != nil {
+		return nil, err
+	}
+	stream := &fakeModelStream{
+		events: events, block: execution.Block, recorder: recorder,
+		request: cloneModelRequest(request), usage: cloneAttemptUsage(execution.AttemptUsage),
+		defaultUsage: execution.Usage, attempts: attempts,
+	}
+	if len(attempts) > 0 {
+		if err := stream.start(ctx, attempts[0]); err != nil {
+			return nil, err
+		}
+	}
+	return stream, nil
+}
+
+func (f *FakeModelExecutor) normalizeAttempts(source []ModelEvent) ([]ModelEvent, []agent.AttemptID, error) {
+	events := make([]ModelEvent, len(source))
+	attempts := make([]agent.AttemptID, 0)
+	var current agent.AttemptID
+	for index, event := range source {
+		events[index] = cloneModelEvent(event)
+		candidate := agent.AttemptID(event.AttemptID)
+		if current == "" {
+			if candidate == "" {
+				candidate = agent.AttemptID(fmt.Sprintf("fake-attempt-%d", f.sequence.Add(1)))
+			}
+			if !candidate.Valid() {
+				return nil, nil, agent.NewError(agent.ErrorInvalidInput, "model.fake.execute", "script contains an invalid AttemptID", nil)
+			}
+			current = candidate
+			attempts = append(attempts, current)
+		} else if candidate != "" && candidate != current {
+			return nil, nil, agent.NewError(agent.ErrorInvalidInput, "model.fake.execute", "script changes AttemptID without reset", nil)
+		}
+		events[index].AttemptID = string(current)
+		if event.Kind == EventReset {
+			current = ""
+		}
+	}
+	return events, attempts, nil
 }
 
 func (*FakeModelExecutor) Inspect(_ context.Context, config Config) (ExecutionCapabilities, error) {
@@ -136,10 +187,18 @@ func (f *FakeModelExecutor) Requests() []ModelRequest {
 }
 
 type fakeModelStream struct {
-	mu     sync.Mutex
-	events []ModelEvent
-	block  <-chan struct{}
-	closed bool
+	mu           sync.Mutex
+	events       []ModelEvent
+	block        <-chan struct{}
+	closed       bool
+	recorder     AttemptRecorder
+	request      ModelRequest
+	usage        map[agent.AttemptID]TokenUsage
+	defaultUsage TokenUsage
+	attempts     []agent.AttemptID
+	started      map[agent.AttemptID]bool
+	finished     map[agent.AttemptID]bool
+	outputBytes  map[agent.AttemptID]int
 }
 
 func (s *fakeModelStream) Recv(ctx context.Context) (ModelEvent, error) {
@@ -155,6 +214,9 @@ func (s *fakeModelStream) Recv(ctx context.Context) (ModelEvent, error) {
 		select {
 		case <-block:
 		case <-ctx.Done():
+			if err := s.finishCanceled(); err != nil {
+				return ModelEvent{}, err
+			}
 			return ModelEvent{}, ctx.Err()
 		}
 	}
@@ -165,6 +227,33 @@ func (s *fakeModelStream) Recv(ctx context.Context) (ModelEvent, error) {
 	}
 	event := cloneModelEvent(s.events[0])
 	s.events = s.events[1:]
+	attemptID := agent.AttemptID(event.AttemptID)
+	if !s.started[attemptID] {
+		if err := s.start(ctx, attemptID); err != nil {
+			return ModelEvent{}, err
+		}
+	}
+	if event.Kind == EventDelta {
+		s.outputBytes[attemptID] += len([]byte(event.Text))
+	}
+	if event.Kind == EventComplete && event.Output != nil && s.outputBytes[attemptID] == 0 {
+		for _, part := range event.Output.Parts {
+			s.outputBytes[attemptID] += len([]byte(part.Text))
+		}
+		for _, call := range event.Output.ToolCalls {
+			s.outputBytes[attemptID] += len(call.Name) + len(call.Arguments)
+		}
+	}
+	if event.Kind == EventReset || event.Kind == EventComplete || event.Kind == EventFailed {
+		outcome := AttemptFailed
+		errorCode := "scripted_failure"
+		if event.Kind == EventComplete {
+			outcome, errorCode = AttemptSucceeded, ""
+		}
+		if err := s.finish(context.WithoutCancel(ctx), attemptID, outcome, errorCode); err != nil {
+			return ModelEvent{}, err
+		}
+	}
 	if event.Kind == EventComplete || event.Kind == EventFailed {
 		s.closed = true
 	}
@@ -172,9 +261,64 @@ func (s *fakeModelStream) Recv(ctx context.Context) (ModelEvent, error) {
 }
 
 func (s *fakeModelStream) Close() error {
+	err := s.finishCanceled()
 	s.mu.Lock()
 	s.closed = true
 	s.mu.Unlock()
+	return err
+}
+
+func (s *fakeModelStream) start(ctx context.Context, id agent.AttemptID) error {
+	if s.started == nil {
+		s.started = make(map[agent.AttemptID]bool)
+		s.finished = make(map[agent.AttemptID]bool)
+		s.outputBytes = make(map[agent.AttemptID]int)
+	}
+	if s.started[id] {
+		return nil
+	}
+	if len(s.started) > 0 && s.recorder.Budget().Exhausted() {
+		return ErrTokenBudgetExceeded
+	}
+	if err := s.recorder.Started(ctx, AttemptStart{AttemptID: id, ProviderKey: s.request.Config.ProviderKey, ModelID: s.request.Config.ModelID}); err != nil {
+		return err
+	}
+	s.started[id] = true
+	return nil
+}
+
+func (s *fakeModelStream) finish(ctx context.Context, id agent.AttemptID, outcome AttemptOutcome, errorCode string) error {
+	if s.finished[id] {
+		return nil
+	}
+	usage, ok := s.usage[id]
+	if !ok {
+		usage = s.defaultUsage
+	}
+	if usage == (TokenUsage{}) {
+		input, _ := (&FakeModelExecutor{}).CountTokens(context.Background(), s.request)
+		output := int64((s.outputBytes[id] + 3) / 4)
+		usage = TokenUsage{InputTokens: int64(input), OutputTokens: output, TotalTokens: int64(input) + output, Estimated: true, EstimateSource: "model.fake.portable_estimate"}
+	}
+	finish := AttemptFinish{AttemptID: id, Outcome: outcome, Usage: usage, ErrorCode: errorCode}
+	if err := finish.Validate(); err != nil {
+		return err
+	}
+	if err := s.recorder.Finished(ctx, finish); err != nil {
+		return err
+	}
+	s.finished[id] = true
+	return nil
+}
+
+func (s *fakeModelStream) finishCanceled() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, id := range s.attempts {
+		if s.started[id] && !s.finished[id] {
+			return s.finish(context.Background(), id, AttemptCanceled, "canceled")
+		}
+	}
 	return nil
 }
 
@@ -184,15 +328,23 @@ func cloneFakeExecution(source FakeExecution) FakeExecution {
 	for index, event := range source.Events {
 		copy.Events[index] = cloneModelEvent(event)
 	}
+	copy.AttemptUsage = cloneAttemptUsage(source.AttemptUsage)
+	return copy
+}
+
+func cloneAttemptUsage(source map[agent.AttemptID]TokenUsage) map[agent.AttemptID]TokenUsage {
+	if source == nil {
+		return nil
+	}
+	copy := make(map[agent.AttemptID]TokenUsage, len(source))
+	for id, usage := range source {
+		copy[id] = usage
+	}
 	return copy
 }
 
 func cloneModelEvent(source ModelEvent) ModelEvent {
 	copy := source
-	if source.Usage != nil {
-		usage := *source.Usage
-		copy.Usage = &usage
-	}
 	if source.Output != nil {
 		output := Completion{Parts: append([]agent.MessagePart(nil), source.Output.Parts...)}
 		output.ToolCalls = make([]ToolCallRequest, len(source.Output.ToolCalls))

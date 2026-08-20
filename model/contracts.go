@@ -219,11 +219,104 @@ func ValidateInputs(inputs []Input) error {
 // Executor performs one logical model call and owns provider retry or
 // continuation differences.
 type ModelExecutor interface {
-	Execute(context.Context, ModelRequest) (ModelStream, error)
+	Execute(context.Context, ModelRequest, AttemptRecorder) (ModelStream, error)
 	// Inspect validates a selection and returns authoritative capabilities.
 	Inspect(context.Context, Config) (ExecutionCapabilities, error)
 	// CountTokens evaluates the complete fixed request without mutating it.
 	CountTokens(context.Context, ModelRequest) (int, error)
+}
+
+// AttemptOutcome is the terminal result of one physical provider request.
+// A logical Execute call can contain multiple Attempts, but each Attempt has
+// exactly one Started and one Finished record.
+type AttemptOutcome string
+
+const (
+	AttemptSucceeded AttemptOutcome = "succeeded"
+	AttemptFailed    AttemptOutcome = "failed"
+	AttemptCanceled  AttemptOutcome = "canceled"
+)
+
+func (o AttemptOutcome) Valid() bool {
+	return o == AttemptSucceeded || o == AttemptFailed || o == AttemptCanceled
+}
+
+// AttemptStart is supplied before any bytes of the physical provider request
+// are sent. AttemptID is local, stable identity; ProviderRequestID is recorded
+// later if the remote endpoint returns one.
+type AttemptStart struct {
+	AttemptID   agent.AttemptID
+	ProviderKey string
+	ModelID     string
+}
+
+func (a AttemptStart) Validate() error {
+	if !a.AttemptID.Valid() || a.ModelID == "" {
+		return errors.New("model: invalid attempt start")
+	}
+	return nil
+}
+
+// AttemptFinish is supplied before an Executor retries or exposes a logical
+// terminal result. ErrorCode is a stable, non-sensitive adapter category.
+type AttemptFinish struct {
+	AttemptID         agent.AttemptID
+	Outcome           AttemptOutcome
+	ProviderRequestID string
+	Usage             TokenUsage
+	ErrorCode         string
+}
+
+func (a AttemptFinish) Validate() error {
+	if !a.AttemptID.Valid() || !a.Outcome.Valid() {
+		return errors.New("model: invalid attempt finish")
+	}
+	if err := a.Usage.Validate(); err != nil {
+		return err
+	}
+	if a.Outcome == AttemptSucceeded && a.ErrorCode != "" {
+		return errors.New("model: succeeded attempt cannot contain an error code")
+	}
+	if a.Outcome != AttemptSucceeded && a.ErrorCode == "" {
+		return errors.New("model: unsuccessful attempt requires a safe error code")
+	}
+	return nil
+}
+
+// TokenBudget is the current logical Run accounting snapshot. MaxTokens zero
+// means unlimited. Cached-input and reasoning subsets are already included in
+// UsedTokens through TokenUsage.TotalTokens.
+type TokenBudget struct {
+	MaxTokens  int64
+	UsedTokens int64
+}
+
+func (b TokenBudget) Validate() error {
+	if b.MaxTokens < 0 || b.UsedTokens < 0 {
+		return errors.New("model: token budget cannot be negative")
+	}
+	return nil
+}
+
+func (b TokenBudget) Exhausted() bool { return b.MaxTokens > 0 && b.UsedTokens >= b.MaxTokens }
+
+func (b TokenBudget) RemainingTokens() int64 {
+	if b.MaxTokens == 0 {
+		return 0
+	}
+	if b.UsedTokens >= b.MaxTokens {
+		return 0
+	}
+	return b.MaxTokens - b.UsedTokens
+}
+
+// AttemptRecorder is the only durable capability given to ModelExecutor. It
+// cannot read or mutate Session state. Started must return only after the fact
+// is committed; Finished must return only after the terminal fact is committed.
+type AttemptRecorder interface {
+	Started(context.Context, AttemptStart) error
+	Finished(context.Context, AttemptFinish) error
+	Budget() TokenBudget
 }
 
 // ExecutionCapabilities is the authoritative Executor view used by Runtime before a
@@ -286,7 +379,6 @@ type ModelEventKind string
 const (
 	EventDelta    ModelEventKind = "delta"
 	EventReset    ModelEventKind = "reset"
-	EventUsage    ModelEventKind = "usage"
 	EventComplete ModelEventKind = "complete"
 	EventFailed   ModelEventKind = "failed"
 )
@@ -298,20 +390,7 @@ type ModelEvent struct {
 	AttemptID string
 	Text      string
 	Output    *Completion
-	Usage     *Usage
 	Err       error
-}
-
-// Usage is one Provider-reported physical attempt measurement. Executors do
-// not estimate missing values or merge retries into a fictional attempt.
-type Usage struct {
-	InputTokens  int
-	OutputTokens int
-	TotalTokens  int
-}
-
-func (u Usage) Valid() bool {
-	return u.InputTokens >= 0 && u.OutputTokens >= 0 && u.TotalTokens >= u.InputTokens+u.OutputTokens
 }
 
 // Completion is one identity-free logical model result. The fixed Runtime,
@@ -357,23 +436,19 @@ func (c ToolCallRequest) Valid() bool {
 func (e ModelEvent) Validate() error {
 	switch e.Kind {
 	case EventDelta:
-		if e.Text == "" || e.Output != nil || e.Usage != nil || e.Err != nil {
+		if e.Text == "" || e.Output != nil || e.Err != nil {
 			return errors.New("model: delta event requires text and no terminal payload")
 		}
 	case EventReset:
-		if e.Text != "" || e.Output != nil || e.Usage != nil || e.Err != nil {
+		if e.Text != "" || e.Output != nil || e.Err != nil {
 			return errors.New("model: reset event cannot carry content or error")
 		}
-	case EventUsage:
-		if e.AttemptID == "" || e.Text != "" || e.Output != nil || e.Usage == nil || !e.Usage.Valid() || e.Err != nil {
-			return errors.New("model: usage event requires one valid physical-attempt measurement")
-		}
 	case EventComplete:
-		if e.Text != "" || e.Output == nil || !e.Output.Valid() || e.Usage != nil || e.Err != nil {
+		if e.Text != "" || e.Output == nil || !e.Output.Valid() || e.Err != nil {
 			return errors.New("model: complete event requires output and no error")
 		}
 	case EventFailed:
-		if e.Text != "" || e.Err == nil || e.Output != nil || e.Usage != nil {
+		if e.Text != "" || e.Err == nil || e.Output != nil {
 			return errors.New("model: failed event requires an error and no message")
 		}
 	default:
@@ -384,3 +459,7 @@ func (e ModelEvent) Validate() error {
 
 // ErrStreamClosed is returned after a stream reaches a terminal event.
 var ErrStreamClosed = errors.New("model: stream is closed")
+
+// ErrTokenBudgetExceeded tells Runtime that an Executor declined another
+// physical retry because the current Run budget is exhausted.
+var ErrTokenBudgetExceeded = errors.New("model: run token budget exhausted")

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,7 +17,12 @@ import (
 )
 
 func TestExecutorStreamsOpenAICompatibleCompletion(t *testing.T) {
+	recorder := &attemptRecorder{}
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		starts, _ := recorder.records()
+		if len(starts) != 1 {
+			t.Errorf("provider request began before Attempt Started was durable: %#v", starts)
+		}
 		if request.URL.Path != "/v1/chat/completions" || request.Header.Get("Authorization") != "Bearer secret" {
 			t.Errorf("request = %s %s authorization=%q", request.Method, request.URL.Path, request.Header.Get("Authorization"))
 		}
@@ -33,6 +39,7 @@ func TestExecutorStreamsOpenAICompatibleCompletion(t *testing.T) {
 			t.Errorf("messages = %#v", messages)
 		}
 		writer.Header().Set("Content-Type", "text/event-stream")
+		writer.Header().Set("x-request-id", "provider-request-1")
 		flusher := writer.(http.Flusher)
 		_, _ = writer.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n"))
 		flusher.Flush()
@@ -49,22 +56,23 @@ func TestExecutorStreamsOpenAICompatibleCompletion(t *testing.T) {
 			{SystemPrompt: &prompt},
 			{Message: &agent.Message{ID: "message-1", SessionID: "session-1", Role: agent.RoleUser, Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "hello"}}}},
 		},
-	})
+	}, recorder)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	defer stream.Close()
 	events := receiveUntilTerminal(t, stream)
-	if len(events) != 4 || events[0].Kind != model.EventDelta || events[0].Text != "hel" || events[1].Text != "lo" || events[2].Kind != model.EventUsage || events[3].Kind != model.EventComplete {
+	if len(events) != 3 || events[0].Kind != model.EventDelta || events[0].Text != "hel" || events[1].Text != "lo" || events[2].Kind != model.EventComplete {
 		t.Fatalf("events = %#v", events)
 	}
-	if events[0].AttemptID == "" || events[0].AttemptID != events[1].AttemptID || events[1].AttemptID != events[2].AttemptID || events[2].AttemptID != events[3].AttemptID {
+	if events[0].AttemptID == "" || events[0].AttemptID != events[1].AttemptID || events[1].AttemptID != events[2].AttemptID {
 		t.Fatalf("attempt IDs = %#v", events)
 	}
-	if events[2].Usage == nil || events[2].Usage.InputTokens != 4 || events[2].Usage.OutputTokens != 2 || events[2].Usage.TotalTokens != 6 {
-		t.Fatalf("usage = %#v", events[2].Usage)
+	starts, finishes := recorder.records()
+	if len(starts) != 1 || len(finishes) != 1 || finishes[0].Usage.InputTokens != 4 || finishes[0].Usage.OutputTokens != 2 || finishes[0].Usage.TotalTokens != 6 || finishes[0].ProviderRequestID != "provider-request-1" {
+		t.Fatalf("attempt records = %#v / %#v", starts, finishes)
 	}
-	if got := events[3].Output.Parts[0].Text; got != "hello" {
+	if got := events[2].Output.Parts[0].Text; got != "hello" {
 		t.Fatalf("completion = %q", got)
 	}
 }
@@ -78,7 +86,7 @@ func TestExecutorAggregatesStreamingToolCallFragments(t *testing.T) {
 	}))
 	defer server.Close()
 	executor := newExecutor(t, server.URL, "")
-	stream, err := executor.Execute(context.Background(), requestWithUser("run a command"))
+	stream, err := executor.Execute(context.Background(), requestWithUser("run a command"), &attemptRecorder{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,8 +103,16 @@ func TestExecutorAggregatesStreamingToolCallFragments(t *testing.T) {
 
 func TestExecutorResetsPartialOutputBeforeRetry(t *testing.T) {
 	var requests atomic.Int32
+	recorder := &attemptRecorder{}
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		attempt := requests.Add(1)
+		starts, finishes := recorder.records()
+		if len(starts) != int(attempt) {
+			t.Errorf("request %d began without its Started record: %#v", attempt, starts)
+		}
+		if attempt == 2 && len(finishes) != 1 {
+			t.Errorf("retry began before prior terminal record: %#v", finishes)
+		}
 		writer.Header().Set("Content-Type", "text/event-stream")
 		if attempt == 1 {
 			_, _ = writer.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"))
@@ -107,7 +123,7 @@ func TestExecutorResetsPartialOutputBeforeRetry(t *testing.T) {
 	}))
 	defer server.Close()
 	executor := newExecutorWithAttempts(t, server.URL, 2)
-	stream, err := executor.Execute(context.Background(), requestWithUser("retry"))
+	stream, err := executor.Execute(context.Background(), requestWithUser("retry"), recorder)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,6 +137,10 @@ func TestExecutorResetsPartialOutputBeforeRetry(t *testing.T) {
 	if requests.Load() != 2 {
 		t.Fatalf("requests = %d", requests.Load())
 	}
+	starts, finishes := recorder.records()
+	if len(starts) != 2 || len(finishes) != 2 || finishes[0].Outcome != model.AttemptFailed || !finishes[0].Usage.Estimated || finishes[1].Outcome != model.AttemptSucceeded {
+		t.Fatalf("retry attempt records = %#v / %#v", starts, finishes)
+	}
 }
 
 func TestExecutorDoesNotRetryNonRetryableHTTPErrorOrLeakBody(t *testing.T) {
@@ -131,7 +151,8 @@ func TestExecutorDoesNotRetryNonRetryableHTTPErrorOrLeakBody(t *testing.T) {
 	}))
 	defer server.Close()
 	executor := newExecutorWithAttempts(t, server.URL, 3)
-	stream, err := executor.Execute(context.Background(), requestWithUser("bad"))
+	recorder := &attemptRecorder{}
+	stream, err := executor.Execute(context.Background(), requestWithUser("bad"), recorder)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,6 +163,40 @@ func TestExecutorDoesNotRetryNonRetryableHTTPErrorOrLeakBody(t *testing.T) {
 	}
 	if requests.Load() != 1 {
 		t.Fatalf("requests = %d", requests.Load())
+	}
+	_, finishes := recorder.records()
+	if len(finishes) != 1 || finishes[0].ErrorCode != "http_400" || !finishes[0].Usage.Estimated {
+		t.Fatalf("failed attempt = %#v", finishes)
+	}
+}
+
+func TestExecutorRecordsProviderTimeoutAsFailureNotUserCancellation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		select {
+		case <-request.Context().Done():
+		case <-time.After(100 * time.Millisecond):
+		}
+	}))
+	defer server.Close()
+	executor := newExecutorConfig(t, openaicompat.Config{
+		ProviderKey: "openai", BaseURL: server.URL, MaxAttempts: 1, RequestTimeout: 10 * time.Millisecond,
+		Models: []openaicompat.Model{{ID: "chat-model", Title: "Chat Model", Capabilities: model.ExecutionCapabilities{
+			Media:     model.Capabilities{InputModalities: []model.Modality{model.ModalityText}, OutputModalities: []model.Modality{model.ModalityText}},
+			Reasoning: []model.Reasoning{model.ReasoningDefault}, ContextWindowTokens: 100, MaxOutputTokens: 20,
+		}}},
+	})
+	recorder := &attemptRecorder{}
+	stream, err := executor.Execute(context.Background(), requestWithUser("timeout"), recorder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := receiveUntilTerminal(t, stream)
+	if terminal := events[len(events)-1]; terminal.Kind != model.EventFailed {
+		t.Fatalf("timeout terminal = %#v", terminal)
+	}
+	_, finishes := recorder.records()
+	if len(finishes) != 1 || finishes[0].Outcome != model.AttemptFailed || finishes[0].ErrorCode != "timeout" {
+		t.Fatalf("timeout attempt = %#v", finishes)
 	}
 }
 
@@ -159,7 +214,7 @@ func TestExecutorBoundsAccumulatedProviderOutput(t *testing.T) {
 			Reasoning: []model.Reasoning{model.ReasoningDefault}, ContextWindowTokens: 100, MaxOutputTokens: 20,
 		}}},
 	})
-	stream, err := executor.Execute(context.Background(), requestWithUser("bounded"))
+	stream, err := executor.Execute(context.Background(), requestWithUser("bounded"), &attemptRecorder{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,6 +333,40 @@ func receiveUntilTerminal(t *testing.T, stream model.ModelStream) []model.ModelE
 			return events
 		}
 	}
+}
+
+type attemptRecorder struct {
+	mu       sync.Mutex
+	started  []model.AttemptStart
+	finished []model.AttemptFinish
+	used     int64
+}
+
+func (r *attemptRecorder) Started(_ context.Context, value model.AttemptStart) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.started = append(r.started, value)
+	return nil
+}
+
+func (r *attemptRecorder) Finished(_ context.Context, value model.AttemptFinish) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.finished = append(r.finished, value)
+	r.used += value.Usage.TotalTokens
+	return nil
+}
+
+func (r *attemptRecorder) Budget() model.TokenBudget {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return model.TokenBudget{UsedTokens: r.used}
+}
+
+func (r *attemptRecorder) records() ([]model.AttemptStart, []model.AttemptFinish) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]model.AttemptStart(nil), r.started...), append([]model.AttemptFinish(nil), r.finished...)
 }
 
 var _ model.ModelExecutor = (*openaicompat.Executor)(nil)

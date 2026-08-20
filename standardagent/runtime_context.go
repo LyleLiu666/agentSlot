@@ -12,19 +12,23 @@ import (
 )
 
 func (r *runtimeInstance) prepareModelRequest(run *activeRun, step agent.StepID) (model.ModelRequest, error) {
-	for {
-		r.mu.Lock()
-		if r.active != run || run.cancelRequested || r.closing {
-			r.mu.Unlock()
-			return model.ModelRequest{}, context.Canceled
-		}
-		snapshot, err := r.viewLocked(run.ctx)
+	r.mu.Lock()
+	if r.active != run || run.cancelRequested || r.closing {
 		r.mu.Unlock()
-		if err != nil {
-			return model.ModelRequest{}, err
-		}
+		return model.ModelRequest{}, context.Canceled
+	}
+	snapshot, err := r.viewLocked(run.ctx)
+	r.mu.Unlock()
+	if err != nil {
+		return model.ModelRequest{}, err
+	}
+	snapshot, dynamic, err := r.persistContextContributions(run, step, snapshot)
+	if err != nil {
+		return model.ModelRequest{}, err
+	}
 
-		request, dynamic, tokens, err := r.buildContextCandidate(run, step, snapshot)
+	for {
+		request, _, tokens, err := r.buildContextCandidate(run, step, snapshot, dynamic)
 		if err != nil {
 			return model.ModelRequest{}, err
 		}
@@ -43,14 +47,17 @@ func (r *runtimeInstance) prepareModelRequest(run *activeRun, step agent.StepID)
 			return model.ModelRequest{}, err
 		}
 		if latest.Revision != snapshot.Revision {
+			snapshot = latest
 			r.mu.Unlock()
 			continue
 		}
 		contextView := session.ContextView{
 			Version: snapshot.Context.Version + 1, SourceRevision: snapshot.Revision,
-			TokenCount: tokens, Inputs: cloneRuntimeInputs(dynamic),
+			SourceHistorySequence: latestHistorySequence(snapshot.History),
+			TokenCount:            tokens, Request: cloneRuntimeModelRequest(request),
 		}
-		_, err = r.commitLocked(run.ctx, snapshot.Revision, "context", []session.Change{{Kind: session.SetContext, Context: &contextView}})
+		retain := r.components.config.ContextRetentionMode == ContextRetainAll
+		_, err = r.commitLocked(run.ctx, snapshot.Revision, "context", []session.Change{{Kind: session.SetContext, Context: &contextView, RetainPreviousContext: retain}})
 		r.mu.Unlock()
 		if err != nil {
 			return model.ModelRequest{}, err
@@ -59,7 +66,58 @@ func (r *runtimeInstance) prepareModelRequest(run *activeRun, step agent.StepID)
 	}
 }
 
-func (r *runtimeInstance) buildContextCandidate(run *activeRun, step agent.StepID, snapshot session.Snapshot) (model.ModelRequest, []model.Input, int, error) {
+func (r *runtimeInstance) persistContextContributions(run *activeRun, step agent.StepID, snapshot session.Snapshot) (session.Snapshot, []model.Input, error) {
+	dynamic := historyInputs(snapshot.History)
+	if err := validateDynamicInputs(r.id(), dynamic); err != nil {
+		return session.Snapshot{}, nil, err
+	}
+	for _, source := range r.components.sources {
+		for {
+			contribution, err := source.Contribute(run.ctx, agentcontext.ContextInput{
+				SessionID: r.id(), Revision: snapshot.Revision, Inputs: cloneRuntimeInputs(dynamic), Config: cloneRuntimeConfig(run.config),
+			})
+			if err != nil {
+				return session.Snapshot{}, nil, err
+			}
+			candidate := append(cloneRuntimeInputs(dynamic), cloneRuntimeInputs(contribution)...)
+			if err := validateDynamicInputs(r.id(), candidate); err != nil {
+				return session.Snapshot{}, nil, err
+			}
+			r.mu.Lock()
+			if r.active != run || run.cancelRequested || r.closing {
+				r.mu.Unlock()
+				return session.Snapshot{}, nil, context.Canceled
+			}
+			latest, err := r.viewLocked(run.ctx)
+			if err != nil {
+				r.mu.Unlock()
+				return session.Snapshot{}, nil, err
+			}
+			if latest.Revision != snapshot.Revision {
+				snapshot = latest
+				r.mu.Unlock()
+				continue
+			}
+			fact := session.ContextContributionFact{
+				RunID: run.id, StepID: step, SourceKey: source.Key(), Inputs: cloneRuntimeInputs(contribution),
+			}
+			_, err = r.commitLocked(run.ctx, snapshot.Revision, "context-source", []session.Change{{Kind: session.AppendContextContribution, ContextContribution: &fact}})
+			r.mu.Unlock()
+			if err != nil {
+				return session.Snapshot{}, nil, err
+			}
+			snapshot, err = r.session.View(run.ctx)
+			if err != nil {
+				return session.Snapshot{}, nil, err
+			}
+			dynamic = candidate
+			break
+		}
+	}
+	return snapshot, dynamic, nil
+}
+
+func (r *runtimeInstance) buildContextCandidate(run *activeRun, step agent.StepID, snapshot session.Snapshot, sourceDynamic []model.Input) (model.ModelRequest, []model.Input, int, error) {
 	capabilities, err := r.inspectModel(run.ctx, run.config)
 	if err != nil {
 		return model.ModelRequest{}, nil, 0, err
@@ -68,21 +126,9 @@ func (r *runtimeInstance) buildContextCandidate(run *activeRun, step agent.StepI
 		return model.ModelRequest{}, nil, 0, modelNotSupported("selected model does not support tool calling", nil)
 	}
 
-	dynamic := historyInputs(snapshot.History)
+	dynamic := cloneRuntimeInputs(sourceDynamic)
 	if err := validateDynamicInputs(r.id(), dynamic); err != nil {
 		return model.ModelRequest{}, nil, 0, err
-	}
-	for _, source := range r.components.sources {
-		contribution, sourceErr := source.Contribute(run.ctx, agentcontext.ContextInput{
-			SessionID: r.id(), Revision: snapshot.Revision, Inputs: cloneRuntimeInputs(dynamic), Config: cloneRuntimeConfig(run.config),
-		})
-		if sourceErr != nil {
-			return model.ModelRequest{}, nil, 0, sourceErr
-		}
-		dynamic = append(dynamic, cloneRuntimeInputs(contribution)...)
-		if err := validateDynamicInputs(r.id(), dynamic); err != nil {
-			return model.ModelRequest{}, nil, 0, err
-		}
 	}
 	dynamic = projectUnsupportedAttachments(dynamic, capabilities.Media)
 	if err := validateDynamicInputs(r.id(), dynamic); err != nil {
@@ -133,6 +179,13 @@ func (r *runtimeInstance) buildContextCandidate(run *activeRun, step agent.StepI
 		return model.ModelRequest{}, nil, 0, contextLimitError(tokens, limit)
 	}
 	return request, dynamic, tokens, nil
+}
+
+func latestHistorySequence(history []session.HistoryFact) session.HistorySequence {
+	if len(history) == 0 {
+		return 0
+	}
+	return history[len(history)-1].Sequence
 }
 
 func (r *runtimeInstance) assembleModelRequest(run *activeRun, step agent.StepID, dynamic []model.Input) model.ModelRequest {

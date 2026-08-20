@@ -19,6 +19,8 @@ var CompactorSlot = agentslot.One[ContextCompactor]("context.compactor")
 // ContextSource contributes an ordered, provider-neutral projection without
 // mutating History. Runtime validates the complete protocol after every source.
 type ContextSource interface {
+	// Key is stable fact identity for this ordered source implementation.
+	Key() string
 	Contribute(stdcontext.Context, ContextInput) ([]model.Input, error)
 }
 

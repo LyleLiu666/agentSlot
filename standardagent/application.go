@@ -27,10 +27,21 @@ type ApplicationSpec struct {
 // AgentRuntimeConfig is copied into every Session Runtime. Nil ToolKeys selects
 // all explicitly installed Tools; a non-nil empty slice selects none.
 type AgentRuntimeConfig struct {
-	SystemPrompt string
-	ToolKeys     []string
-	Context      ContextConfig
+	SystemPrompt         string
+	ToolKeys             []string
+	Context              ContextConfig
+	ContextRetentionMode ContextRetentionMode
+	MaxTokensPerRun      int64
 }
+
+type ContextRetentionMode string
+
+const (
+	ContextLatestOnly ContextRetentionMode = "latest_only"
+	ContextRetainAll  ContextRetentionMode = "retain_all"
+)
+
+func (m ContextRetentionMode) Valid() bool { return m == ContextLatestOnly || m == ContextRetainAll }
 
 type ContextConfig struct {
 	// HardTokenLimit may further reduce the selected model's declared context

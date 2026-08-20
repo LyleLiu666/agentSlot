@@ -1,6 +1,7 @@
 package tool_test
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -30,6 +31,27 @@ func TestInputSchemaUsesPortableJSONSchemaDialect(t *testing.T) {
 	copyOfJSON[0] = '['
 	if schema.JSON()[0] != '{' {
 		t.Fatal("InputSchema.JSON returned mutable shared state")
+	}
+}
+
+func TestInputSchemaRoundTripsThroughDurableJSON(t *testing.T) {
+	original, err := tool.ParseInputSchema([]byte(`{"type":"object","additionalProperties":false,"required":["path"],"properties":{"path":{"type":"string"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored tool.InputSchema
+	if err := json.Unmarshal(encoded, &restored); err != nil {
+		t.Fatal(err)
+	}
+	if err := restored.ValidateArguments([]byte(`{"path":"README.md"}`)); err != nil {
+		t.Fatalf("restored schema rejected valid arguments: %v", err)
+	}
+	if err := restored.ValidateArguments([]byte(`{"unknown":true}`)); !errors.Is(err, tool.ErrInvalidArguments) {
+		t.Fatalf("restored schema accepted invalid arguments: %v", err)
 	}
 }
 

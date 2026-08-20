@@ -60,17 +60,18 @@ type SummaryRequest struct {
 // create, load, or commit. Implementations return detached slices; mutating a
 // caller's copy never changes persisted state.
 type Snapshot struct {
-	Session     agent.Session
-	Revision    agent.Revision
-	History     []HistoryFact
-	Context     ContextView
-	Queue       []QueueItem
-	RunJournal  []JournalEntry
-	Events      []SessionEvent
-	ModelConfig SessionModelConfig
-	RunState    RunState
-	ActiveRunID agent.RunID
-	Fork        *ForkProvenance
+	Session          agent.Session
+	Revision         agent.Revision
+	History          []HistoryFact
+	Context          ContextView
+	RetainedContexts []ContextView
+	Queue            []QueueItem
+	RunJournal       []JournalEntry
+	Events           []SessionEvent
+	ModelConfig      SessionModelConfig
+	RunState         RunState
+	ActiveRunID      agent.RunID
+	Fork             *ForkProvenance
 }
 
 type ForkProvenance struct {
@@ -276,8 +277,14 @@ func (f ModelAttemptFact) Validate() error {
 	if err := f.Usage.Validate(); err != nil {
 		return err
 	}
-	if f.Kind == AttemptStarted && (f.Usage.TotalTokens != 0 || f.ErrorCode != "") {
+	if f.Kind == AttemptStarted && (f.Usage != (model.TokenUsage{}) || f.ProviderRequestID != "" || f.ErrorCode != "") {
 		return fmt.Errorf("session: started attempt cannot contain terminal outcome")
+	}
+	if f.Kind != AttemptStarted && f.Kind != AttemptSucceeded && f.ErrorCode == "" {
+		return fmt.Errorf("session: unsuccessful attempt requires a safe error code")
+	}
+	if f.Kind == AttemptSucceeded && f.ErrorCode != "" {
+		return fmt.Errorf("session: succeeded attempt cannot contain an error code")
 	}
 	return nil
 }
@@ -353,16 +360,15 @@ func (f RunFact) Validate(sessionID agent.SessionID) error {
 	return nil
 }
 
-// ContextView is the current legal dynamic model projection and its source
-// revision. Inputs exclude fixed SystemPrompt and Tool definitions; TokenCount
-// measures the complete assembled request that used this projection. It is not
-// the complete Session History.
+// ContextView is one complete logical model request and its source revision.
+// It includes the exact SystemPrompt, projected inputs, Tool definitions and
+// frozen ModelConfig visible to the model, but never credentials or headers.
 type ContextView struct {
 	Version               ContextVersion
 	SourceRevision        agent.Revision
 	SourceHistorySequence HistorySequence
 	TokenCount            int
-	Inputs                []model.Input
+	Request               model.ModelRequest
 }
 
 // Delivery classifies queued input before it is claimed by a Run.
@@ -628,6 +634,7 @@ type Change struct {
 	QueueDelete           *QueueDelete
 	QueueReclassification *QueueReclassify
 	Context               *ContextView
+	RetainPreviousContext bool
 	ModelConfig           *SessionModelConfig
 	RunState              *RunStateChange
 	Journal               *JournalEntry
@@ -637,6 +644,9 @@ type Change struct {
 func (c Change) Validate(sessionID agent.SessionID) error {
 	if c.payloadCount() != 1 {
 		return fmt.Errorf("session: change %q requires exactly one payload", c.Kind)
+	}
+	if c.RetainPreviousContext && c.Kind != SetContext {
+		return fmt.Errorf("session: context retention applies only to a context change")
 	}
 	switch c.Kind {
 	case AppendMessage:

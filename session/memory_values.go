@@ -15,6 +15,10 @@ func cloneSnapshot(source Snapshot) Snapshot {
 		copy.History[index] = cloneHistoryFact(fact)
 	}
 	copy.Context = cloneContext(source.Context)
+	copy.RetainedContexts = make([]ContextView, len(source.RetainedContexts))
+	for index, contextView := range source.RetainedContexts {
+		copy.RetainedContexts[index] = cloneContext(contextView)
+	}
 	copy.Queue = make([]QueueItem, len(source.Queue))
 	for index, item := range source.Queue {
 		copy.Queue[index] = cloneQueueItem(item)
@@ -92,10 +96,18 @@ func cloneHistoryFact(source HistoryFact) HistoryFact {
 
 func cloneContext(source ContextView) ContextView {
 	copy := source
+	copy.Request = cloneSessionModelRequest(source.Request)
+	return copy
+}
+
+func cloneSessionModelRequest(source model.ModelRequest) model.ModelRequest {
+	copy := source
+	copy.Config = cloneModelConfig(source.Config)
 	copy.Inputs = make([]model.Input, len(source.Inputs))
 	for index, input := range source.Inputs {
 		copy.Inputs[index] = cloneModelInput(input)
 	}
+	copy.Tools = append(copy.Tools[:0:0], source.Tools...)
 	return copy
 }
 

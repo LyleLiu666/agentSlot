@@ -404,6 +404,22 @@ func validateFileDocument(id agent.SessionID, document fileStoreDocument) error 
 	if err := validateContext(snapshot.Context, id); err != nil {
 		return err
 	}
+	if err := validateContextRun(snapshot.History, snapshot.Context); err != nil {
+		return err
+	}
+	previousVersion := ContextVersion(0)
+	for _, retained := range snapshot.RetainedContexts {
+		if err := validateContext(retained, id); err != nil {
+			return err
+		}
+		if err := validateContextRun(snapshot.History, retained); err != nil {
+			return err
+		}
+		if (previousVersion != 0 && retained.Version <= previousVersion) || retained.Version >= snapshot.Context.Version {
+			return errors.New("retained context versions are inconsistent")
+		}
+		previousVersion = retained.Version
+	}
 	if err := validateHistoryConsistency(id, snapshot.History, snapshot.RunJournal); err != nil {
 		return err
 	}

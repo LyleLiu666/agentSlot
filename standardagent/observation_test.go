@@ -16,8 +16,7 @@ import (
 
 func TestRuntimePublishesPassiveTraceMetricAuditAndUsageFacts(t *testing.T) {
 	records := &observationRecords{changed: make(chan struct{}, 64)}
-	fake := model.NewFakeModelExecutor(model.FakeExecution{Events: []model.ModelEvent{
-		{Kind: model.EventUsage, AttemptID: "attempt-1", Usage: &model.Usage{InputTokens: 4, OutputTokens: 2, TotalTokens: 6}},
+	fake := model.NewFakeModelExecutor(model.FakeExecution{Usage: model.TokenUsage{InputTokens: 4, OutputTokens: 2, TotalTokens: 6}, Events: []model.ModelEvent{
 		{Kind: model.EventComplete, AttemptID: "attempt-1", Output: &model.Completion{Parts: textInput("done").Parts}},
 	}})
 	access, stop := startObservedApplication(t, fake, records)

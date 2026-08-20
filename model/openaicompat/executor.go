@@ -127,18 +127,21 @@ func New(config Config) (*Executor, error) {
 	}, nil
 }
 
-func (e *Executor) Execute(ctx context.Context, request model.ModelRequest) (model.ModelStream, error) {
+func (e *Executor) Execute(ctx context.Context, request model.ModelRequest, recorder model.AttemptRecorder) (model.ModelStream, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if _, err := e.Inspect(ctx, request.Config); err != nil {
 		return nil, err
 	}
+	if recorder == nil {
+		return nil, agent.NewError(agent.ErrorInvalidInput, "openaicompat.execute", "AttemptRecorder is required", nil)
+	}
 	payload, err := buildRequest(request)
 	if err != nil {
 		return nil, agent.NewError(agent.ErrorInvalidInput, "openaicompat.execute", "invalid logical model request", err)
 	}
-	return newStream(ctx, e, payload), nil
+	return newStream(ctx, e, request, payload, recorder), nil
 }
 
 func (e *Executor) Inspect(ctx context.Context, config model.Config) (model.ExecutionCapabilities, error) {

@@ -14,13 +14,30 @@ import (
 
 type executor struct{}
 
-func (executor) Execute(context.Context, model.ModelRequest) (model.ModelStream, error) {
+func (executor) Execute(context.Context, model.ModelRequest, model.AttemptRecorder) (model.ModelStream, error) {
 	return nil, nil
 }
 func (executor) Inspect(context.Context, model.Config) (model.ExecutionCapabilities, error) {
 	return testCapabilities(), nil
 }
 func (executor) CountTokens(context.Context, model.ModelRequest) (int, error) { return 0, nil }
+
+type attemptRecorder struct {
+	started  []model.AttemptStart
+	finished []model.AttemptFinish
+	budget   model.TokenBudget
+}
+
+func (r *attemptRecorder) Started(_ context.Context, value model.AttemptStart) error {
+	r.started = append(r.started, value)
+	return nil
+}
+func (r *attemptRecorder) Finished(_ context.Context, value model.AttemptFinish) error {
+	r.finished = append(r.finished, value)
+	r.budget.UsedTokens += value.Usage.TotalTokens
+	return nil
+}
+func (r *attemptRecorder) Budget() model.TokenBudget { return r.budget }
 
 func testCapabilities() model.ExecutionCapabilities {
 	return model.ExecutionCapabilities{
@@ -62,7 +79,6 @@ func TestModelEventsSeparateTemporaryAndTerminalFacts(t *testing.T) {
 	valid := []model.ModelEvent{
 		{Kind: model.EventDelta, Text: "partial"},
 		{Kind: model.EventReset},
-		{Kind: model.EventUsage, AttemptID: "attempt-1", Usage: &model.Usage{InputTokens: 2, OutputTokens: 3, TotalTokens: 5}},
 		{Kind: model.EventComplete, Output: output},
 		{Kind: model.EventFailed, Err: errors.New("provider failed")},
 	}
@@ -83,8 +99,31 @@ func TestModelEventsSeparateTemporaryAndTerminalFacts(t *testing.T) {
 	if err := (model.ModelEvent{Kind: model.EventReset, Text: "stale"}).Validate(); err == nil {
 		t.Fatal("reset event with text accepted")
 	}
-	if err := (model.ModelEvent{Kind: model.EventUsage, AttemptID: "attempt-1", Usage: &model.Usage{InputTokens: 3, OutputTokens: 2, TotalTokens: 4}}).Validate(); err == nil {
-		t.Fatal("inconsistent usage event accepted")
+	if err := (model.AttemptFinish{AttemptID: "attempt-1", Outcome: model.AttemptSucceeded, Usage: model.TokenUsage{InputTokens: 3, OutputTokens: 2, TotalTokens: 4}}).Validate(); err == nil {
+		t.Fatal("inconsistent attempt usage accepted")
+	}
+}
+
+func TestAttemptRecorderVocabularyAndTokenBudget(t *testing.T) {
+	start := model.AttemptStart{AttemptID: "attempt-1", ProviderKey: "provider", ModelID: "model"}
+	finish := model.AttemptFinish{
+		AttemptID: "attempt-1", Outcome: model.AttemptFailed, ErrorCode: "transport",
+		Usage: model.TokenUsage{InputTokens: 4, OutputTokens: 1, TotalTokens: 5, Estimated: true, EstimateSource: "adapter"},
+	}
+	if err := start.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := finish.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	missingCode := finish
+	missingCode.ErrorCode = ""
+	if err := missingCode.Validate(); err == nil {
+		t.Fatal("failed attempt without a safe error code was accepted")
+	}
+	budget := model.TokenBudget{MaxTokens: 5, UsedTokens: 5}
+	if err := budget.Validate(); err != nil || !budget.Exhausted() || budget.RemainingTokens() != 0 {
+		t.Fatalf("budget = %#v, err = %v", budget, err)
 	}
 }
 
@@ -103,7 +142,7 @@ func TestCompletionAllowsIdentityFreeToolOnlyResult(t *testing.T) {
 
 func TestFakeModelExecutorScriptsAndDetachesRequests(t *testing.T) {
 	output := &model.Completion{Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "done"}}}
-	fake := model.NewFakeModelExecutor(model.FakeExecution{Events: []model.ModelEvent{
+	fake := model.NewFakeModelExecutor(model.FakeExecution{Usage: model.TokenUsage{InputTokens: 2, OutputTokens: 1, TotalTokens: 3}, Events: []model.ModelEvent{
 		{Kind: model.EventDelta, Text: "do"},
 		{Kind: model.EventComplete, Output: output},
 	}})
@@ -112,7 +151,8 @@ func TestFakeModelExecutorScriptsAndDetachesRequests(t *testing.T) {
 		Config: model.Config{ModelID: "model-1", Reasoning: model.ReasoningDefault},
 		Inputs: []model.Input{{Message: &agent.Message{ID: "message-1", SessionID: "session-1", Role: agent.RoleUser, Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "hello"}}}}},
 	}
-	stream, err := fake.Execute(context.Background(), request)
+	recorder := &attemptRecorder{}
+	stream, err := fake.Execute(context.Background(), request, recorder)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -129,6 +169,9 @@ func TestFakeModelExecutorScriptsAndDetachesRequests(t *testing.T) {
 	requests := fake.Requests()
 	if requests[0].Inputs[0].Message.Parts[0].Text != "hello" {
 		t.Fatalf("captured request was aliased: %#v", requests[0])
+	}
+	if len(recorder.started) != 1 || len(recorder.finished) != 1 || recorder.finished[0].Outcome != model.AttemptSucceeded || recorder.finished[0].Usage.TotalTokens != 3 {
+		t.Fatalf("attempt records = %#v / %#v", recorder.started, recorder.finished)
 	}
 }
 

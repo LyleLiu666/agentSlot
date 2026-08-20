@@ -243,7 +243,6 @@ ToolKeys 是严格白名单。nil、空列表和未配置都表示不暴露工�
 后续迁移仍须消除以下差距：
 
 - `interaction.entrypoint` 及若干 Gateway 子 Slot 尚未收敛为 `gateway.channel`；
-- AttemptRecorder、Context retention 和 Run Token Budget 尚未接入执行链；
 - 外部写命令尚未全部执行统一严格 ExpectedRevision；
 - Hook/Observer 和 ToolKeys 仍是旧语义；
 - 组件地图在每轮只反映已经实现的公共合同，尚未达到最终 37/16 状态。

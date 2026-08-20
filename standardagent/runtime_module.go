@@ -73,6 +73,12 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 			if m.config.Context.HardTokenLimit < 0 {
 				return nil, fmt.Errorf("standardagent: Context HardTokenLimit cannot be negative")
 			}
+			if m.config.MaxTokensPerRun < 0 {
+				return nil, fmt.Errorf("standardagent: MaxTokensPerRun cannot be negative")
+			}
+			if !m.config.ContextRetentionMode.Valid() {
+				return nil, fmt.Errorf("standardagent: invalid ContextRetentionMode %q", m.config.ContextRetentionMode)
+			}
 			store, err := agentslot.ResolveOne(resolver, session.StoreSlot)
 			if err != nil {
 				return nil, err
@@ -124,6 +130,13 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 			sources, err := agentslot.ResolveChain(resolver, agentcontext.SourceSlot)
 			if err != nil {
 				return nil, err
+			}
+			sourceKeys := make(map[string]bool, len(sources))
+			for _, source := range sources {
+				if source == nil || source.Key() == "" || sourceKeys[source.Key()] {
+					return nil, fmt.Errorf("standardagent: ContextSource keys must be non-empty and unique")
+				}
+				sourceKeys[source.Key()] = true
 			}
 			compactor, _, err := agentslot.ResolveOptionalOne(resolver, agentcontext.CompactorSlot)
 			if err != nil {
@@ -258,6 +271,9 @@ func selectRuntimeTools(installed []agentslot.Named[tool.Tool], keys []string) (
 
 func cloneAgentRuntimeConfig(source AgentRuntimeConfig) AgentRuntimeConfig {
 	cloned := source
+	if cloned.ContextRetentionMode == "" {
+		cloned.ContextRetentionMode = ContextLatestOnly
+	}
 	if source.ToolKeys != nil {
 		cloned.ToolKeys = make([]string, len(source.ToolKeys))
 		copy(cloned.ToolKeys, source.ToolKeys)

@@ -59,22 +59,28 @@ func TestMemoryStoreAssignsStableHistoryMetadata(t *testing.T) {
 
 func TestMemoryStorePersistsTypedOperationalFacts(t *testing.T) {
 	store, snapshot := newStoredSession(t, "typed-facts")
+	snapshot = startStoredRun(t, store, snapshot, "run-1")
 	attempt := session.ModelAttemptFact{
 		AttemptID: "attempt-1", RunID: "run-1", StepID: "step-1", Kind: session.AttemptStarted,
-		ProviderKey: "provider", ModelID: "model",
+		ProviderKey: snapshot.ModelConfig.ProviderKey, ModelID: snapshot.ModelConfig.ModelID,
 	}
+	terminal := attempt
+	terminal.Kind = session.AttemptFailed
+	terminal.ErrorCode = "provider_failure"
+	terminal.Usage = model.TokenUsage{InputTokens: 100, OutputTokens: 1, TotalTokens: 101}
 	contribution := session.ContextContributionFact{RunID: "run-1", StepID: "step-1", SourceKey: "memory", Inputs: []model.Input{}}
 	budget := session.RunBudgetExceededFact{RunID: "run-1", UsedTokens: 101, MaxTokens: 100}
 	commit := commitChanges(t, store, snapshot.Session.ID, snapshot.Revision, "typed-facts",
 		session.Change{Kind: session.AppendModelAttempt, ModelAttempt: &attempt},
+		session.Change{Kind: session.AppendModelAttempt, ModelAttempt: &terminal},
 		session.Change{Kind: session.AppendContextContribution, ContextContribution: &contribution},
 		session.Change{Kind: session.AppendRunBudgetExceeded, RunBudgetExceeded: &budget},
 	)
 	loaded := load(t, store, snapshot.Session.ID)
-	if loaded.Revision != commit.Revision || len(loaded.History) != 3 {
+	if loaded.Revision != commit.Revision || len(loaded.History) != 5 {
 		t.Fatalf("loaded = revision %d history %d", loaded.Revision, len(loaded.History))
 	}
-	want := []session.HistoryFactKind{session.FactModelAttempt, session.FactContextContribution, session.FactRunBudgetExceeded}
+	want := []session.HistoryFactKind{session.FactRun, session.FactModelAttempt, session.FactModelAttempt, session.FactContextContribution, session.FactRunBudgetExceeded}
 	for index := range want {
 		assertFactMetadata(t, loaded.History[index], session.HistorySequence(index+1), want[index])
 	}
@@ -82,9 +88,10 @@ func TestMemoryStorePersistsTypedOperationalFacts(t *testing.T) {
 
 func TestModelAttemptRequiresStartedThenOneTerminal(t *testing.T) {
 	store, snapshot := newStoredSession(t, "attempt-pair")
+	snapshot = startStoredRun(t, store, snapshot, "run-1")
 	terminal := session.ModelAttemptFact{
 		AttemptID: "attempt-1", RunID: "run-1", StepID: "step-1", Kind: session.AttemptFailed,
-		ProviderKey: "provider", ModelID: "model", ErrorCode: "network",
+		ProviderKey: snapshot.ModelConfig.ProviderKey, ModelID: snapshot.ModelConfig.ModelID, ErrorCode: "network",
 	}
 	_, err := store.Commit(context.Background(), session.CommitRequest{
 		SessionID: snapshot.Session.ID, ExpectedRevision: snapshot.Revision, IdempotencyKey: "terminal-first",
@@ -110,6 +117,64 @@ func TestModelAttemptRequiresStartedThenOneTerminal(t *testing.T) {
 	}
 }
 
+func TestContextSnapshotMustMatchTheFrozenRunModel(t *testing.T) {
+	store, snapshot := newStoredSession(t, "context-run-model")
+	snapshot = startStoredRun(t, store, snapshot, "run-1")
+	started := snapshot.History[0].Run
+	if started == nil {
+		t.Fatal("missing RunStarted fact")
+	}
+	view := session.ContextView{
+		Version: 1, SourceRevision: snapshot.Revision,
+		SourceHistorySequence: snapshot.History[len(snapshot.History)-1].Sequence,
+		Request: model.ModelRequest{
+			SessionID: snapshot.Session.ID, RunID: "run-1", StepID: "step-1",
+			Config: started.ModelConfig, ConfigRevision: started.ConfigRevision,
+		},
+	}
+	view.Request.Config.ModelID = "different-model"
+	_, err := store.Commit(context.Background(), session.CommitRequest{
+		SessionID: snapshot.Session.ID, ExpectedRevision: snapshot.Revision, IdempotencyKey: "wrong-context-model",
+		Changes: []session.Change{{Kind: session.SetContext, Context: &view}},
+	})
+	if err == nil {
+		t.Fatal("Context using a model other than the frozen Run model was accepted")
+	}
+
+	view.Request.Config = started.ModelConfig
+	committed := commitChanges(t, store, snapshot.Session.ID, snapshot.Revision, "valid-context-model",
+		session.Change{Kind: session.SetContext, Context: &view},
+	)
+	if committed.Revision != snapshot.Revision.Next() {
+		t.Fatalf("context commit revision = %d", committed.Revision)
+	}
+}
+
+func TestRunBudgetFactMustMatchDurableAttemptUsage(t *testing.T) {
+	store, snapshot := newStoredSession(t, "budget-attempt-usage")
+	snapshot = startStoredRun(t, store, snapshot, "run-1")
+	started := session.ModelAttemptFact{
+		AttemptID: "attempt-1", RunID: "run-1", StepID: "step-1", Kind: session.AttemptStarted,
+		ProviderKey: snapshot.ModelConfig.ProviderKey, ModelID: snapshot.ModelConfig.ModelID,
+	}
+	terminal := started
+	terminal.Kind = session.AttemptFailed
+	terminal.ErrorCode = "transport"
+	terminal.Usage = model.TokenUsage{InputTokens: 4, OutputTokens: 1, TotalTokens: 5}
+	committed := commitChanges(t, store, snapshot.Session.ID, snapshot.Revision, "budget-attempt",
+		session.Change{Kind: session.AppendModelAttempt, ModelAttempt: &started},
+		session.Change{Kind: session.AppendModelAttempt, ModelAttempt: &terminal},
+	)
+	budget := session.RunBudgetExceededFact{RunID: "run-1", UsedTokens: 6, MaxTokens: 5}
+	_, err := store.Commit(context.Background(), session.CommitRequest{
+		SessionID: snapshot.Session.ID, ExpectedRevision: committed.Revision, IdempotencyKey: "wrong-budget-usage",
+		Changes: []session.Change{{Kind: session.AppendRunBudgetExceeded, RunBudgetExceeded: &budget}},
+	})
+	if err == nil {
+		t.Fatal("RunBudgetExceeded usage not backed by durable Attempts was accepted")
+	}
+}
+
 func TestCreateRejectsUnpairedModelAttemptHistory(t *testing.T) {
 	store := session.NewMemoryStore()
 	terminal := session.ModelAttemptFact{
@@ -127,9 +192,10 @@ func TestCreateRejectsUnpairedModelAttemptHistory(t *testing.T) {
 
 func TestRecoveryTerminatesOrphanedModelAttempt(t *testing.T) {
 	store, snapshot := newStoredSession(t, "attempt-recovery")
+	snapshot = startStoredRun(t, store, snapshot, "run-1")
 	started := session.ModelAttemptFact{
 		AttemptID: "attempt-1", RunID: "run-1", StepID: "step-1", Kind: session.AttemptStarted,
-		ProviderKey: "provider", ModelID: "model",
+		ProviderKey: snapshot.ModelConfig.ProviderKey, ModelID: snapshot.ModelConfig.ModelID,
 	}
 	committed := commitChanges(t, store, snapshot.Session.ID, snapshot.Revision, "attempt-started",
 		session.Change{Kind: session.AppendModelAttempt, ModelAttempt: &started},
@@ -138,17 +204,31 @@ func TestRecoveryTerminatesOrphanedModelAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if recovered.Revision != committed.Revision.Next() || len(recovered.History) != 2 {
+	if recovered.Revision != committed.Revision.Next() || len(recovered.History) != 4 {
 		t.Fatalf("recovered = revision %d history %d", recovered.Revision, len(recovered.History))
 	}
-	terminal := recovered.History[1].ModelAttempt
+	terminal := recovered.History[2].ModelAttempt
 	if terminal == nil || terminal.Kind != session.AttemptOutcomeUnknown || terminal.AttemptID != started.AttemptID {
 		t.Fatalf("terminal attempt = %#v", terminal)
 	}
 	again, err := store.Recover(context.Background(), session.SessionRef{SessionID: snapshot.Session.ID})
-	if err != nil || again.Revision != recovered.Revision || len(again.History) != 2 {
+	if err != nil || again.Revision != recovered.Revision || len(again.History) != 4 {
 		t.Fatalf("second recovery = revision %d history %d, %v", again.Revision, len(again.History), err)
 	}
+}
+
+func startStoredRun(t *testing.T, store session.SessionStore, snapshot session.Snapshot, runID agent.RunID) session.Snapshot {
+	t.Helper()
+	running := session.RunStateChange{RunID: runID, State: session.RunRunning}
+	started := session.RunFact{
+		SessionID: snapshot.Session.ID, RunID: runID, Kind: session.RunStarted,
+		ModelConfig: snapshot.ModelConfig, ConfigRevision: snapshot.Revision,
+	}
+	commitChanges(t, store, snapshot.Session.ID, snapshot.Revision, "start-"+string(runID),
+		session.Change{Kind: session.SetRunState, RunState: &running},
+		session.Change{Kind: session.AppendRunFact, RunFact: &started},
+	)
+	return load(t, store, snapshot.Session.ID)
 }
 
 func TestHistoryPageUsesExclusiveSequenceCursorAndKeepsStepsWhole(t *testing.T) {

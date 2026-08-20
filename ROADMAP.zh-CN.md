@@ -348,6 +348,10 @@ AgentSlot 参考这些行为，不复制 pi 的类型、聚合 Session 或产品
 - 已验证正常完成自动 FIFO，取消、错误和重启后回到 idle 且不自动消费旧 Queue；
 - Run 开始和终态作为 append-only History 事实记录冻结的模型配置及来源 revision，临时
   chunk/reset 不持久化。
+- 已实现受限 AttemptRecorder；每次物理请求在发出前记录 started，在重试或逻辑终态前
+  记录 terminal、细分 TokenUsage、Provider request identity 或带来源的本地估算。
+- 已实现 ContextSource 贡献先持久化、完整逻辑请求快照、LatestOnly/RetainAll 和
+  MaxTokensPerRun；预算耗尽形成 RunBudgetExceeded 和可继续的新 Run 边界。
 
 ### 阶段 4：完成第一批可扩展能力
 

@@ -35,6 +35,7 @@ type activeRun struct {
 	prepared        chan struct{}
 	prepareOnce     sync.Once
 	prepareRevision agent.Revision
+	usedTokens      int64
 }
 
 func (r *activeRun) signalPrepared(revision agent.Revision) {
@@ -51,6 +52,7 @@ const (
 	stepContinue
 	stepFailed
 	stepCanceled
+	stepBudgetExceeded
 )
 
 func (r *runtimeInstance) nextID(kind string) string {
@@ -72,29 +74,50 @@ func (r *runtimeInstance) runLoop(run *activeRun, step agent.StepID) {
 }
 
 func (r *runtimeInstance) executeStep(run *activeRun, step agent.StepID) (stepOutcome, agent.StepID) {
+	defer func() { run.signalPrepared(r.revision()) }()
+	if r.runBudget(run).Exhausted() {
+		if err := r.recordBudgetExceeded(run); err != nil {
+			return stepFailed, ""
+		}
+		return stepBudgetExceeded, ""
+	}
 	request, err := r.prepareModelRequest(run, step)
-	run.signalPrepared(r.revision())
 	if err != nil {
+		run.signalPrepared(r.revision())
 		if errors.Is(err, context.Canceled) {
 			return stepCanceled, ""
 		}
 		return stepFailed, ""
 	}
-	stream, err := r.components.executor.Execute(run.ctx, request)
+	recorder := &runtimeAttemptRecorder{runtime: r, run: run, step: step}
+	stream, err := r.components.executor.Execute(run.ctx, request, recorder)
 	if err != nil {
+		run.signalPrepared(r.revision())
+		if errors.Is(err, model.ErrTokenBudgetExceeded) {
+			if recordErr := r.recordBudgetExceeded(run); recordErr != nil {
+				return stepFailed, ""
+			}
+			return stepBudgetExceeded, ""
+		}
 		if errors.Is(err, context.Canceled) {
 			return stepCanceled, ""
 		}
 		return stepFailed, ""
 	}
 	if stream == nil {
+		run.signalPrepared(r.revision())
 		return stepFailed, ""
 	}
 	defer stream.Close()
-	seenAttempts := make(map[string]bool)
 	for {
 		event, err := stream.Recv(run.ctx)
 		if err != nil {
+			if errors.Is(err, model.ErrTokenBudgetExceeded) {
+				if recordErr := r.recordBudgetExceeded(run); recordErr != nil {
+					return stepFailed, ""
+				}
+				return stepBudgetExceeded, ""
+			}
 			if errors.Is(err, context.Canceled) {
 				return stepCanceled, ""
 			}
@@ -103,32 +126,21 @@ func (r *runtimeInstance) executeStep(run *activeRun, step agent.StepID) (stepOu
 		if err := event.Validate(); err != nil {
 			return stepFailed, ""
 		}
-		if event.AttemptID != "" && !seenAttempts[event.AttemptID] {
-			seenAttempts[event.AttemptID] = true
-			r.observeModelAttempt(observe.TraceModelAttemptStarted, run, step, event.AttemptID)
-			r.components.observations.publishMetric(observe.MetricRecord{
-				Name: observe.MetricModelAttemptTotal, Kind: observe.MetricCounter, Value: 1, At: time.Now().UTC(),
-				Attributes: map[string]string{"provider": run.config.ProviderKey, "model": run.config.ModelID},
-			})
-		}
 		switch event.Kind {
 		case model.EventDelta:
 			r.events.publish(interaction.Event{Kind: interaction.EventChunk, SessionID: r.id(), RunID: run.id, StepID: step, AttemptID: event.AttemptID, Text: event.Text})
 		case model.EventReset:
 			r.observeModelAttempt(observe.TraceModelAttemptReset, run, step, event.AttemptID)
 			r.events.publish(interaction.Event{Kind: interaction.EventReset, SessionID: r.id(), RunID: run.id, StepID: step, AttemptID: event.AttemptID})
-		case model.EventUsage:
-			r.components.observations.publishUsage(observe.UsageRecord{
-				Kind: observe.UsageModel, At: time.Now().UTC(),
-				Identity:    observe.Identity{SessionID: r.id(), RunID: run.id, StepID: step},
-				ProviderKey: run.config.ProviderKey, ModelID: run.config.ModelID, AttemptID: event.AttemptID,
-				InputTokens: event.Usage.InputTokens, OutputTokens: event.Usage.OutputTokens, TotalTokens: event.Usage.TotalTokens,
-			})
 		case model.EventFailed:
-			r.observeModelAttempt(observe.TraceModelAttemptFailed, run, step, event.AttemptID)
+			if errors.Is(event.Err, model.ErrTokenBudgetExceeded) {
+				if recordErr := r.recordBudgetExceeded(run); recordErr != nil {
+					return stepFailed, ""
+				}
+				return stepBudgetExceeded, ""
+			}
 			return stepFailed, ""
 		case model.EventComplete:
-			r.observeModelAttempt(observe.TraceModelAttemptDone, run, step, event.AttemptID)
 			calls, canceled, err := r.commitCompletion(run, step, *event.Output)
 			if canceled {
 				return stepCanceled, ""
@@ -160,6 +172,112 @@ func (r *runtimeInstance) executeStep(run *activeRun, step agent.StepID) (stepOu
 			return stepNatural, ""
 		}
 	}
+}
+
+type runtimeAttemptRecorder struct {
+	runtime *runtimeInstance
+	run     *activeRun
+	step    agent.StepID
+}
+
+func (a *runtimeAttemptRecorder) Started(_ context.Context, started model.AttemptStart) error {
+	if err := started.Validate(); err != nil {
+		return err
+	}
+	r := a.runtime
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active != a.run || r.closing {
+		return context.Canceled
+	}
+	if started.ProviderKey != a.run.config.ProviderKey || started.ModelID != a.run.config.ModelID {
+		return agent.NewError(agent.ErrorInvalidInput, "standardagent.model_attempt", "Executor attempt does not match the frozen Run model", nil)
+	}
+	snapshot, err := r.viewLocked(context.Background())
+	if err != nil {
+		return err
+	}
+	fact := session.ModelAttemptFact{
+		AttemptID: started.AttemptID, RunID: a.run.id, StepID: a.step, Kind: session.AttemptStarted,
+		ProviderKey: started.ProviderKey, ModelID: started.ModelID,
+	}
+	if _, err := r.commitLocked(context.Background(), snapshot.Revision, "attempt-start", []session.Change{{Kind: session.AppendModelAttempt, ModelAttempt: &fact}}); err != nil {
+		return err
+	}
+	a.run.signalPrepared(r.revision())
+	r.observeModelAttempt(observe.TraceModelAttemptStarted, a.run, a.step, string(started.AttemptID))
+	r.components.observations.publishMetric(observe.MetricRecord{
+		Name: observe.MetricModelAttemptTotal, Kind: observe.MetricCounter, Value: 1, At: time.Now().UTC(),
+		Attributes: map[string]string{"provider": a.run.config.ProviderKey, "model": a.run.config.ModelID},
+	})
+	return nil
+}
+
+func (a *runtimeAttemptRecorder) Finished(_ context.Context, finished model.AttemptFinish) error {
+	if err := finished.Validate(); err != nil {
+		return err
+	}
+	r := a.runtime
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active != a.run {
+		return context.Canceled
+	}
+	kind := session.AttemptFailed
+	trace := observe.TraceModelAttemptFailed
+	switch finished.Outcome {
+	case model.AttemptSucceeded:
+		kind, trace = session.AttemptSucceeded, observe.TraceModelAttemptDone
+	case model.AttemptCanceled:
+		kind = session.AttemptCanceled
+	}
+	snapshot, err := r.viewLocked(context.Background())
+	if err != nil {
+		return err
+	}
+	fact := session.ModelAttemptFact{
+		AttemptID: finished.AttemptID, RunID: a.run.id, StepID: a.step, Kind: kind,
+		ProviderKey: a.run.config.ProviderKey, ModelID: a.run.config.ModelID,
+		ProviderRequestID: finished.ProviderRequestID, Usage: finished.Usage, ErrorCode: finished.ErrorCode,
+	}
+	if _, err := r.commitLocked(context.Background(), snapshot.Revision, "attempt-finish", []session.Change{{Kind: session.AppendModelAttempt, ModelAttempt: &fact}}); err != nil {
+		return err
+	}
+	a.run.usedTokens += finished.Usage.TotalTokens
+	r.observeModelAttempt(trace, a.run, a.step, string(finished.AttemptID))
+	r.components.observations.publishUsage(observe.UsageRecord{
+		Kind: observe.UsageModel, At: time.Now().UTC(),
+		Identity:    observe.Identity{SessionID: r.id(), RunID: a.run.id, StepID: a.step},
+		ProviderKey: a.run.config.ProviderKey, ModelID: a.run.config.ModelID, AttemptID: string(finished.AttemptID),
+		InputTokens: int(finished.Usage.InputTokens), OutputTokens: int(finished.Usage.OutputTokens), TotalTokens: int(finished.Usage.TotalTokens),
+	})
+	return nil
+}
+
+func (a *runtimeAttemptRecorder) Budget() model.TokenBudget { return a.runtime.runBudget(a.run) }
+
+func (r *runtimeInstance) runBudget(run *activeRun) model.TokenBudget {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return model.TokenBudget{MaxTokens: r.components.config.MaxTokensPerRun, UsedTokens: run.usedTokens}
+}
+
+func (r *runtimeInstance) recordBudgetExceeded(run *activeRun) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active != run {
+		return context.Canceled
+	}
+	if r.components.config.MaxTokensPerRun <= 0 || run.usedTokens < r.components.config.MaxTokensPerRun {
+		return agent.NewError(agent.ErrorInternal, "standardagent.run_budget", "Executor reported an unexhausted Run budget", nil)
+	}
+	snapshot, err := r.viewLocked(context.Background())
+	if err != nil {
+		return err
+	}
+	fact := session.RunBudgetExceededFact{RunID: run.id, UsedTokens: run.usedTokens, MaxTokens: r.components.config.MaxTokensPerRun}
+	_, err = r.commitLocked(context.Background(), snapshot.Revision, "run-budget", []session.Change{{Kind: session.AppendRunBudgetExceeded, RunBudgetExceeded: &fact}})
+	return err
 }
 
 func (r *runtimeInstance) observeModelAttempt(kind observe.TraceKind, run *activeRun, step agent.StepID, attemptID string) {
@@ -339,6 +457,8 @@ func (r *runtimeInstance) finishRun(run *activeRun, outcome stepOutcome) (*activ
 		terminalKind = session.RunCompleted
 	case stepCanceled:
 		terminalKind = session.RunCanceled
+	case stepBudgetExceeded:
+		terminalKind = session.RunInterrupted
 	}
 	terminal := session.RunFact{
 		SessionID: r.id(), RunID: run.id, Kind: terminalKind,

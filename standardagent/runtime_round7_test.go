@@ -58,13 +58,11 @@ func TestRuntimeBuildsVersionedContextWithoutRewritingHistory(t *testing.T) {
 	if len(messages) != 2 || messages[0].Parts[0].Kind != agent.PartAttachment || messages[0].Parts[0].AttachmentID != "image-1" {
 		t.Fatalf("History was rewritten by projection: %#v", messages)
 	}
-	if snapshot.Context.Version != 1 || snapshot.Context.SourceRevision == 0 || snapshot.Context.TokenCount != 3 || len(snapshot.Context.Inputs) != 2 {
+	if snapshot.Context.Version != 1 || snapshot.Context.SourceRevision == 0 || snapshot.Context.TokenCount != 3 || len(snapshot.Context.Request.Inputs) != 3 {
 		t.Fatalf("persisted Context = %#v", snapshot.Context)
 	}
-	for _, input := range snapshot.Context.Inputs {
-		if input.SystemPrompt != nil {
-			t.Fatal("fixed SystemPrompt was persisted in dynamic Context")
-		}
+	if snapshot.Context.Request.Inputs[0].SystemPrompt == nil || *snapshot.Context.Request.Inputs[0].SystemPrompt != "fixed system" {
+		t.Fatal("complete Context did not retain the fixed SystemPrompt")
 	}
 }
 
@@ -97,7 +95,7 @@ func TestRuntimeUsesReplaceableCompactorBeforeHardTokenLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(historyMessageFacts(snapshot.History)) != 2 || len(snapshot.Context.Inputs) != 1 {
+	if len(historyMessageFacts(snapshot.History)) != 2 || len(snapshot.Context.Request.Inputs) != 2 {
 		t.Fatalf("History/Context separation failed: %#v", snapshot)
 	}
 }
@@ -270,8 +268,8 @@ func newRound7Executor(inspect func(model.Config) (model.ExecutionCapabilities, 
 	return &round7Executor{fake: model.NewFakeModelExecutor(executions...), inspect: inspect, count: count}
 }
 
-func (e *round7Executor) Execute(ctx context.Context, request model.ModelRequest) (model.ModelStream, error) {
-	return e.fake.Execute(ctx, request)
+func (e *round7Executor) Execute(ctx context.Context, request model.ModelRequest, recorder model.AttemptRecorder) (model.ModelStream, error) {
+	return e.fake.Execute(ctx, request, recorder)
 }
 func (e *round7Executor) Inspect(ctx context.Context, config model.Config) (model.ExecutionCapabilities, error) {
 	if e.inspect != nil {
@@ -339,6 +337,8 @@ func (m contextSourceModule) Register(reg agentslot.Registrar) error {
 
 type recordingContextSource struct{ calls int }
 
+func (*recordingContextSource) Key() string { return "recording" }
+
 func (s *recordingContextSource) Contribute(_ context.Context, input agentcontext.ContextInput) ([]model.Input, error) {
 	s.calls++
 	message := &agent.Message{ID: "source-message", SessionID: input.SessionID, Role: agent.RoleUser, Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "source"}}}
@@ -346,6 +346,8 @@ func (s *recordingContextSource) Contribute(_ context.Context, input agentcontex
 }
 
 type cancelableContextSource struct{ entered chan struct{} }
+
+func (*cancelableContextSource) Key() string { return "cancelable" }
 
 func (s *cancelableContextSource) Contribute(ctx context.Context, _ agentcontext.ContextInput) ([]model.Input, error) {
 	close(s.entered)
@@ -358,6 +360,7 @@ type fixedContextSourceImpl struct{ id, text string }
 func fixedContextSource(id, text string) agentcontext.ContextSource {
 	return fixedContextSourceImpl{id: id, text: text}
 }
+func (s fixedContextSourceImpl) Key() string { return s.id }
 func (s fixedContextSourceImpl) Contribute(_ context.Context, input agentcontext.ContextInput) ([]model.Input, error) {
 	message := &agent.Message{ID: agent.MessageID(s.id), SessionID: input.SessionID, Role: agent.RoleUser, Parts: []agent.MessagePart{{Kind: agent.PartText, Text: s.text}}}
 	return []model.Input{{Message: message}}, nil

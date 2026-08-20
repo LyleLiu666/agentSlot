@@ -369,10 +369,6 @@ func TestFixedManagerCreateResumeForkAndSummaryPreserveModelRules(t *testing.T) 
 	queue := message("queued-source", source.Session.ID, agent.RoleUser, "not inherited")
 	updated := commitChanges(t, store, source.Session.ID, source.Revision, "source-state",
 		session.Change{Kind: session.AppendMessage, Message: &user},
-		session.Change{Kind: session.SetContext, Context: &session.ContextView{
-			Version: 1, SourceRevision: source.Revision, TokenCount: 1,
-			Inputs: []model.Input{{Message: &user}},
-		}},
 		session.Change{Kind: session.EnqueueMessage, QueueItem: &session.QueueItem{Message: queue, Delivery: session.DeliveryNormal}},
 		session.Change{Kind: session.SetModelConfig, ModelConfig: &selected},
 		session.Change{Kind: session.AppendSessionEvent, SessionEvent: &modelEvent},
@@ -399,7 +395,7 @@ func TestFixedManagerCreateResumeForkAndSummaryPreserveModelRules(t *testing.T) 
 	if len(forkView.History) != 2 || forkView.History[0].Message == nil || forkView.History[0].Message.ID == user.ID || forkView.History[0].Message.SessionID != forkView.Session.ID || forkView.History[1].ModelConfigChanged == nil {
 		t.Fatalf("fork history identities = %#v", forkView.History)
 	}
-	if len(forkView.Context.Inputs) != 0 || forkView.Context.Version != 0 || forkView.Context.SourceRevision != 0 {
+	if forkView.Context.Request.SessionID != "" || len(forkView.RetainedContexts) != 0 || forkView.Context.Version != 0 || forkView.Context.SourceRevision != 0 {
 		t.Fatalf("fork reused source model projection: %#v", forkView.Context)
 	}
 	if len(forkView.Queue) != 0 || len(forkView.RunJournal) != 0 {

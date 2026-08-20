@@ -19,15 +19,18 @@ import (
 )
 
 type eventStream struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	events chan model.ModelEvent
-	once   sync.Once
+	ctx      context.Context
+	cancel   context.CancelFunc
+	events   chan model.ModelEvent
+	done     chan struct{}
+	once     sync.Once
+	request  model.ModelRequest
+	recorder model.AttemptRecorder
 }
 
-func newStream(parent context.Context, executor *Executor, payload []byte) *eventStream {
+func newStream(parent context.Context, executor *Executor, request model.ModelRequest, payload []byte, recorder model.AttemptRecorder) *eventStream {
 	ctx, cancel := context.WithCancel(parent)
-	stream := &eventStream{ctx: ctx, cancel: cancel, events: make(chan model.ModelEvent, 16)}
+	stream := &eventStream{ctx: ctx, cancel: cancel, events: make(chan model.ModelEvent, 16), done: make(chan struct{}), request: request, recorder: recorder}
 	go stream.run(executor, append([]byte(nil), payload...))
 	return stream
 }
@@ -48,32 +51,72 @@ func (s *eventStream) Recv(ctx context.Context) (model.ModelEvent, error) {
 
 func (s *eventStream) Close() error {
 	s.once.Do(s.cancel)
+	<-s.done
 	return nil
 }
 
 func (s *eventStream) run(executor *Executor, payload []byte) {
+	defer close(s.done)
 	defer close(s.events)
 	for attempt := 1; attempt <= executor.maxAttempts; attempt++ {
-		attemptID := fmt.Sprintf("%s-attempt-%d", executor.providerKey, executor.sequence.Add(1))
-		completion, emitted, retryable, err := s.attempt(executor, payload, attemptID)
-		if err == nil {
-			s.emit(model.ModelEvent{Kind: model.EventComplete, AttemptID: attemptID, Output: &completion})
+		if s.recorder.Budget().Exhausted() {
+			s.emit(model.ModelEvent{Kind: model.EventFailed, Err: model.ErrTokenBudgetExceeded})
+			return
+		}
+		attemptID := agent.AttemptID(fmt.Sprintf("%s-attempt-%d", executor.providerKey, executor.sequence.Add(1)))
+		if err := s.recorder.Started(s.ctx, model.AttemptStart{AttemptID: attemptID, ProviderKey: s.request.Config.ProviderKey, ModelID: s.request.Config.ModelID}); err != nil {
+			s.emit(model.ModelEvent{Kind: model.EventFailed, AttemptID: string(attemptID), Err: err})
+			return
+		}
+		result := s.attempt(executor, payload, string(attemptID))
+		usage := result.usage
+		if usage == (model.TokenUsage{}) {
+			outputTokens := int64((result.outputBytes + 3) / 4)
+			usage = model.TokenUsage{
+				InputTokens: int64(len(payload)), OutputTokens: outputTokens,
+				TotalTokens: int64(len(payload)) + outputTokens,
+				Estimated:   true, EstimateSource: "openaicompat.local_byte_estimate",
+			}
+		}
+		outcome := model.AttemptFailed
+		errorCode := result.errorCode
+		if result.err == nil {
+			outcome, errorCode = model.AttemptSucceeded, ""
+		} else if errors.Is(result.err, context.Canceled) || s.ctx.Err() != nil {
+			outcome, errorCode = model.AttemptCanceled, "canceled"
+		} else if errors.Is(result.err, context.DeadlineExceeded) {
+			errorCode = "timeout"
+		}
+		finish := model.AttemptFinish{
+			AttemptID: attemptID, Outcome: outcome, ProviderRequestID: result.providerRequestID,
+			Usage: usage, ErrorCode: errorCode,
+		}
+		if err := s.recorder.Finished(context.WithoutCancel(s.ctx), finish); err != nil {
+			s.emit(model.ModelEvent{Kind: model.EventFailed, AttemptID: string(attemptID), Err: err})
+			return
+		}
+		if result.err == nil {
+			s.emit(model.ModelEvent{Kind: model.EventComplete, AttemptID: string(attemptID), Output: &result.completion})
 			return
 		}
 		if s.ctx.Err() != nil {
 			return
 		}
-		if !retryable || attempt == executor.maxAttempts {
-			if emitted && !s.emit(model.ModelEvent{Kind: model.EventReset, AttemptID: attemptID}) {
+		if !result.retryable || attempt == executor.maxAttempts {
+			if result.emitted && !s.emit(model.ModelEvent{Kind: model.EventReset, AttemptID: string(attemptID)}) {
 				return
 			}
 			s.emit(model.ModelEvent{
-				Kind: model.EventFailed, AttemptID: attemptID,
-				Err: agent.NewError(agent.ErrorUnavailable, "openaicompat.stream", "model provider request failed", err),
+				Kind: model.EventFailed, AttemptID: string(attemptID),
+				Err: agent.NewError(agent.ErrorUnavailable, "openaicompat.stream", "model provider request failed", result.err),
 			})
 			return
 		}
-		if emitted && !s.emit(model.ModelEvent{Kind: model.EventReset, AttemptID: attemptID}) {
+		if result.emitted && !s.emit(model.ModelEvent{Kind: model.EventReset, AttemptID: string(attemptID)}) {
+			return
+		}
+		if s.recorder.Budget().Exhausted() {
+			s.emit(model.ModelEvent{Kind: model.EventFailed, AttemptID: string(attemptID), Err: model.ErrTokenBudgetExceeded})
 			return
 		}
 		if !waitRetry(s.ctx, executor.retryBackoff, attempt) {
@@ -82,7 +125,18 @@ func (s *eventStream) run(executor *Executor, payload []byte) {
 	}
 }
 
-func (s *eventStream) attempt(executor *Executor, payload []byte, attemptID string) (model.Completion, bool, bool, error) {
+type attemptResult struct {
+	completion        model.Completion
+	emitted           bool
+	retryable         bool
+	usage             model.TokenUsage
+	providerRequestID string
+	outputBytes       int
+	errorCode         string
+	err               error
+}
+
+func (s *eventStream) attempt(executor *Executor, payload []byte, attemptID string) attemptResult {
 	ctx := s.ctx
 	cancel := func() {}
 	if executor.requestTimeout > 0 {
@@ -91,7 +145,7 @@ func (s *eventStream) attempt(executor *Executor, payload []byte, attemptID stri
 	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, executor.endpoint, bytes.NewReader(payload))
 	if err != nil {
-		return model.Completion{}, false, false, err
+		return attemptResult{errorCode: "request_build", err: err}
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "text/event-stream")
@@ -101,20 +155,28 @@ func (s *eventStream) attempt(executor *Executor, payload []byte, attemptID stri
 	}
 	response, err := executor.client.Do(request)
 	if err != nil {
-		return model.Completion{}, false, true, err
+		return attemptResult{retryable: true, errorCode: "transport", err: err}
 	}
 	defer response.Body.Close()
+	providerRequestID := response.Header.Get("x-request-id")
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
 		retryable := response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= 500
-		return model.Completion{}, false, retryable, fmt.Errorf("provider returned HTTP status %d", response.StatusCode)
+		return attemptResult{retryable: retryable, providerRequestID: providerRequestID, errorCode: fmt.Sprintf("http_%d", response.StatusCode), err: fmt.Errorf("provider returned HTTP status %d", response.StatusCode)}
 	}
 	parser := sseParser{
 		attemptID: attemptID, maxEventBytes: executor.maxEventBytes,
 		maxOutputBytes: executor.maxOutputBytes, emit: s.emit,
 	}
 	completion, emitted, err := parser.consume(response.Body)
-	return completion, emitted, true, err
+	result := attemptResult{
+		completion: completion, emitted: emitted, retryable: true, usage: parser.usage,
+		providerRequestID: providerRequestID, outputBytes: parser.outputBytes, err: err,
+	}
+	if err != nil {
+		result.errorCode = "stream"
+	}
+	return result
 }
 
 func (s *eventStream) emit(event model.ModelEvent) bool {
@@ -155,6 +217,7 @@ type sseParser struct {
 	finished       bool
 	done           bool
 	outputBytes    int
+	usage          model.TokenUsage
 }
 
 type toolCallAccumulator struct {
@@ -179,9 +242,15 @@ type chatChunk struct {
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage *struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-		TotalTokens      int `json:"total_tokens"`
+		PromptTokens        int `json:"prompt_tokens"`
+		CompletionTokens    int `json:"completion_tokens"`
+		TotalTokens         int `json:"total_tokens"`
+		PromptTokensDetails *struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
+		CompletionTokensDetails *struct {
+			ReasoningTokens int `json:"reasoning_tokens"`
+		} `json:"completion_tokens_details"`
 	} `json:"usage"`
 }
 
@@ -207,15 +276,19 @@ func (p *sseParser) consume(reader io.Reader) (model.Completion, bool, error) {
 			return err
 		}
 		if chunk.Usage != nil {
-			usage := model.Usage{
-				InputTokens: chunk.Usage.PromptTokens, OutputTokens: chunk.Usage.CompletionTokens, TotalTokens: chunk.Usage.TotalTokens,
+			usage := model.TokenUsage{
+				InputTokens: int64(chunk.Usage.PromptTokens), OutputTokens: int64(chunk.Usage.CompletionTokens), TotalTokens: int64(chunk.Usage.TotalTokens),
 			}
-			if !usage.Valid() {
+			if chunk.Usage.PromptTokensDetails != nil {
+				usage.CachedInputTokens = int64(chunk.Usage.PromptTokensDetails.CachedTokens)
+			}
+			if chunk.Usage.CompletionTokensDetails != nil {
+				usage.ReasoningTokens = int64(chunk.Usage.CompletionTokensDetails.ReasoningTokens)
+			}
+			if err := usage.Validate(); err != nil {
 				return errors.New("provider returned invalid usage")
 			}
-			if !p.emit(model.ModelEvent{Kind: model.EventUsage, AttemptID: p.attemptID, Usage: &usage}) {
-				return context.Canceled
-			}
+			p.usage = usage
 		}
 		for _, choice := range chunk.Choices {
 			if choice.Delta.Content != "" {

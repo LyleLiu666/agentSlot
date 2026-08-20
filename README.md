@@ -300,7 +300,8 @@ facts retain the frozen model configuration. The
 `FakeModelExecutor` for development and contract tests, while
 [`model/openaicompat`](model/openaicompat) provides a real streaming Chat
 Completions-compatible Executor with physical Attempt IDs, bounded output,
-retry/reset handling, and Provider-reported token usage. The fixed Runtime also
+retry/reset handling, durable started/terminal Attempt facts, Provider-reported
+token usage, and marked local estimates when a failed request has no usage. The fixed Runtime also
 owns ToolDispatcher semantics: call/pending and result/terminal commits,
 Serial/ParallelSafe batches, safe structured failures, and mandatory model
 continuation. [`tool/bash`](tool/bash) is the first explicitly installed
@@ -309,9 +310,12 @@ process-group cancellation, and separate output limits. It is never installed
 by import or by `standardagent.NewApplication`. The official
 [`tool/files`](tool/files) package adds root-confined read/CAS-write/exact-edit
 tools, and [`tool/http`](tool/http) adds an allowlisted bounded HTTP client.
-The Runtime now builds and
-persists versioned Context projections, runs ordered ContextSource and Hook
-chains, enforces model protocol and hard token limits, projects unsupported
+The Runtime now persists each ContextSource contribution before use and stores
+complete versioned logical requests. `LatestOnly` keeps only the newest request;
+`RetainAll` also preserves every prior Step request, including its prompt, model
+configuration, tools, and attachment projection. It runs ordered ContextSource and Hook
+chains, enforces model protocol, hard context limits, and the optional per-Run
+token budget, projects unsupported
 attachments without rewriting History, and validates idle-only model switches
 through ModelExecutor capabilities. `model.catalog` has a typed contract and
 an explicit StaticCatalog reference implementation. Applications can

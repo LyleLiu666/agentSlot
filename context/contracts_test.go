@@ -14,6 +14,8 @@ import (
 
 type source struct{}
 
+func (source) Key() string { return "test" }
+
 func (source) Contribute(stdcontext.Context, agentcontext.ContextInput) ([]model.Input, error) {
 	return nil, nil
 }

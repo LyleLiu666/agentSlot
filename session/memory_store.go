@@ -257,7 +257,7 @@ func validateNewSession(initial NewSession) error {
 	if err := validateContext(initial.Context, initial.Session.ID); err != nil {
 		return err
 	}
-	if initial.Context.Version != 0 || initial.Context.SourceRevision != 0 || initial.Context.SourceHistorySequence != 0 || initial.Context.TokenCount != 0 || len(initial.Context.Inputs) != 0 {
+	if initial.Context.Version != 0 || initial.Context.SourceRevision != 0 || initial.Context.SourceHistorySequence != 0 || initial.Context.TokenCount != 0 || initial.Context.Request.SessionID != "" {
 		return invalid("session.create", "new session context must be empty and unversioned")
 	}
 	if err := validateHistoryConsistency(initial.Session.ID, initial.History, initial.RunJournal); err != nil {
@@ -352,14 +352,12 @@ func applyChanges(snapshot *Snapshot, request CommitRequest) error {
 				return err
 			}
 		case AppendContextContribution:
-			contribution := *change.ContextContribution
-			if err := appendHistoryFact(&snapshot.History, request.SessionID, HistoryFact{ContextContribution: &contribution}, request.Actor); err != nil {
-				return historyConflict(err.Error())
+			if err := appendContextContributionFact(snapshot, *change.ContextContribution, request.Actor); err != nil {
+				return err
 			}
 		case AppendRunBudgetExceeded:
-			budget := *change.RunBudgetExceeded
-			if err := appendHistoryFact(&snapshot.History, request.SessionID, HistoryFact{RunBudgetExceeded: &budget}, request.Actor); err != nil {
-				return historyConflict(err.Error())
+			if err := appendRunBudgetExceededFact(snapshot, *change.RunBudgetExceeded, request.Actor); err != nil {
+				return err
 			}
 		case AppendSessionEvent:
 			event := cloneSessionEvent(*change.SessionEvent)
@@ -433,8 +431,23 @@ func applyChanges(snapshot *Snapshot, request CommitRequest) error {
 			if change.Context.Version != snapshot.Context.Version+1 {
 				return agent.NewCodedError(agent.ErrorConflict, agent.CodeRevisionConflict, "session.commit", "context version must advance exactly once", nil)
 			}
+			latestSequence := HistorySequence(0)
+			if len(snapshot.History) > 0 {
+				latestSequence = snapshot.History[len(snapshot.History)-1].Sequence
+			}
+			if change.Context.SourceHistorySequence != latestSequence {
+				return agent.NewCodedError(agent.ErrorConflict, agent.CodeRevisionConflict, "session.commit", "context history sequence must match the latest durable fact", nil)
+			}
 			if err := validateContext(*change.Context, request.SessionID); err != nil {
 				return err
+			}
+			if err := validateContextRun(snapshot.History, *change.Context); err != nil {
+				return err
+			}
+			if change.RetainPreviousContext && snapshot.Context.Version != 0 {
+				snapshot.RetainedContexts = append(snapshot.RetainedContexts, cloneContext(snapshot.Context))
+			} else if !change.RetainPreviousContext {
+				snapshot.RetainedContexts = nil
 			}
 			snapshot.Context = cloneContext(*change.Context)
 		case SetModelConfig:
@@ -553,6 +566,13 @@ func appendModelAttemptFact(snapshot *Snapshot, fact ModelAttemptFact, actor age
 		if started != nil || terminal != nil {
 			return historyConflict("model attempt already started")
 		}
+		if snapshot.RunState != RunRunning || snapshot.ActiveRunID != fact.RunID {
+			return historyConflict("model attempt requires the active run")
+		}
+		runStarted, _ := runFacts(snapshot.History, fact.RunID)
+		if runStarted == nil || runStarted.ModelConfig.ProviderKey != fact.ProviderKey || runStarted.ModelConfig.ModelID != fact.ModelID {
+			return historyConflict("model attempt does not match the frozen run model")
+		}
 	} else {
 		if started == nil || terminal != nil {
 			return historyConflict("model attempt terminal requires one unterminated start")
@@ -563,6 +583,56 @@ func appendModelAttemptFact(snapshot *Snapshot, fact ModelAttemptFact, actor age
 	}
 	copy := fact
 	return appendHistoryFact(&snapshot.History, snapshot.Session.ID, HistoryFact{ModelAttempt: &copy}, actor)
+}
+
+func appendRunBudgetExceededFact(snapshot *Snapshot, fact RunBudgetExceededFact, actor agent.ActorIdentity) error {
+	if err := fact.Validate(); err != nil {
+		return historyConflict(err.Error())
+	}
+	if snapshot.RunState != RunRunning || snapshot.ActiveRunID != fact.RunID {
+		return historyConflict("run budget fact requires the active run")
+	}
+	var used int64
+	for _, historyFact := range snapshot.History {
+		if historyFact.RunBudgetExceeded != nil && historyFact.RunBudgetExceeded.RunID == fact.RunID {
+			return historyConflict("run budget was already exceeded")
+		}
+		attempt := historyFact.ModelAttempt
+		if attempt == nil || attempt.RunID != fact.RunID || attempt.Kind == AttemptStarted {
+			continue
+		}
+		next := used + attempt.Usage.TotalTokens
+		if next < used {
+			return historyConflict("run token usage overflow")
+		}
+		used = next
+	}
+	if used != fact.UsedTokens {
+		return historyConflict("run budget usage differs from durable model attempts")
+	}
+	copy := fact
+	return appendHistoryFact(&snapshot.History, snapshot.Session.ID, HistoryFact{RunBudgetExceeded: &copy}, actor)
+}
+
+func appendContextContributionFact(snapshot *Snapshot, fact ContextContributionFact, actor agent.ActorIdentity) error {
+	if snapshot.RunState != RunRunning || snapshot.ActiveRunID != fact.RunID {
+		return historyConflict("context contribution requires the active run")
+	}
+	for _, historyFact := range snapshot.History {
+		contribution := historyFact.ContextContribution
+		if contribution != nil && contribution.RunID == fact.RunID && contribution.StepID == fact.StepID && contribution.SourceKey == fact.SourceKey {
+			return historyConflict("context source already contributed to this step")
+		}
+	}
+	copy := fact
+	copy.Inputs = make([]model.Input, len(fact.Inputs))
+	for index, input := range fact.Inputs {
+		copy.Inputs[index] = cloneModelInput(input)
+	}
+	if err := appendHistoryFact(&snapshot.History, snapshot.Session.ID, HistoryFact{ContextContribution: &copy}, actor); err != nil {
+		return historyConflict(err.Error())
+	}
+	return nil
 }
 
 func runFacts(history []HistoryFact, runID agent.RunID) (*RunFact, *RunFact) {
@@ -693,13 +763,23 @@ func recoverAggregate(snapshot *Snapshot) (bool, error) {
 }
 
 func validateContext(contextView ContextView, sessionID agent.SessionID) error {
-	if contextView.TokenCount < 0 {
-		return invalid("session.context", "context token count cannot be negative")
-	}
-	for _, input := range contextView.Inputs {
-		if !input.Valid() || input.SystemPrompt != nil {
-			return invalid("session.context", "context contains an invalid or fixed input")
+	if contextView.Version == 0 {
+		if contextView.SourceRevision != 0 || contextView.SourceHistorySequence != 0 || contextView.TokenCount != 0 || contextView.Request.SessionID != "" {
+			return invalid("session.context", "empty context contains versioned data")
 		}
+		return nil
+	}
+	if contextView.SourceRevision == 0 || contextView.TokenCount < 0 {
+		return invalid("session.context", "versioned context metadata is invalid")
+	}
+	request := contextView.Request
+	if request.SessionID != sessionID || !request.RunID.Valid() || !request.StepID.Valid() {
+		return invalid("session.context", "context request containment is invalid")
+	}
+	if err := request.Config.Validate(); err != nil {
+		return invalid("session.context", err.Error())
+	}
+	for _, input := range request.Inputs {
 		if input.Message != nil && input.Message.SessionID != sessionID {
 			return invalid("session.context", "context message does not belong to session")
 		}
@@ -707,8 +787,27 @@ func validateContext(contextView ContextView, sessionID agent.SessionID) error {
 			return invalid("session.context", "context tool call does not belong to session")
 		}
 	}
-	if err := model.ValidateInputs(contextView.Inputs); err != nil {
+	if err := model.ValidateInputs(request.Inputs); err != nil {
 		return invalid("session.context", err.Error())
+	}
+	for _, definition := range request.Tools {
+		if err := definition.Validate(); err != nil {
+			return invalid("session.context", err.Error())
+		}
+	}
+	return nil
+}
+
+func validateContextRun(history []HistoryFact, contextView ContextView) error {
+	if contextView.Version == 0 {
+		return nil
+	}
+	started, _ := runFacts(history, contextView.Request.RunID)
+	if started == nil {
+		return historyConflict("context request has no RunStarted fact")
+	}
+	if contextView.Request.ConfigRevision != started.ConfigRevision || !sameModelConfig(contextView.Request.Config, started.ModelConfig) {
+		return historyConflict("context request changed the frozen run model")
 	}
 	return nil
 }
@@ -802,6 +901,9 @@ func validateHistoryConsistency(sessionID agent.SessionID, history []HistoryFact
 	runTerminals := make(map[agent.RunID]bool)
 	attemptStarts := make(map[agent.AttemptID]*ModelAttemptFact)
 	attemptTerminals := make(map[agent.AttemptID]bool)
+	attemptUsage := make(map[agent.RunID]int64)
+	budgetSeen := make(map[agent.RunID]bool)
+	contributions := make(map[string]bool)
 	for _, fact := range history {
 		if err := fact.validatePayload(sessionID); err != nil {
 			return historyConflict(err.Error())
@@ -854,6 +956,10 @@ func validateHistoryConsistency(sessionID agent.SessionID, history []HistoryFact
 				if attemptStarts[attempt.AttemptID] != nil || attemptTerminals[attempt.AttemptID] {
 					return historyConflict("duplicate initial model attempt start")
 				}
+				run := runStarts[attempt.RunID]
+				if run == nil || runTerminals[attempt.RunID] || run.ModelConfig.ProviderKey != attempt.ProviderKey || run.ModelConfig.ModelID != attempt.ModelID {
+					return historyConflict("initial model attempt does not match an active frozen run")
+				}
 				attemptStarts[attempt.AttemptID] = attempt
 			} else {
 				started := attemptStarts[attempt.AttemptID]
@@ -864,7 +970,30 @@ func validateHistoryConsistency(sessionID agent.SessionID, history []HistoryFact
 					return historyConflict("initial model attempt terminal changed identity")
 				}
 				attemptTerminals[attempt.AttemptID] = true
+				next := attemptUsage[attempt.RunID] + attempt.Usage.TotalTokens
+				if next < attemptUsage[attempt.RunID] {
+					return historyConflict("initial run token usage overflow")
+				}
+				attemptUsage[attempt.RunID] = next
 			}
+		}
+		if fact.ContextContribution != nil {
+			contribution := fact.ContextContribution
+			if runStarts[contribution.RunID] == nil || runTerminals[contribution.RunID] {
+				return historyConflict("initial context contribution does not belong to an active run")
+			}
+			key := string(contribution.RunID) + "\x00" + string(contribution.StepID) + "\x00" + contribution.SourceKey
+			if contributions[key] {
+				return historyConflict("duplicate initial context source contribution")
+			}
+			contributions[key] = true
+		}
+		if fact.RunBudgetExceeded != nil {
+			budget := fact.RunBudgetExceeded
+			if runStarts[budget.RunID] == nil || runTerminals[budget.RunID] || budgetSeen[budget.RunID] || attemptUsage[budget.RunID] != budget.UsedTokens {
+				return historyConflict("initial run budget fact is inconsistent with durable attempts")
+			}
+			budgetSeen[budget.RunID] = true
 		}
 	}
 	for _, entry := range journal {

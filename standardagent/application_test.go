@@ -535,7 +535,7 @@ func (s *seededStore) HistoryPage(ctx context.Context, request session.HistoryPa
 
 type fakeExecutor struct{}
 
-func (fakeExecutor) Execute(context.Context, model.ModelRequest) (model.ModelStream, error) {
+func (fakeExecutor) Execute(context.Context, model.ModelRequest, model.AttemptRecorder) (model.ModelStream, error) {
 	return nil, errors.New("not used in application skeleton test")
 }
 func (fakeExecutor) Inspect(context.Context, model.Config) (model.ExecutionCapabilities, error) {

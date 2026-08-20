@@ -35,7 +35,7 @@
 - [x] HistoryFact、Attempt、TokenUsage、ContextVersion 和分页合同已落地；
 - [x] 公共 `session.manager` Slot 与接口已删除；
 - [x] 完整 Fork、检查点 Fork、协议边界和 usage 来源已验证；
-- [ ] AttemptRecorder、Context retention 和 MaxTokensPerRun 已落地；
+- [x] AttemptRecorder、Context retention 和 MaxTokensPerRun 已落地；
 - [ ] `gateway.channel` 已替代旧 Entrypoint 和重复 Gateway 子 Slot；
 - [ ] 所有外部写命令均执行严格 CAS，View 与历史分页已验证；
 - [ ] Hook、CommitObserver、运维事实和 ToolKeys 已按新语义收敛；

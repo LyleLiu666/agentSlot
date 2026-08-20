@@ -38,6 +38,29 @@ type InputSchema struct {
 	compiled *jsonschema.Schema
 }
 
+// MarshalJSON preserves the canonical schema in durable Context snapshots.
+// Credentials and execution state are not part of InputSchema.
+func (s InputSchema) MarshalJSON() ([]byte, error) {
+	if s.compiled == nil || len(s.json) == 0 {
+		return nil, fmt.Errorf("%w: cannot marshal an uninitialized schema", ErrInvalidInputSchema)
+	}
+	return append([]byte(nil), s.json...), nil
+}
+
+// UnmarshalJSON recompiles the canonical schema so a restored Definition has
+// exactly the same validation behavior as the in-memory original.
+func (s *InputSchema) UnmarshalJSON(raw []byte) error {
+	if s == nil {
+		return fmt.Errorf("%w: nil schema target", ErrInvalidInputSchema)
+	}
+	parsed, err := ParseInputSchema(raw)
+	if err != nil {
+		return err
+	}
+	*s = parsed
+	return nil
+}
+
 // ParseInputSchema validates the portable AgentSlot envelope and returns a
 // detached canonical representation. Full instance validation remains the
 // responsibility of the tool invocation boundary.
