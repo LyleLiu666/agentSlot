@@ -402,6 +402,7 @@ type runtimeInstance struct {
 	prefix        string
 	sequence      atomic.Uint64
 	revisionValue atomic.Uint64
+	observer      *hookObserver
 }
 
 func newRuntimeInstance(s session.Session, components *runtimeComponents) (*runtimeInstance, error) {
@@ -425,6 +426,7 @@ func newRuntimeInstance(s session.Session, components *runtimeComponents) (*runt
 	if !runtime.id().Valid() {
 		return nil, agent.NewError(agent.ErrorInternal, "standardagent.runtime", "SessionManager returned an invalid SessionID", nil)
 	}
+	runtime.observer = newHookObserver(components.hooks)
 	return runtime, nil
 }
 

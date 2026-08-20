@@ -34,10 +34,12 @@ type entrypointValidation struct{}
 type runtimeModule struct {
 	binding *gatewayBinding
 	state   *applicationRuntime
+	config  AgentRuntimeConfig
 }
 
-func newRuntimeModule() *runtimeModule {
-	return &runtimeModule{binding: &gatewayBinding{}}
+func newRuntimeModule(config AgentRuntimeConfig) *runtimeModule {
+	config = cloneAgentRuntimeConfig(config)
+	return &runtimeModule{binding: &gatewayBinding{}, config: config}
 }
 
 func (m *runtimeModule) ID() string { return runtimeModuleID }
@@ -48,6 +50,7 @@ func (m *runtimeModule) RequiredSlots() []agentslot.Requirement {
 		agentslot.RequireOne(session.StoreSlot),
 		agentslot.RequireOne(model.ExecutorSlot),
 		agentslot.OptionalMany(tool.ToolSlot),
+		agentslot.OptionalMany(model.CatalogSlot),
 		agentslot.OptionalChain(agentcontext.SourceSlot),
 		agentslot.OptionalOne(agentcontext.CompactorSlot),
 		agentslot.OptionalChain(hook.HookSlot),
@@ -59,6 +62,9 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 	return reg.Contribute(
 		agentslot.Set(gatewayAccessSlot, interaction.GatewayAccess(m.binding)),
 		agentslot.SetWith(runtimeStateSlot, func(resolver agentslot.Resolver) (*applicationRuntime, error) {
+			if m.config.Context.HardTokenLimit < 0 {
+				return nil, fmt.Errorf("standardagent: Context HardTokenLimit cannot be negative")
+			}
 			manager, err := agentslot.ResolveOne(resolver, session.ManagerSlot)
 			if err != nil {
 				return nil, err
@@ -87,7 +93,15 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 			if err != nil {
 				return nil, err
 			}
-			dispatcher, err := newToolDispatcher(tools)
+			selectedTools, err := selectRuntimeTools(tools, m.config.ToolKeys)
+			if err != nil {
+				return nil, err
+			}
+			dispatcher, err := newToolDispatcher(selectedTools)
+			if err != nil {
+				return nil, err
+			}
+			catalogs, err := agentslot.ResolveMany(resolver, model.CatalogSlot)
 			if err != nil {
 				return nil, err
 			}
@@ -106,7 +120,7 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 			state := newApplicationRuntime(runtimeDependencies{
 				manager: manager, store: store, executor: executor,
 				commands: commands, commandDescriptors: commandDescriptors,
-				tools: tools, dispatcher: dispatcher, sources: sources,
+				tools: selectedTools, dispatcher: dispatcher, catalogs: catalogs, config: cloneAgentRuntimeConfig(m.config), sources: sources,
 				compactor: compactor, hooks: hooks,
 			})
 			m.state = state
@@ -142,6 +156,8 @@ type runtimeDependencies struct {
 	commandDescriptors []interaction.CommandDescriptor
 	tools              []agentslot.Named[tool.Tool]
 	dispatcher         *toolDispatcher
+	catalogs           []agentslot.Named[model.ModelCatalog]
+	config             AgentRuntimeConfig
 	sources            []agentcontext.ContextSource
 	compactor          agentcontext.ContextCompactor
 	hooks              []hook.AgentHook
@@ -158,6 +174,8 @@ type runtimeComponents struct {
 	compactor  agentcontext.ContextCompactor
 	hooks      []hook.AgentHook
 	dispatcher *toolDispatcher
+	catalogs   []agentslot.Named[model.ModelCatalog]
+	config     AgentRuntimeConfig
 }
 
 func (d runtimeDependencies) runtimeComponents() *runtimeComponents {
@@ -169,5 +187,40 @@ func (d runtimeDependencies) runtimeComponents() *runtimeComponents {
 		compactor:  d.compactor,
 		hooks:      append([]hook.AgentHook(nil), d.hooks...),
 		dispatcher: d.dispatcher,
+		catalogs:   append([]agentslot.Named[model.ModelCatalog](nil), d.catalogs...),
+		config:     cloneAgentRuntimeConfig(d.config),
 	}
+}
+
+func selectRuntimeTools(installed []agentslot.Named[tool.Tool], keys []string) ([]agentslot.Named[tool.Tool], error) {
+	if keys == nil {
+		return append([]agentslot.Named[tool.Tool](nil), installed...), nil
+	}
+	byKey := make(map[string]agentslot.Named[tool.Tool], len(installed))
+	for _, named := range installed {
+		byKey[named.Key] = named
+	}
+	selected := make([]agentslot.Named[tool.Tool], 0, len(keys))
+	seen := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		if key == "" || seen[key] {
+			return nil, fmt.Errorf("standardagent: ToolKeys must be non-empty and unique")
+		}
+		named, ok := byKey[key]
+		if !ok {
+			return nil, fmt.Errorf("standardagent: selected Tool %q is not installed", key)
+		}
+		seen[key] = true
+		selected = append(selected, named)
+	}
+	return selected, nil
+}
+
+func cloneAgentRuntimeConfig(source AgentRuntimeConfig) AgentRuntimeConfig {
+	cloned := source
+	if source.ToolKeys != nil {
+		cloned.ToolKeys = make([]string, len(source.ToolKeys))
+		copy(cloned.ToolKeys, source.ToolKeys)
+	}
+	return cloned
 }

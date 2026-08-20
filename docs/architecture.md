@@ -294,15 +294,22 @@ implementation format.
 
 ## Current implementation frontier
 
-The published foundation now includes the first nine standard domain contracts
-and typed Slots for Session management/storage, model execution, tools, context,
-hooks, and interaction boundaries. It still defers:
+The published foundation now includes ten standard domain contracts and typed
+Slots for Session management/storage, model execution/catalogs, tools, context,
+hooks, and interaction boundaries. The `standardagent` package supplies the
+fixed Gateway, private RuntimeAccess binding, per-Session AgentRuntime state
+machine, ToolDispatcher, Context assembly, controlled Hook execution, and
+idle-only model switching. Reference implementations currently include the
+in-memory Session aggregate, deterministic model executor, static model
+catalog, tail compactor, and explicitly installed Bash tool. It still defers:
 
-- Session-scoped runtime objects and concrete persistence behavior;
-- the fixed standard Agent Gateway and private RuntimeAccess binding;
-- configuration schemas, secret resolution, and provider adapters;
-- out-of-process discovery or loading;
-- conformant independent implementations and proven component ecosystems.
+- reconnectable Gateway streaming, non-stream aggregation, and the first
+  concrete Entrypoint/command set;
+- real Provider and production SessionStore adapters;
+- policy, approval, broader official tools, and operational sinks;
+- configuration schemas, secret resolution, and out-of-process adapters;
+- reusable conformance suites, independent implementations, and Proven
+  component ecosystems.
 
 These are implemented in the order and maturity process defined by the
 [Standard Component Map](../COMPONENT_MAP.md). Dependency order controls

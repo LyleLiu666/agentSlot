@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	agent "github.com/LyleLiu666/agentSlot/agent"
+	"github.com/LyleLiu666/agentSlot/hook"
 	"github.com/LyleLiu666/agentSlot/model"
 	"github.com/LyleLiu666/agentSlot/session"
 	"github.com/LyleLiu666/agentSlot/tool"
@@ -28,6 +30,16 @@ type activeRun struct {
 	cancel          context.CancelFunc
 	done            chan struct{}
 	cancelRequested bool
+	prepared        chan struct{}
+	prepareOnce     sync.Once
+	prepareRevision agent.Revision
+}
+
+func (r *activeRun) signalPrepared(revision agent.Revision) {
+	r.prepareOnce.Do(func() {
+		r.prepareRevision = revision
+		close(r.prepared)
+	})
 }
 
 type stepOutcome uint8
@@ -58,19 +70,13 @@ func (r *runtimeInstance) runLoop(run *activeRun, step agent.StepID) {
 }
 
 func (r *runtimeInstance) executeStep(run *activeRun, step agent.StepID) (stepOutcome, agent.StepID) {
-	snapshot, err := r.session.View(run.ctx)
+	request, err := r.prepareModelRequest(run, step)
+	run.signalPrepared(r.revision())
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return stepCanceled, ""
 		}
 		return stepFailed, ""
-	}
-	r.revisionValue.Store(uint64(snapshot.Revision))
-	request := model.ModelRequest{
-		SessionID: r.id(), RunID: run.id, StepID: step, Config: cloneRuntimeConfig(run.config),
-		ConfigRevision: run.configRevision,
-		Inputs:         historyInputs(snapshot.History),
-		Tools:          r.components.dispatcher.definitions(),
 	}
 	stream, err := r.components.executor.Execute(run.ctx, request)
 	if err != nil {
@@ -101,7 +107,7 @@ func (r *runtimeInstance) executeStep(run *activeRun, step agent.StepID) (stepOu
 		case model.EventFailed:
 			return stepFailed, ""
 		case model.EventComplete:
-			next, continued, calls, canceled, err := r.commitCompletion(run, step, *event.Output)
+			calls, canceled, err := r.commitCompletion(run, step, *event.Output)
 			if canceled {
 				return stepCanceled, ""
 			}
@@ -110,7 +116,7 @@ func (r *runtimeInstance) executeStep(run *activeRun, step agent.StepID) (stepOu
 			}
 			if len(calls) > 0 {
 				results := r.components.dispatcher.dispatch(run.ctx, calls)
-				next, canceled, err = r.commitToolResults(run, calls, results)
+				next, canceled, err := r.commitToolResults(run, calls, results)
 				if err != nil {
 					return stepFailed, ""
 				}
@@ -118,6 +124,13 @@ func (r *runtimeInstance) executeStep(run *activeRun, step agent.StepID) (stepOu
 					return stepCanceled, ""
 				}
 				return stepContinue, next
+			}
+			next, continued, canceled, err := r.continueAfterCompletion(run)
+			if canceled {
+				return stepCanceled, ""
+			}
+			if err != nil {
+				return stepFailed, ""
 			}
 			if continued {
 				return stepContinue, next
@@ -127,15 +140,15 @@ func (r *runtimeInstance) executeStep(run *activeRun, step agent.StepID) (stepOu
 	}
 }
 
-func (r *runtimeInstance) commitCompletion(run *activeRun, step agent.StepID, output model.Completion) (agent.StepID, bool, []agent.ToolCall, bool, error) {
+func (r *runtimeInstance) commitCompletion(run *activeRun, step agent.StepID, output model.Completion) ([]agent.ToolCall, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.active != run || run.cancelRequested || r.closing {
-		return "", false, nil, true, nil
+		return nil, true, nil
 	}
 	snapshot, err := r.viewLocked(context.Background())
 	if err != nil {
-		return "", false, nil, false, err
+		return nil, false, err
 	}
 	assistant := agent.Message{
 		ID: agent.MessageID(r.nextID("message")), SessionID: r.id(), RunID: run.id, StepID: step,
@@ -156,25 +169,73 @@ func (r *runtimeInstance) commitCompletion(run *activeRun, step agent.StepID, ou
 		)
 		calls = append(calls, call)
 	}
-	steers := pendingByDelivery(snapshot.Queue, session.DeliverySteer)
-	var nextStep agent.StepID
-	if len(calls) == 0 && len(steers) > 0 {
-		nextStep = agent.StepID(r.nextID("step"))
-		for _, item := range steers {
-			claim := session.QueueClaim{MessageID: item.Message.ID, RunID: run.id}
-			consume := session.QueueConsume{MessageID: item.Message.ID, RunID: run.id}
-			message := item.Message
-			message.RunID = run.id
-			message.StepID = nextStep
-			changes = append(changes,
-				session.Change{Kind: session.ClaimQueue, QueueClaim: &claim},
-				session.Change{Kind: session.ConsumeQueue, QueueConsume: &consume},
-				session.Change{Kind: session.AppendMessage, Message: &message},
-			)
+	_, err = r.commitLocked(context.Background(), snapshot.Revision, "model-complete", changes)
+	return calls, false, err
+}
+
+func (r *runtimeInstance) continueAfterCompletion(run *activeRun) (agent.StepID, bool, bool, error) {
+	snapshot, err := r.session.View(run.ctx)
+	if err != nil {
+		return "", false, errors.Is(err, context.Canceled), err
+	}
+	proposals := make([]agent.MessageInput, 0)
+	view := hook.RunCompleteView{SessionID: r.id(), RunID: run.id, Revision: snapshot.Revision, Messages: cloneHookMessages(snapshot.History)}
+	for _, candidate := range r.components.hooks {
+		candidateView := view
+		candidateView.Messages = cloneAgentMessages(view.Messages)
+		proposal, hookErr := candidate.BeforeRunComplete(run.ctx, candidateView)
+		if hookErr != nil {
+			continue
+		}
+		for _, input := range proposal.Messages {
+			if input.Valid() {
+				proposals = append(proposals, agent.MessageInput{Parts: cloneRuntimeParts(input.Parts)})
+			}
 		}
 	}
-	_, err = r.commitLocked(context.Background(), snapshot.Revision, "model-complete", changes)
-	return nextStep, len(calls) == 0 && len(steers) > 0, calls, false, err
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active != run || run.cancelRequested || r.closing {
+		return "", false, true, nil
+	}
+	snapshot, err = r.viewLocked(context.Background())
+	if err != nil {
+		return "", false, false, err
+	}
+	steers := pendingByDelivery(snapshot.Queue, session.DeliverySteer)
+	if len(steers) == 0 && len(proposals) == 0 {
+		return "", false, false, nil
+	}
+	nextStep := agent.StepID(r.nextID("step"))
+	changes := make([]session.Change, 0, len(steers)*3+len(proposals)*4)
+	for _, item := range steers {
+		changes = appendInputConsumption(changes, item, run.id, nextStep)
+	}
+	for _, proposal := range proposals {
+		message := agent.Message{
+			ID: agent.MessageID(r.nextID("message")), SessionID: r.id(), Role: agent.RoleUser,
+			Parts: cloneRuntimeParts(proposal.Parts), CreatedAt: time.Now().UTC(),
+		}
+		item := session.QueueItem{Message: message, Delivery: session.DeliverySteer}
+		changes = append(changes, session.Change{Kind: session.EnqueueMessage, QueueItem: &item})
+		changes = appendInputConsumption(changes, item, run.id, nextStep)
+	}
+	_, err = r.commitLocked(context.Background(), snapshot.Revision, "follow-on", changes)
+	return nextStep, err == nil, false, err
+}
+
+func appendInputConsumption(changes []session.Change, item session.QueueItem, runID agent.RunID, stepID agent.StepID) []session.Change {
+	claim := session.QueueClaim{MessageID: item.Message.ID, RunID: runID}
+	consume := session.QueueConsume{MessageID: item.Message.ID, RunID: runID}
+	message := item.Message
+	message.RunID = runID
+	message.StepID = stepID
+	return append(changes,
+		session.Change{Kind: session.ClaimQueue, QueueClaim: &claim},
+		session.Change{Kind: session.ConsumeQueue, QueueConsume: &consume},
+		session.Change{Kind: session.AppendMessage, Message: &message},
+	)
 }
 
 func (r *runtimeInstance) commitToolResults(run *activeRun, calls []agent.ToolCall, results []tool.ToolResult) (agent.StepID, bool, error) {
@@ -296,6 +357,7 @@ func (r *runtimeInstance) recoverAfterRunFailureLocked(run *activeRun) {
 		// an explicit Close/Resume obtains a fresh recovery attempt.
 		r.state = runtimeClosed
 		r.closing = true
+		r.observer.stop()
 		close(r.closeDone)
 		return
 	}
@@ -309,7 +371,7 @@ func (r *runtimeInstance) startChangesLocked(snapshot session.Snapshot, item ses
 	runContext, cancel := context.WithCancel(context.Background())
 	run := &activeRun{
 		id: runID, config: cloneRuntimeConfig(snapshot.ModelConfig), configRevision: snapshot.Revision,
-		ctx: runContext, cancel: cancel, done: make(chan struct{}),
+		ctx: runContext, cancel: cancel, done: make(chan struct{}), prepared: make(chan struct{}),
 	}
 	running := session.RunStateChange{RunID: runID, State: session.RunRunning}
 	started := session.RunFact{
@@ -364,6 +426,7 @@ func (r *runtimeInstance) commitLocked(ctx context.Context, expected agent.Revis
 		return session.Commit{}, err
 	}
 	r.revisionValue.Store(uint64(commit.Revision))
+	r.observer.publish(hook.CommitView{SessionID: r.id(), RunID: runIDForCommit(changes), Revision: commit.Revision})
 	return commit, nil
 }
 

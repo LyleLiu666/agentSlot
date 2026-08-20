@@ -17,16 +17,31 @@ import (
 // package adds its private Runtime/Gateway module; product modules remain
 // explicit and are mounted through the same generic Application lifecycle.
 type ApplicationSpec struct {
-	Name         string
-	Modules      []agentslot.Module
-	Requirements []agentslot.Requirement
+	Name          string
+	Modules       []agentslot.Module
+	Requirements  []agentslot.Requirement
+	RuntimeConfig AgentRuntimeConfig
+}
+
+// AgentRuntimeConfig is copied into every Session Runtime. Nil ToolKeys selects
+// all explicitly installed Tools; a non-nil empty slice selects none.
+type AgentRuntimeConfig struct {
+	SystemPrompt string
+	ToolKeys     []string
+	Context      ContextConfig
+}
+
+type ContextConfig struct {
+	// HardTokenLimit may further reduce the selected model's declared context
+	// window. Zero uses the model limit without an additional product cap.
+	HardTokenLimit int
 }
 
 // NewApplication returns the generic Application with the fixed standard
 // Agent module and profile mounted. It has no registration side effects.
 func NewApplication(spec ApplicationSpec) *agentslot.Application {
 	modules := make([]agentslot.Module, 0, len(spec.Modules)+2)
-	modules = append(modules, newRuntimeModule())
+	modules = append(modules, newRuntimeModule(spec.RuntimeConfig))
 	modules = append(modules, spec.Modules...)
 	modules = append(modules, entrypointValidationModule{})
 	requirements := []agentslot.Requirement{

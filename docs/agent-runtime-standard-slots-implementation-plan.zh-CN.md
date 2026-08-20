@@ -288,6 +288,8 @@ type UpdateModelConfigCommand struct {
 ```go
 type ModelExecutor interface {
 	Execute(context.Context, ModelRequest) (ModelStream, error)
+	Inspect(context.Context, Config) (ExecutionCapabilities, error)
+	CountTokens(context.Context, ModelRequest) (int, error)
 }
 
 type ModelStream interface {
@@ -316,7 +318,7 @@ type ModelStream interface {
 
 ```go
 type ContextSource interface {
-	Contribute(context.Context, ContextInput) ([]Message, error)
+	Contribute(context.Context, ContextInput) ([]model.Input, error)
 }
 
 type ContextCompactor interface {
@@ -324,12 +326,13 @@ type ContextCompactor interface {
 }
 ```
 
-- Compactor 输入当前完整 Context 及来源 revision，输出较小的会话 Message 投影。
+- Compactor 输入当前完整 Context 及来源 revision，输出较小的 `model.Input` 投影。
 - 输出不包含 SystemPrompt 和 Tool 定义；Runtime 验证协议完整性与硬 Token 上限后重新
   装配固定部分并提交 ContextVersion。
 - Compactor 不改写 History、不直接写 Store、不分配 ContextVersion。
-- 默认实现采用“历史摘要 + 最近三条 inbound + 必要协议尾部”，但替换实现可以改变
-  保留条数、摘要模型和选择规则。
+- 规划中的产品默认实现可以采用“历史摘要 + 最近三条 inbound + 必要协议尾部”，但这
+  不是框架强制算法。当前仓库只提供需显式安装的 `TailCompactor` 参考实现，Agent 项目
+  可以配置或整体替换。
 
 ### 6.8 AgentHook
 
@@ -666,8 +669,8 @@ History。
 - README、架构讨论、路线图和本计划不存在旧 `agent.loop` 标准语义。
 - Slash/菜单呈现与 SessionModelConfig 后端能力保持分层。
 - 所有 Entrypoint 只指向固定 Gateway，不存在 Entrypoint 到 RuntimeAccess 的直接边。
-- 本轮 9 个已有公共合同标为 Contracted；其余生态位仍为 Mapped，不把候选代码写成
-  Conformant 或 Proven。
+- 阶段 0 基线中的 9 个公共合同标为 Contracted；`model.catalog` 在阶段 7 成为第 10 个。
+  其余生态位仍为 Mapped，不把候选代码写成 Conformant 或 Proven。
 
 ### 阶段 1：公共类型、typed Slot 和合同测试（已完成）
 
@@ -682,8 +685,8 @@ History。
   Executor 可以在内部管理 Provider 的多次物理请求。
 - 已完成 Assembly 描述安全性、Slot 基数、重复键、依赖和错误分类合同测试；没有实现
   AgentRuntime、Gateway、真实 Provider、Bash 或 UI。
-- 9 个生态位标为 Contracted，尚未标为 Conformant 或 Proven；阶段提交后再进入应用级
-  Runtime 与 Gateway 主链路。
+- 本阶段当时有 9 个生态位标为 Contracted；阶段 7 新增 `model.catalog` 后当前总数为
+  10。它们均尚未标为 Conformant 或 Proven。
 
 ### 阶段 2：应用级 Runtime、Registry 与 Gateway 主骨架（已完成）
 
@@ -745,12 +748,19 @@ History。
   stdout/stderr 独立限制，以及非零退出码结构化返回；省略该 Module 即为禁用。
 - 验证跨 Session 文件写入使用版本哈希和精确内容校验，不依赖 Workspace 全局写锁。
 
-### 阶段 7：Context、Hook 与 History 查询
+### 阶段 7：Context、Hook 与模型配置交互（已完成基础实现）
 
-- 测试替换 Compactor 不受默认“最近三条”算法限制。
-- 测试协议完整性、硬 Token 上限、来源 revision 和 History 不变。
-- 测试 Hook 只能 proposal/observe，失败不能改变核心事务。
-- 测试文本模型投影保留附件引用、不改写图片事实，并允许 OCR 等工具按授权引用读取。
+- 已实现有序 ContextSource、可替换 ContextCompactor、ContextVersion 与来源 revision；
+  固定 SystemPrompt 和 Tool 定义在请求时重新装配，不写入动态 Context 或 History。
+- 已测试模型协议完整性、硬 Token 上限、Compactor 二次计量、History 不变，以及文本
+  模型把不支持的图片/音频投影为稳定附件说明。框架不偷偷截断事实。
+- 已实现 `BeforeRunComplete` proposal 与异步 `AfterCommit` 观察；Runtime 重新分配
+  proposal 身份并拥有唯一继续权，可替换组件不在 Runtime 状态锁内执行。
+- 已实现 `ModelExecutor.Inspect/CountTokens`、`ModelCatalog`/`StaticCatalog`、idle-only
+  模型配置切换、结构化兼容性确认，以及与配置更新同事务的
+  `ModelConfigChanged` Session 事件。Run 内继续使用启动时冻结的配置。
+- 当前没有把 TailCompactor 宣称为所有 Agent 的默认算法，也没有实现 Slash/Web UI；
+  Session History 查询工具与 Gateway 命令呈现分别留在后续工具/交互批次。
 
 ### 阶段 8：真实传输、交互命令与生态适配
 

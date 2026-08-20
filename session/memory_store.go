@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	agent "github.com/LyleLiu666/agentSlot/agent"
+	"github.com/LyleLiu666/agentSlot/model"
 	"github.com/LyleLiu666/agentSlot/tool"
 )
 
@@ -221,8 +222,8 @@ func validateNewSession(initial NewSession) error {
 	if err := validateContext(initial.Context, initial.Session.ID); err != nil {
 		return err
 	}
-	if initial.Context.Revision != 0 {
-		return invalid("session.create", "new session context revision must be zero")
+	if initial.Context.Version != 0 || initial.Context.SourceRevision != 0 || initial.Context.TokenCount != 0 || len(initial.Context.Inputs) != 0 {
+		return invalid("session.create", "new session context must be empty and unversioned")
 	}
 	if err := validateHistoryConsistency(initial.Session.ID, initial.History, initial.RunJournal); err != nil {
 		return invalid("session.create", err.Error())
@@ -268,6 +269,9 @@ func applyChanges(snapshot *Snapshot, request CommitRequest) error {
 	if err := validateToolTransactions(snapshot.History, request.Changes); err != nil {
 		return err
 	}
+	if err := validateModelConfigTransaction(snapshot.ModelConfig, request.Changes); err != nil {
+		return err
+	}
 	for _, change := range request.Changes {
 		switch change.Kind {
 		case AppendMessage:
@@ -302,6 +306,10 @@ func applyChanges(snapshot *Snapshot, request CommitRequest) error {
 			if err := appendRunFact(snapshot, *change.RunFact); err != nil {
 				return err
 			}
+		case AppendSessionEvent:
+			event := cloneSessionEvent(*change.SessionEvent)
+			event.Revision = snapshot.Revision.Next()
+			snapshot.Events = append(snapshot.Events, event)
 		case EnqueueMessage:
 			if change.QueueItem.Claimed() {
 				return invalid("session.commit", "new queue item cannot already be claimed")
@@ -360,8 +368,11 @@ func applyChanges(snapshot *Snapshot, request CommitRequest) error {
 			}
 			snapshot.Queue[index].Delivery = change.QueueReclassification.Delivery
 		case SetContext:
-			if change.Context.Revision > request.ExpectedRevision.Next() {
-				return agent.NewCodedError(agent.ErrorConflict, agent.CodeRevisionConflict, "session.commit", "context source revision is ahead of the commit", nil)
+			if change.Context.SourceRevision != request.ExpectedRevision {
+				return agent.NewCodedError(agent.ErrorConflict, agent.CodeRevisionConflict, "session.commit", "context source revision must match the committed aggregate", nil)
+			}
+			if change.Context.Version != snapshot.Context.Version+1 {
+				return agent.NewCodedError(agent.ErrorConflict, agent.CodeRevisionConflict, "session.commit", "context version must advance exactly once", nil)
 			}
 			if err := validateContext(*change.Context, request.SessionID); err != nil {
 				return err
@@ -387,6 +398,35 @@ func applyChanges(snapshot *Snapshot, request CommitRequest) error {
 	}
 	if err := validateQueueClaims(snapshot.Queue, snapshot.RunState, snapshot.ActiveRunID); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateModelConfigTransaction(current SessionModelConfig, changes []Change) error {
+	var selected *SessionModelConfig
+	var event *SessionEvent
+	for _, change := range changes {
+		switch change.Kind {
+		case SetModelConfig:
+			if selected != nil {
+				return invalid("session.commit", "model config can change at most once per transaction")
+			}
+			selected = change.ModelConfig
+		case AppendSessionEvent:
+			if event != nil || change.SessionEvent.Kind != EventModelConfigChanged {
+				return invalid("session.commit", "model config transaction requires one change event")
+			}
+			event = change.SessionEvent
+		}
+	}
+	if selected == nil && event == nil {
+		return nil
+	}
+	if selected == nil || event == nil || event.ModelConfigChanged == nil {
+		return invalid("session.commit", "model config and ModelConfigChanged event must be committed together")
+	}
+	if !sameModelConfig(current, event.ModelConfigChanged.Previous) || !sameModelConfig(*selected, event.ModelConfigChanged.Current) {
+		return invalid("session.commit", "ModelConfigChanged event does not match the atomic transition")
 	}
 	return nil
 }
@@ -538,10 +578,22 @@ func recoverAggregate(snapshot *Snapshot) bool {
 }
 
 func validateContext(contextView ContextView, sessionID agent.SessionID) error {
-	for _, message := range contextView.Messages {
-		if !message.Valid() || message.SessionID != sessionID {
+	if contextView.TokenCount < 0 {
+		return invalid("session.context", "context token count cannot be negative")
+	}
+	for _, input := range contextView.Inputs {
+		if !input.Valid() || input.SystemPrompt != nil {
+			return invalid("session.context", "context contains an invalid or fixed input")
+		}
+		if input.Message != nil && input.Message.SessionID != sessionID {
 			return invalid("session.context", "context message does not belong to session")
 		}
+		if input.ToolCall != nil && input.ToolCall.SessionID != sessionID {
+			return invalid("session.context", "context tool call does not belong to session")
+		}
+	}
+	if err := model.ValidateInputs(contextView.Inputs); err != nil {
+		return invalid("session.context", err.Error())
 	}
 	return nil
 }

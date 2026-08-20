@@ -9,12 +9,24 @@ import (
 	agentslot "github.com/LyleLiu666/agentSlot"
 	agent "github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/model"
+	"github.com/LyleLiu666/agentSlot/tool"
 )
 
 type executor struct{}
 
 func (executor) Execute(context.Context, model.ModelRequest) (model.ModelStream, error) {
 	return nil, nil
+}
+func (executor) Inspect(context.Context, model.Config) (model.ExecutionCapabilities, error) {
+	return testCapabilities(), nil
+}
+func (executor) CountTokens(context.Context, model.ModelRequest) (int, error) { return 0, nil }
+
+func testCapabilities() model.ExecutionCapabilities {
+	return model.ExecutionCapabilities{
+		Media:     model.Capabilities{InputModalities: []model.Modality{model.ModalityText}, OutputModalities: []model.Modality{model.ModalityText}},
+		Reasoning: []model.Reasoning{model.ReasoningDefault}, ContextWindowTokens: 1000, MaxOutputTokens: 100,
+	}
 }
 
 func TestRequiredModelExecutorRejectsMissingProvider(t *testing.T) {
@@ -137,5 +149,25 @@ func TestModelConfigValidatesPortableParameters(t *testing.T) {
 	invalid.Parameters.Temperature = &nan
 	if err := invalid.Validate(); err == nil {
 		t.Fatal("model config with non-finite temperature accepted")
+	}
+}
+
+func TestValidateInputsRequiresOneLeadingSystemPromptAndContiguousToolExchange(t *testing.T) {
+	system := "system"
+	user := &agent.Message{ID: "user-1", SessionID: "session-1", Role: agent.RoleUser, Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "hello"}}}
+	assistant := &agent.Message{ID: "assistant-1", SessionID: "session-1", RunID: "run-1", StepID: "step-1", Role: agent.RoleAssistant}
+	call := &agent.ToolCall{ID: "call-1", MessageID: assistant.ID, SessionID: assistant.SessionID, RunID: assistant.RunID, StepID: assistant.StepID, Name: "lookup", Arguments: []byte(`{}`)}
+	result := &tool.ToolResult{CallID: call.ID, Status: tool.ResultSucceeded}
+	valid := []model.Input{{SystemPrompt: &system}, {Message: user}, {Message: assistant}, {ToolCall: call}, {ToolResult: result}}
+	if err := model.ValidateInputs(valid); err != nil {
+		t.Fatalf("valid protocol rejected: %v", err)
+	}
+	lateSystem := append([]model.Input{{Message: user}}, model.Input{SystemPrompt: &system})
+	if err := model.ValidateInputs(lateSystem); err == nil {
+		t.Fatal("late SystemPrompt was accepted")
+	}
+	interrupted := []model.Input{{Message: assistant}, {ToolCall: call}, {Message: user}, {ToolResult: result}}
+	if err := model.ValidateInputs(interrupted); err == nil {
+		t.Fatal("non-contiguous tool exchange was accepted")
 	}
 }

@@ -311,6 +311,7 @@ func rewriteForFork(source Snapshot, newSessionID agent.SessionID, agentID agent
 	source.Context = ContextView{}
 	source.Queue = nil
 	source.RunJournal = nil
+	source.Events = nil
 	source.Session = agent.Session{ID: newSessionID, AgentID: agentID, WorkspaceID: workspaceID}
 	source.Revision = 0
 	source.Session.Revision = 0

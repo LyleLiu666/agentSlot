@@ -23,7 +23,22 @@ func cloneSnapshot(source Snapshot) Snapshot {
 	for index, entry := range source.RunJournal {
 		copy.RunJournal[index] = cloneJournalEntry(entry)
 	}
+	copy.Events = make([]SessionEvent, len(source.Events))
+	for index, event := range source.Events {
+		copy.Events[index] = cloneSessionEvent(event)
+	}
 	copy.ModelConfig = cloneModelConfig(source.ModelConfig)
+	return copy
+}
+
+func cloneSessionEvent(source SessionEvent) SessionEvent {
+	copy := source
+	if source.ModelConfigChanged != nil {
+		change := *source.ModelConfigChanged
+		change.Previous = cloneModelConfig(change.Previous)
+		change.Current = cloneModelConfig(change.Current)
+		copy.ModelConfigChanged = &change
+	}
 	return copy
 }
 
@@ -51,9 +66,30 @@ func cloneHistoryFact(source HistoryFact) HistoryFact {
 
 func cloneContext(source ContextView) ContextView {
 	copy := source
-	copy.Messages = make([]agent.Message, len(source.Messages))
-	for index, message := range source.Messages {
-		copy.Messages[index] = cloneMessage(message)
+	copy.Inputs = make([]model.Input, len(source.Inputs))
+	for index, input := range source.Inputs {
+		copy.Inputs[index] = cloneModelInput(input)
+	}
+	return copy
+}
+
+func cloneModelInput(source model.Input) model.Input {
+	copy := source
+	if source.Message != nil {
+		message := cloneMessage(*source.Message)
+		copy.Message = &message
+	}
+	if source.ToolCall != nil {
+		call := cloneToolCall(*source.ToolCall)
+		copy.ToolCall = &call
+	}
+	if source.ToolResult != nil {
+		result := cloneToolResult(*source.ToolResult)
+		copy.ToolResult = &result
+	}
+	if source.SystemPrompt != nil {
+		prompt := *source.SystemPrompt
+		copy.SystemPrompt = &prompt
 	}
 	return copy
 }

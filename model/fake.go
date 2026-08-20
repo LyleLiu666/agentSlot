@@ -59,6 +59,53 @@ func (f *FakeModelExecutor) Execute(ctx context.Context, request ModelRequest) (
 	return &fakeModelStream{events: execution.Events, block: execution.Block}, nil
 }
 
+func (*FakeModelExecutor) Inspect(_ context.Context, config Config) (ExecutionCapabilities, error) {
+	if err := config.Validate(); err != nil {
+		return ExecutionCapabilities{}, err
+	}
+	return ExecutionCapabilities{
+		Media: Capabilities{
+			InputModalities:  []Modality{ModalityText, ModalityImage, ModalityAudio},
+			OutputModalities: []Modality{ModalityText},
+			ToolCalling:      true,
+		},
+		Reasoning:           []Reasoning{ReasoningDefault, ReasoningLow, ReasoningMedium, ReasoningHigh},
+		ContextWindowTokens: 1_000_000, MaxOutputTokens: 100_000,
+	}, nil
+}
+
+func (*FakeModelExecutor) CountTokens(_ context.Context, request ModelRequest) (int, error) {
+	count := 0
+	for _, input := range request.Inputs {
+		switch {
+		case input.SystemPrompt != nil:
+			count += portableTokenEstimate(*input.SystemPrompt)
+		case input.Message != nil:
+			for _, part := range input.Message.Parts {
+				count += portableTokenEstimate(part.Text)
+				if part.AttachmentID != "" {
+					count += 8
+				}
+			}
+		case input.ToolCall != nil:
+			count += portableTokenEstimate(input.ToolCall.Name) + portableTokenEstimate(string(input.ToolCall.Arguments))
+		case input.ToolResult != nil:
+			count += portableTokenEstimate(string(input.ToolResult.Output))
+		}
+	}
+	for _, definition := range request.Tools {
+		count += portableTokenEstimate(definition.Name) + portableTokenEstimate(definition.Description) + portableTokenEstimate(string(definition.InputSchema.JSON()))
+	}
+	return count, nil
+}
+
+func portableTokenEstimate(value string) int {
+	if value == "" {
+		return 0
+	}
+	return (len([]byte(value)) + 3) / 4
+}
+
 // WaitForRequests blocks until at least count logical calls were captured.
 func (f *FakeModelExecutor) WaitForRequests(ctx context.Context, count int) error {
 	for {
@@ -166,6 +213,10 @@ func cloneModelRequest(source ModelRequest) ModelRequest {
 
 func cloneInput(source Input) Input {
 	copy := source
+	if source.SystemPrompt != nil {
+		prompt := *source.SystemPrompt
+		copy.SystemPrompt = &prompt
+	}
 	if source.Message != nil {
 		message := *source.Message
 		message.Parts = append([]agent.MessagePart(nil), source.Message.Parts...)

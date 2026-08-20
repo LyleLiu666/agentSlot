@@ -273,7 +273,7 @@ audio; model-facing tool inputs use self-contained JSON Schema Draft 2020-12.
 Caller and Hook input uses `agent.MessageInput`, which carries content only;
 the fixed Runtime allocates MessageID, Session/Run/Step containment, role, and
 timestamp atomically when it creates a durable `agent.Message` fact.
-The first nine standard component contracts are now available in the
+Ten standard component contracts are now available in the
 `session`, `model`, `tool`, `context`, `hook`, and `interaction` packages. They
 are Contracted, but no domain ecosystem is yet Conformant or Proven.
 
@@ -291,10 +291,14 @@ Serial/ParallelSafe batches, safe structured failures, and mandatory model
 continuation. [`tool/bash`](tool/bash) is the first explicitly installed
 built-in Tool; it fixes working directory, explicit environment, timeout,
 process-group cancellation, and separate output limits. It is never installed
-by import or by `standardagent.NewApplication`. Context assembly, Hook
-execution, and reconnectable Gateway event streaming remain in their dedicated
-implementation rounds. Importing any package still has no registration or
-startup side effect.
+by import or by `standardagent.NewApplication`. The Runtime now builds and
+persists versioned Context projections, runs ordered ContextSource and Hook
+chains, enforces model protocol and hard token limits, projects unsupported
+attachments without rewriting History, and validates idle-only model switches
+through ModelExecutor capabilities. `model.catalog` has a typed contract and
+an explicit StaticCatalog reference implementation. Reconnectable Gateway
+event streaming remains in its dedicated implementation round. Importing any
+package still has no registration or startup side effect.
 
 ## Relationship to previous-generation SDKs
 

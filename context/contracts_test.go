@@ -8,11 +8,13 @@ import (
 	agentslot "github.com/LyleLiu666/agentSlot"
 	agent "github.com/LyleLiu666/agentSlot/agent"
 	agentcontext "github.com/LyleLiu666/agentSlot/context"
+	"github.com/LyleLiu666/agentSlot/model"
+	"github.com/LyleLiu666/agentSlot/tool"
 )
 
 type source struct{}
 
-func (source) Contribute(stdcontext.Context, agentcontext.ContextInput) ([]agent.Message, error) {
+func (source) Contribute(stdcontext.Context, agentcontext.ContextInput) ([]model.Input, error) {
 	return nil, nil
 }
 
@@ -75,8 +77,32 @@ func TestContextContractsUseOrderedSourceAndReplaceableCompactor(t *testing.T) {
 }
 
 func TestCompactorOutputKeepsSourceRevision(t *testing.T) {
-	output := agentcontext.CompactionOutput{Revision: 7, Messages: []agent.Message{{ID: "message-1"}}}
-	if output.Revision != 7 || len(output.Messages) != 1 {
+	message := &agent.Message{ID: "message-1", SessionID: "session-1", Role: agent.RoleUser, Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "hello"}}}
+	output := agentcontext.CompactionOutput{SourceRevision: 7, Inputs: []model.Input{{Message: message}}}
+	if output.SourceRevision != 7 || len(output.Inputs) != 1 {
 		t.Fatalf("compactor output = %#v", output)
+	}
+}
+
+func TestTailCompactorKeepsToolProtocolGroupAndDoesNotMutateInput(t *testing.T) {
+	compactor, err := agentcontext.NewTailCompactor(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := &agent.Message{ID: "user-1", SessionID: "session-1", RunID: "run-1", StepID: "step-1", Role: agent.RoleUser, Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "old"}}}
+	assistant := &agent.Message{ID: "assistant-1", SessionID: "session-1", RunID: "run-1", StepID: "step-2", Role: agent.RoleAssistant}
+	call := &agent.ToolCall{ID: "call-1", MessageID: assistant.ID, SessionID: "session-1", RunID: "run-1", StepID: "step-2", Name: "lookup", Arguments: []byte(`{}`)}
+	result := &tool.ToolResult{CallID: call.ID, Status: tool.ResultSucceeded}
+	inputs := []model.Input{{Message: user}, {Message: assistant}, {ToolCall: call}, {ToolResult: result}}
+	output, err := compactor.Compact(stdcontext.Background(), agentcontext.CompactionInput{SessionID: "session-1", Revision: 9, Inputs: inputs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.SourceRevision != 9 || len(output.Inputs) != 3 || output.Inputs[0].Message.ID != assistant.ID || output.Inputs[2].ToolResult.CallID != call.ID {
+		t.Fatalf("compacted output = %#v", output)
+	}
+	output.Inputs[0].Message.Role = agent.RoleUser
+	if assistant.Role != agent.RoleAssistant {
+		t.Fatal("compactor output aliases input")
 	}
 }

@@ -26,13 +26,13 @@ Current repository reality:
 | --- | ---: |
 | Mapped standard component ecosystems | 42 |
 | Standardized domain vocabularies | 2 |
-| Contracted AgentSlot-owned domain interfaces | 9 |
+| Contracted AgentSlot-owned domain interfaces | 10 |
 | Conformant component ecosystems | 0 |
 | Proven component ecosystems | 0 |
 | Assembled standard component ecosystems | 0 |
 
 The generic composition protocol exports five Go interfaces: `Module`,
-`SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. The first nine
+`SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. Ten
 domain contracts are now defined in the `session`, `model`, `tool`, `context`,
 `hook`, and `interaction` packages; they are Contracted but not yet Conformant
 or Proven.
@@ -134,7 +134,7 @@ method-level contract is an engineering result.
 | **Proven** | At least two semantically independent implementations pass the conformance suite. Wrappers over the same implementation count once. |
 | **Assembled** | A reference application exchanges proven implementations through the Slot without concrete-type branches. |
 
-Nine foundational domain rows are now **Contracted**: each has a public domain
+Ten foundational domain rows are now **Contracted**: each has a public domain
 interface, typed Slot, and contract tests. `session.manager` and `session.store`
 also have one reference in-memory implementation with focused behavior tests,
 and `model.executor` has one deterministic Fake implementation consumed by the
@@ -169,10 +169,10 @@ not a conforming standard LLM Agent application.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `model.executor` | `ModelExecutor` | `One` | globally required | Executes one logical model request and emits provider-neutral temporary output, reset, complete result, or final failure while owning physical attempts and recovery. | Contracted |
+| `model.executor` | `ModelExecutor` | `One` | globally required | Validates selected-model capabilities, counts complete requests, and executes one logical model call while owning provider attempts, recovery, and provider-neutral stream events. | Contracted |
 | `model.provider` | `ModelProvider` | `Many` | optional; required only by an Executor that declares it | Implements named provider access for Executors that compose local adapters. | Mapped |
 | `model.selector` | `ModelSelector` | `One` | optional; conditional for dynamic routing | Selects a provider/model using explicit request and policy inputs. | Mapped |
-| `model.catalog` | `ModelCatalog` | `Many` | optional | Describes available models and their declared capabilities without exposing credentials. | Mapped |
+| `model.catalog` | `ModelCatalog` | `Many` | optional | Describes available models and their declared capabilities without exposing credentials. | Contracted |
 | `model.middleware` | `ModelMiddleware` | `Chain` | optional | Applies observable request/response concerns without changing provider identity. | Mapped |
 
 An explicit SessionModelConfig is authoritative. A ModelSelector may validate

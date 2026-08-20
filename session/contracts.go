@@ -76,9 +76,42 @@ type Snapshot struct {
 	Context     ContextView
 	Queue       []QueueItem
 	RunJournal  []JournalEntry
+	Events      []SessionEvent
 	ModelConfig SessionModelConfig
 	RunState    RunState
 	ActiveRunID agent.RunID
+}
+
+// SessionEvent is durable aggregate metadata that must not be projected into
+// model Context. Revision is assigned by SessionStore to the atomic commit.
+type SessionEvent struct {
+	Kind               SessionEventKind
+	Revision           agent.Revision
+	ModelConfigChanged *ModelConfigChange
+}
+
+type SessionEventKind string
+
+const EventModelConfigChanged SessionEventKind = "model_config_changed"
+
+// ModelConfigChange preserves the explicit selection transition for audit and
+// reconnect projections without pretending it was a conversation message.
+type ModelConfigChange struct {
+	Previous SessionModelConfig
+	Current  SessionModelConfig
+}
+
+func (e SessionEvent) Validate() error {
+	if e.Kind != EventModelConfigChanged || e.ModelConfigChanged == nil {
+		return fmt.Errorf("session: invalid Session event")
+	}
+	if err := e.ModelConfigChanged.Previous.Validate(); err != nil {
+		return fmt.Errorf("session: invalid previous model config: %w", err)
+	}
+	if err := e.ModelConfigChanged.Current.Validate(); err != nil {
+		return fmt.Errorf("session: invalid current model config: %w", err)
+	}
+	return nil
 }
 
 // HistoryFact is one ordered, append-only fact in a Session's canonical
@@ -168,11 +201,15 @@ func (f RunFact) Validate(sessionID agent.SessionID) error {
 	return nil
 }
 
-// ContextView is the current legal model-message projection and its source
-// revision. It is not the History fact ledger.
+// ContextView is the current legal dynamic model projection and its source
+// revision. Inputs exclude fixed SystemPrompt and Tool definitions; TokenCount
+// measures the complete assembled request that used this projection. It is not
+// the History fact ledger.
 type ContextView struct {
-	Revision agent.Revision
-	Messages []agent.Message
+	Version        uint64
+	SourceRevision agent.Revision
+	TokenCount     int
+	Inputs         []model.Input
 }
 
 // Delivery classifies queued input before it is claimed by a Run.
@@ -382,20 +419,21 @@ func (r CommitRequest) Validate() error {
 type ChangeKind string
 
 const (
-	AppendMessage    ChangeKind = "append_message"
-	AppendToolCall   ChangeKind = "append_tool_call"
-	AppendToolResult ChangeKind = "append_tool_result"
-	AppendRunFact    ChangeKind = "append_run_fact"
-	EnqueueMessage   ChangeKind = "enqueue_message"
-	ClaimQueue       ChangeKind = "claim_queue"
-	ConsumeQueue     ChangeKind = "consume_queue"
-	EditQueue        ChangeKind = "edit_queue"
-	DeleteQueue      ChangeKind = "delete_queue"
-	ReclassifyQueue  ChangeKind = "reclassify_queue"
-	SetContext       ChangeKind = "set_context"
-	SetModelConfig   ChangeKind = "set_model_config"
-	SetRunState      ChangeKind = "set_run_state"
-	UpdateRunJournal ChangeKind = "update_run_journal"
+	AppendMessage      ChangeKind = "append_message"
+	AppendToolCall     ChangeKind = "append_tool_call"
+	AppendToolResult   ChangeKind = "append_tool_result"
+	AppendRunFact      ChangeKind = "append_run_fact"
+	AppendSessionEvent ChangeKind = "append_session_event"
+	EnqueueMessage     ChangeKind = "enqueue_message"
+	ClaimQueue         ChangeKind = "claim_queue"
+	ConsumeQueue       ChangeKind = "consume_queue"
+	EditQueue          ChangeKind = "edit_queue"
+	DeleteQueue        ChangeKind = "delete_queue"
+	ReclassifyQueue    ChangeKind = "reclassify_queue"
+	SetContext         ChangeKind = "set_context"
+	SetModelConfig     ChangeKind = "set_model_config"
+	SetRunState        ChangeKind = "set_run_state"
+	UpdateRunJournal   ChangeKind = "update_run_journal"
 )
 
 // Change is a provider-neutral, single-payload aggregate update accepted by
@@ -406,6 +444,7 @@ type Change struct {
 	ToolCall              *agent.ToolCall
 	ToolResult            *tool.ToolResult
 	RunFact               *RunFact
+	SessionEvent          *SessionEvent
 	QueueItem             *QueueItem
 	QueueClaim            *QueueClaim
 	QueueConsume          *QueueConsume
@@ -444,6 +483,13 @@ func (c Change) Validate(sessionID agent.SessionID) error {
 			return fmt.Errorf("session: appended run fact is missing")
 		}
 		if err := c.RunFact.Validate(sessionID); err != nil {
+			return err
+		}
+	case AppendSessionEvent:
+		if c.SessionEvent == nil || c.SessionEvent.Revision != 0 {
+			return fmt.Errorf("session: appended Session event must have store-assigned revision")
+		}
+		if err := c.SessionEvent.Validate(); err != nil {
 			return err
 		}
 	case EnqueueMessage:
@@ -505,6 +551,7 @@ func (c Change) payloadCount() int {
 		c.ToolCall != nil,
 		c.ToolResult != nil,
 		c.RunFact != nil,
+		c.SessionEvent != nil,
 		c.QueueItem != nil,
 		c.QueueClaim != nil,
 		c.QueueConsume != nil,

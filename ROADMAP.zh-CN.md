@@ -247,11 +247,13 @@ AgentSlot 禁止反射扫描、`init()` 自动注册和隐藏的全局组件容�
 
 ### 当前开发进度
 
-第 2 阶段（Session 合同）已完成参考实现：`session.MemoryStore` 和
-`session.MemoryManager` 覆盖 History、Context、Queue、RunJournal、
-SessionModelConfig、revision/CAS、create/resume/完整 fork/摘要启动和基础崩溃恢复。
-这只证明标准合同可以落地，不把内存实现提升为生产存储，也不改变 `session.store`
-仍可替换的 Slot 边界；下一阶段才实现固定 AgentRuntime 状态机。
+通用 Assembly、标准 Slot 合同、固定 Gateway/Runtime 主骨架、Session 内存参考实现、
+固定执行状态机、ToolDispatcher/Bash，以及 Context/Hook/模型配置交互批次已经完成。
+当前 Runtime 会安装版本化 Context、执行可替换 Source/Compactor、校验模型协议和硬
+Token 上限，并通过 Gateway 在 idle 状态完成带兼容性确认的模型切换。`ModelCatalog`
+是第 10 个进入 Contracted 的生态位。所有这些仍是开发与合同证据：尚无生态位达到
+Conformant 或 Proven，下一批是统一 InteractionCommand、进程内 Entrypoint、Gateway
+流式/聚合与 revision 重连，不把真实部署条件作为开发门禁。
 
 ## 9. 参考实现分三层
 

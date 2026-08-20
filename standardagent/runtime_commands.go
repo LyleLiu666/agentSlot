@@ -6,6 +6,7 @@ import (
 
 	agent "github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/interaction"
+	"github.com/LyleLiu666/agentSlot/model"
 	"github.com/LyleLiu666/agentSlot/session"
 )
 
@@ -14,12 +15,13 @@ func (r *runtimeInstance) send(ctx context.Context, request interaction.SendRequ
 		return interaction.EnqueueReceipt{}, invalidInput("gateway.send", "SessionID and message input are required")
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if err := r.ensureOpenLocked("gateway.send"); err != nil {
+		r.mu.Unlock()
 		return interaction.EnqueueReceipt{}, err
 	}
 	snapshot, err := r.viewLocked(ctx)
 	if err != nil {
+		r.mu.Unlock()
 		return interaction.EnqueueReceipt{}, err
 	}
 	message := agent.Message{
@@ -29,20 +31,28 @@ func (r *runtimeInstance) send(ctx context.Context, request interaction.SendRequ
 	item := session.QueueItem{Message: message, Delivery: session.DeliveryNormal}
 	if r.state == runtimeRunning {
 		commit, err := r.commitLocked(ctx, request.ExpectedRevision, "send", []session.Change{{Kind: session.EnqueueMessage, QueueItem: &item}})
+		r.mu.Unlock()
 		if err != nil {
 			return interaction.EnqueueReceipt{}, err
 		}
 		return interaction.EnqueueReceipt{MessageID: message.ID, Revision: commit.Revision}, nil
 	}
 	run, step, changes := r.startChangesLocked(snapshot, item, true)
-	commit, err := r.commitLocked(ctx, request.ExpectedRevision, "send-start", changes)
+	_, err = r.commitLocked(ctx, request.ExpectedRevision, "send-start", changes)
 	if err != nil {
 		run.cancel()
+		r.mu.Unlock()
 		return interaction.EnqueueReceipt{}, err
 	}
 	r.activateLocked(run)
 	go r.runLoop(run, step)
-	return interaction.EnqueueReceipt{MessageID: message.ID, Revision: commit.Revision}, nil
+	r.mu.Unlock()
+	select {
+	case <-run.prepared:
+		return interaction.EnqueueReceipt{MessageID: message.ID, Revision: run.prepareRevision}, nil
+	case <-ctx.Done():
+		return interaction.EnqueueReceipt{}, ctx.Err()
+	}
 }
 
 func (r *runtimeInstance) steer(ctx context.Context, request interaction.SteerRequest) (interaction.EnqueueReceipt, error) {
@@ -74,30 +84,40 @@ func (r *runtimeInstance) pending(ctx context.Context, request interaction.RunPe
 		return interaction.RunReceipt{}, invalidInput("gateway.run_pending", "SessionID is required")
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if err := r.ensureOpenLocked("gateway.run_pending"); err != nil {
+		r.mu.Unlock()
 		return interaction.RunReceipt{}, err
 	}
 	if r.state == runtimeRunning {
+		r.mu.Unlock()
 		return interaction.RunReceipt{}, agent.NewCodedError(agent.ErrorConflict, agent.CodeActiveRun, "gateway.run_pending", "session already has an active Run", nil)
 	}
 	snapshot, err := r.viewLocked(ctx)
 	if err != nil {
+		r.mu.Unlock()
 		return interaction.RunReceipt{}, err
 	}
 	item, ok := firstPending(snapshot.Queue, session.DeliveryNormal)
 	if !ok {
+		r.mu.Unlock()
 		return interaction.RunReceipt{}, agent.NewCodedError(agent.ErrorConflict, agent.CodeNoPendingWork, "gateway.run_pending", "session has no pending normal input", nil)
 	}
 	run, step, changes := r.startChangesLocked(snapshot, item, false)
-	commit, err := r.commitLocked(ctx, request.ExpectedRevision, "run-pending", changes)
+	_, err = r.commitLocked(ctx, request.ExpectedRevision, "run-pending", changes)
 	if err != nil {
 		run.cancel()
+		r.mu.Unlock()
 		return interaction.RunReceipt{}, err
 	}
 	r.activateLocked(run)
 	go r.runLoop(run, step)
-	return interaction.RunReceipt{SessionID: r.id(), RunID: run.id, Revision: commit.Revision}, nil
+	r.mu.Unlock()
+	select {
+	case <-run.prepared:
+		return interaction.RunReceipt{SessionID: r.id(), RunID: run.id, Revision: run.prepareRevision}, nil
+	case <-ctx.Done():
+		return interaction.RunReceipt{}, ctx.Err()
+	}
 }
 
 func (r *runtimeInstance) cancel(_ context.Context, request interaction.CancelRequest) error {
@@ -180,6 +200,7 @@ func (r *runtimeInstance) finishClose(runDone <-chan struct{}) {
 	if runDone != nil {
 		<-runDone
 	}
+	r.observer.stop()
 	r.mu.Lock()
 	if r.state != runtimeClosed {
 		r.state = runtimeClosed
@@ -213,6 +234,22 @@ func (r *runtimeInstance) updateModelConfig(ctx context.Context, request interac
 		return interaction.CommitReceipt{}, invalidInput("gateway.update_model_config", err.Error())
 	}
 	r.mu.Lock()
+	if err := r.ensureOpenLocked("gateway.update_model_config"); err != nil {
+		r.mu.Unlock()
+		return interaction.CommitReceipt{}, err
+	}
+	if r.state == runtimeRunning {
+		r.mu.Unlock()
+		return interaction.CommitReceipt{}, agent.NewCodedError(agent.ErrorConflict, agent.CodeActiveRun, "gateway.update_model_config", "model config cannot change while a Run is active", nil)
+	}
+	r.mu.Unlock()
+	// Inspect is a replaceable component call. It must not run under the
+	// Runtime mutex or gain the ability to block unrelated control commands.
+	capabilities, err := r.inspectModel(ctx, request.Config)
+	if err != nil {
+		return interaction.CommitReceipt{}, err
+	}
+	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := r.ensureOpenLocked("gateway.update_model_config"); err != nil {
 		return interaction.CommitReceipt{}, err
@@ -220,12 +257,51 @@ func (r *runtimeInstance) updateModelConfig(ctx context.Context, request interac
 	if r.state == runtimeRunning {
 		return interaction.CommitReceipt{}, agent.NewCodedError(agent.ErrorConflict, agent.CodeActiveRun, "gateway.update_model_config", "model config cannot change while a Run is active", nil)
 	}
+	snapshot, err := r.viewLocked(ctx)
+	if err != nil {
+		return interaction.CommitReceipt{}, err
+	}
+	warnings := modelCompatibilityWarnings(snapshot.History, capabilities.Media)
+	if len(warnings) > 0 && !request.AcceptCompatibilityLoss {
+		compatibility := &model.CompatibilityError{Warnings: warnings}
+		return interaction.CommitReceipt{}, agent.NewCodedError(agent.ErrorConflict, agent.CodeCompatibilityConfirmationRequired, "gateway.update_model_config", "target model cannot directly consume all persisted attachments", compatibility)
+	}
 	config := cloneRuntimeConfig(request.Config)
-	commit, err := r.commitLocked(ctx, request.ExpectedRevision, "model-config", []session.Change{{Kind: session.SetModelConfig, ModelConfig: &config}})
+	change := session.ModelConfigChange{Previous: cloneRuntimeConfig(snapshot.ModelConfig), Current: cloneRuntimeConfig(config)}
+	event := session.SessionEvent{Kind: session.EventModelConfigChanged, ModelConfigChanged: &change}
+	commit, err := r.commitLocked(ctx, request.ExpectedRevision, "model-config", []session.Change{
+		{Kind: session.SetModelConfig, ModelConfig: &config},
+		{Kind: session.AppendSessionEvent, SessionEvent: &event},
+	})
 	if err != nil {
 		return interaction.CommitReceipt{}, err
 	}
 	return interaction.CommitReceipt{SessionID: r.id(), Revision: commit.Revision}, nil
+}
+
+func modelCompatibilityWarnings(history []session.HistoryFact, capabilities model.Capabilities) []model.CompatibilityWarning {
+	counts := make(map[model.Modality]int)
+	for _, fact := range history {
+		if fact.Message == nil {
+			continue
+		}
+		for _, part := range fact.Message.Parts {
+			if part.Kind != agent.PartAttachment {
+				continue
+			}
+			modality := attachmentModality(part.MediaType)
+			if modality.Valid() && !capabilities.SupportsInput(modality) {
+				counts[modality]++
+			}
+		}
+	}
+	warnings := make([]model.CompatibilityWarning, 0, len(counts))
+	for _, modality := range model.AllModalities() {
+		if count := counts[modality]; count > 0 {
+			warnings = append(warnings, model.CompatibilityWarning{Modality: modality, Count: count})
+		}
+	}
+	return warnings
 }
 
 func (r *runtimeInstance) editQueued(ctx context.Context, request interaction.EditQueuedRequest) (interaction.CommitReceipt, error) {

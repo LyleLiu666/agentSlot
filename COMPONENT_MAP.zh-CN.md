@@ -24,14 +24,14 @@
 | --- | ---: |
 | 已映射的标准组件生态位 | 42 |
 | 已标准化的领域词汇 | 2 |
-| 已定义契约的 AgentSlot 自有领域接口 | 9 |
+| 已定义契约的 AgentSlot 自有领域接口 | 10 |
 | 通过一致性验证的组件生态位 | 0 |
 | 已由独立实现证明的组件生态位 | 0 |
 | 已进入标准装配的组件生态位 | 0 |
 
 独立的组装协议目前导出了五个 Go 接口：`Module`、`SlotRequirer`、
 `Registrar`、`Contribution` 和 `Lifecycle`。它们是框架机制，不能代替
-地图中 42 个待落地的 Agent 领域组件契约。
+地图中 42 个 Agent 领域组件生态位；其中 10 个已经具备公开合同。
 
 ## 可运行标准 Profile
 
@@ -117,7 +117,7 @@ flowchart LR
 | **已证明（Proven）** | 至少两个语义上独立的实现通过一致性测试；同一实现的不同包装只能算一个。 |
 | **已装配（Assembled）** | 参考应用能够通过 Slot 替换已证明的实现，不包含具体类型分支。 |
 
-本轮已有 9 个基础领域生态位进入**已定义契约（Contracted）**：它们拥有公开
+当前已有 10 个基础领域生态位进入**已定义契约（Contracted）**：它们拥有公开
 领域接口、typed Slot 和合同测试。`session.manager` 与 `session.store` 已有一个
 内存参考实现及行为测试，`model.executor` 已有一个被固定 Runtime 实际消费的确定性
 Fake 实现，`tool` 已有一个经固定 Dispatcher 消费的内置 Bash 实现；但它们都还没有
@@ -148,10 +148,10 @@ Fake 实现，`tool` 已有一个经固定 Dispatcher 消费的内置 Bash 实�
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `model.executor` | `ModelExecutor` | `One` | 全局必需 | 执行一次逻辑模型请求，在内部管理真实请求和恢复，并统一发出临时输出、reset、完整结果或最终失败。 | 已定义契约 |
+| `model.executor` | `ModelExecutor` | `One` | 全局必需 | 校验所选模型能力、计量完整请求，并执行一次逻辑模型调用；在内部管理真实请求、恢复和 Provider-neutral 流事件。 | 已定义契约 |
 | `model.provider` | `ModelProvider` | `Many` | 可选；仅由声明依赖的 Executor 要求 | 为组合本地适配器的 Executor 提供具名 Provider 访问。 | 已映射 |
 | `model.selector` | `ModelSelector` | `One` | 可选；动态路由时按条件要求 | 根据明确的请求和策略输入选择 Provider/模型。 | 已映射 |
-| `model.catalog` | `ModelCatalog` | `Many` | 可选 | 描述可用模型及其声明能力，但不暴露凭证。 | 已映射 |
+| `model.catalog` | `ModelCatalog` | `Many` | 可选 | 描述可用模型及其声明能力，但不暴露凭证。 | 已定义契约 |
 | `model.middleware` | `ModelMiddleware` | `Chain` | 可选 | 在不改变 Provider 身份的前提下处理可观察的请求/响应横切逻辑。 | 已映射 |
 
 显式 SessionModelConfig 具有权威性。ModelSelector 可以校验、解析别名、执行授权或

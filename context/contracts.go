@@ -7,6 +7,7 @@ import (
 
 	agentslot "github.com/LyleLiu666/agentSlot"
 	agent "github.com/LyleLiu666/agentSlot/agent"
+	"github.com/LyleLiu666/agentSlot/model"
 )
 
 // SourceSlot is the ordered context contribution ecosystem.
@@ -15,9 +16,10 @@ var SourceSlot = agentslot.Chain[ContextSource]("context.source")
 // CompactorSlot is the replaceable context compression ecosystem.
 var CompactorSlot = agentslot.One[ContextCompactor]("context.compactor")
 
-// ContextSource contributes derived messages without mutating History.
+// ContextSource contributes an ordered, provider-neutral projection without
+// mutating History. Runtime validates the complete protocol after every source.
 type ContextSource interface {
-	Contribute(stdcontext.Context, ContextInput) ([]agent.Message, error)
+	Contribute(stdcontext.Context, ContextInput) ([]model.Input, error)
 }
 
 // ContextInput is the complete context available to a source. Fixed
@@ -25,7 +27,8 @@ type ContextSource interface {
 type ContextInput struct {
 	SessionID agent.SessionID
 	Revision  agent.Revision
-	Messages  []agent.Message
+	Inputs    []model.Input
+	Config    model.Config
 }
 
 // Compactor returns a smaller legal message projection. It never writes the
@@ -38,11 +41,12 @@ type ContextCompactor interface {
 type CompactionInput struct {
 	SessionID agent.SessionID
 	Revision  agent.Revision
-	Messages  []agent.Message
+	Inputs    []model.Input
+	Config    model.Config
 }
 
 // CompactionOutput is the compactor result plus the source revision it was based on.
 type CompactionOutput struct {
-	Revision agent.Revision
-	Messages []agent.Message
+	SourceRevision agent.Revision
+	Inputs         []model.Input
 }

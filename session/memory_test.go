@@ -240,9 +240,13 @@ func TestMemoryStorePersistsSingleActiveRunUnderConcurrency(t *testing.T) {
 		t.Fatalf("second active run error = %v, want active_run", err)
 	}
 	config := model.Config{ProviderKey: "provider-2", ModelID: "model-2", Reasoning: model.ReasoningDefault}
+	configEvent := session.SessionEvent{Kind: session.EventModelConfigChanged, ModelConfigChanged: &session.ModelConfigChange{Previous: view.ModelConfig, Current: config}}
 	_, err = store.Commit(context.Background(), session.CommitRequest{
 		SessionID: snapshot.Session.ID, ExpectedRevision: view.Revision, IdempotencyKey: "config-while-running",
-		Changes: []session.Change{{Kind: session.SetModelConfig, ModelConfig: &config}},
+		Changes: []session.Change{
+			{Kind: session.SetModelConfig, ModelConfig: &config},
+			{Kind: session.AppendSessionEvent, SessionEvent: &configEvent},
+		},
 	})
 	if !agent.IsCode(err, agent.CodeActiveRun) {
 		t.Fatalf("model update during run error = %v, want active_run", err)
@@ -369,13 +373,18 @@ func TestMemoryManagerCreateResumeForkAndSummaryPreserveModelRules(t *testing.T)
 		t.Fatalf("create model override = %q, want %q", got, explicitCreateConfig.ModelID)
 	}
 	selected := model.Config{ProviderKey: "provider-2", ModelID: "model-2", Reasoning: model.ReasoningHigh}
+	modelEvent := session.SessionEvent{Kind: session.EventModelConfigChanged, ModelConfigChanged: &session.ModelConfigChange{Previous: source.ModelConfig, Current: selected}}
 	user := message("source-message", source.Session.ID, agent.RoleUser, "source history")
 	queue := message("queued-source", source.Session.ID, agent.RoleUser, "not inherited")
 	updated := commitChanges(t, store, source.Session.ID, source.Revision, "source-state",
 		session.Change{Kind: session.AppendMessage, Message: &user},
-		session.Change{Kind: session.SetContext, Context: &session.ContextView{Revision: source.Revision, Messages: []agent.Message{user}}},
+		session.Change{Kind: session.SetContext, Context: &session.ContextView{
+			Version: 1, SourceRevision: source.Revision, TokenCount: 1,
+			Inputs: []model.Input{{Message: &user}},
+		}},
 		session.Change{Kind: session.EnqueueMessage, QueueItem: &session.QueueItem{Message: queue, Delivery: session.DeliveryNormal}},
 		session.Change{Kind: session.SetModelConfig, ModelConfig: &selected},
+		session.Change{Kind: session.AppendSessionEvent, SessionEvent: &modelEvent},
 	)
 	resumed, err := manager.Resume(context.Background(), session.ResumeRequest{SessionID: source.Session.ID})
 	if err != nil {
@@ -399,7 +408,7 @@ func TestMemoryManagerCreateResumeForkAndSummaryPreserveModelRules(t *testing.T)
 	if len(forkView.History) != 1 || forkView.History[0].Message.ID == user.ID || forkView.History[0].Message.SessionID != forkView.Session.ID {
 		t.Fatalf("fork history identities = %#v", forkView.History)
 	}
-	if len(forkView.Context.Messages) != 0 || forkView.Context.Revision != 0 {
+	if len(forkView.Context.Inputs) != 0 || forkView.Context.Version != 0 || forkView.Context.SourceRevision != 0 {
 		t.Fatalf("fork reused source model projection: %#v", forkView.Context)
 	}
 	if len(forkView.Queue) != 0 || len(forkView.RunJournal) != 0 {

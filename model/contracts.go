@@ -86,13 +86,17 @@ type ModelRequest struct {
 // Input is one ordered model-facing projection item. It preserves canonical
 // message/call/result semantics without exposing a Provider wire format.
 type Input struct {
-	Message    *agent.Message
-	ToolCall   *agent.ToolCall
-	ToolResult *tool.ToolResult
+	SystemPrompt *string
+	Message      *agent.Message
+	ToolCall     *agent.ToolCall
+	ToolResult   *tool.ToolResult
 }
 
 func (i Input) Valid() bool {
 	count := 0
+	if i.SystemPrompt != nil {
+		count++
+	}
 	if i.Message != nil {
 		count++
 	}
@@ -105,6 +109,9 @@ func (i Input) Valid() bool {
 	if count != 1 {
 		return false
 	}
+	if i.SystemPrompt != nil {
+		return *i.SystemPrompt != ""
+	}
 	if i.Message != nil {
 		return i.Message.Valid()
 	}
@@ -114,10 +121,120 @@ func (i Input) Valid() bool {
 	return i.ToolResult.Validate() == nil
 }
 
+// ValidateInputs enforces the provider-neutral protocol projection. A fixed
+// SystemPrompt may appear once at the beginning. Tool exchanges are contiguous
+// groups: one assistant parent, all calls, then exactly one result per call.
+func ValidateInputs(inputs []Input) error {
+	messages := make(map[agent.MessageID]bool)
+	allCalls := make(map[agent.ToolCallID]bool)
+	start := 0
+	if len(inputs) > 0 && inputs[0].SystemPrompt != nil {
+		if !inputs[0].Valid() {
+			return errors.New("model: invalid system prompt")
+		}
+		start = 1
+	}
+	for index := start; index < len(inputs); {
+		input := inputs[index]
+		if !input.Valid() {
+			return errors.New("model: invalid input item")
+		}
+		if input.SystemPrompt != nil {
+			return errors.New("model: system prompt must be the first and only fixed input")
+		}
+		if input.Message == nil {
+			return errors.New("model: tool exchange must begin with an assistant message")
+		}
+		message := input.Message
+		if messages[message.ID] {
+			return errors.New("model: duplicate message input")
+		}
+		messages[message.ID] = true
+		index++
+		if message.Role != agent.RoleAssistant || index >= len(inputs) || inputs[index].ToolCall == nil {
+			continue
+		}
+		calls := make(map[agent.ToolCallID]bool)
+		for index < len(inputs) && inputs[index].ToolCall != nil {
+			call := inputs[index].ToolCall
+			if !inputs[index].Valid() || call.MessageID != message.ID || call.RunID != message.RunID || call.StepID != message.StepID || calls[call.ID] || allCalls[call.ID] {
+				return errors.New("model: tool call has invalid assistant containment")
+			}
+			calls[call.ID] = true
+			allCalls[call.ID] = true
+			index++
+		}
+		results := make(map[agent.ToolCallID]bool, len(calls))
+		for index < len(inputs) && inputs[index].ToolResult != nil {
+			result := inputs[index].ToolResult
+			if !inputs[index].Valid() || !calls[result.CallID] || results[result.CallID] {
+				return errors.New("model: tool result is unpaired or duplicated")
+			}
+			results[result.CallID] = true
+			index++
+		}
+		if len(results) != len(calls) {
+			return errors.New("model: tool call has no terminal result")
+		}
+	}
+	return nil
+}
+
 // Executor performs one logical model call and owns provider retry or
 // continuation differences.
 type ModelExecutor interface {
 	Execute(context.Context, ModelRequest) (ModelStream, error)
+	// Inspect validates a selection and returns authoritative capabilities.
+	Inspect(context.Context, Config) (ExecutionCapabilities, error)
+	// CountTokens evaluates the complete fixed request without mutating it.
+	CountTokens(context.Context, ModelRequest) (int, error)
+}
+
+// ExecutionCapabilities is the authoritative Executor view used by Runtime before a
+// provider call or model switch.
+type ExecutionCapabilities struct {
+	Media               Capabilities
+	Reasoning           []Reasoning
+	ContextWindowTokens int
+	MaxOutputTokens     int
+}
+
+// CompatibilityWarning describes durable Session content that a target model
+// cannot consume directly. The content remains in History; callers may confirm
+// the switch and let Context project stable attachment references instead.
+type CompatibilityWarning struct {
+	Modality Modality
+	Count    int
+}
+
+// CompatibilityError carries machine-readable warnings for a model switch
+// that requires explicit caller confirmation.
+type CompatibilityError struct {
+	Warnings []CompatibilityWarning
+}
+
+func (e *CompatibilityError) Error() string {
+	return "model: switching requires explicit compatibility-loss confirmation"
+}
+
+func (c ExecutionCapabilities) Validate() error {
+	if c.ContextWindowTokens <= 0 || c.MaxOutputTokens < 0 || c.MaxOutputTokens > c.ContextWindowTokens {
+		return errors.New("model: invalid token capabilities")
+	}
+	if err := c.Media.Validate(); err != nil {
+		return err
+	}
+	if len(c.Reasoning) == 0 {
+		return errors.New("model: reasoning capabilities are required")
+	}
+	seenReasoning := make(map[Reasoning]bool)
+	for _, reasoning := range c.Reasoning {
+		if !reasoning.Valid() || seenReasoning[reasoning] {
+			return errors.New("model: invalid or duplicate reasoning capability")
+		}
+		seenReasoning[reasoning] = true
+	}
+	return nil
 }
 
 // ModelStream carries ordered temporary and terminal events. Implementations must

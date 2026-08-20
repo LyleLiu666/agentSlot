@@ -494,7 +494,8 @@ RuntimeCoordinator 只操作注册表，不拥有它。
 - **必须满足的不变量：** InteractionCommand 不解析 `/name`、HTTP 或其他 wire 文本，不渲染具体 UI；它只能调用 Gateway 提供的受控后端能力，不能直接访问 SessionStore、取得 RuntimeAccess、改变 Runtime 状态机或实现模型循环。可移植描述只使用有限、稳定的字段和交互词汇；产品专属复杂界面可以扩展前端，但最终操作仍必须提交给 Gateway。重复 key 在 Build 阶段失败。
 - **否决的方案及原因：** `slash.command` 会把某一种 UI 语法提升为领域架构；让 Entrypoint 直接消费 InteractionCommand 会复制目录、权限、确认和执行规则；宣称任意命令都能自动生成任意 UI 会形成不可维护的万能 Schema。
 - **对接口、存储、Gateway 和实现的影响：** `model` 命令可依赖 ModelCatalog 产生候选项，读取 SessionModelConfig，并在用户确认后通过 Gateway 调用 `UpdateModelConfig`。框架可以提供默认实现，但不把它硬编码进 AgentRuntime；Agent 项目可安装、替换或省略。Entrypoint 只负责把 Gateway 描述映射到具体 UI 或传输。
-- **状态：** 已确定；方法级 Go 合同仍按 Mapped 成熟度处理。
+- **状态：** 已确定；`interaction.command` 已进入 Contracted，默认 `model` 命令和首个
+  具体 UI/Entrypoint 仍在交互批次实现。
 
 ### A-048 模型兼容性处理不得改写 Session 事实
 

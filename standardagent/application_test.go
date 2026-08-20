@@ -135,6 +135,20 @@ func TestStandardProfileRejectsMissingRequiredComponents(t *testing.T) {
 	}
 }
 
+func TestStandardApplicationRejectsNegativeContextLimitAtBuild(t *testing.T) {
+	application := NewApplication(ApplicationSpec{
+		Name:          "invalid-context-limit",
+		RuntimeConfig: AgentRuntimeConfig{Context: ContextConfig{HardTokenLimit: -1}},
+		Modules: []agentslot.Module{
+			componentsModule{manager: newFakeManager()},
+			NewEntrypointModule("entrypoint.test", "test", &captureEntrypoint{}),
+		},
+	})
+	if _, err := application.Build(); err == nil {
+		t.Fatal("negative Context hard limit was accepted")
+	}
+}
+
 func TestStandardApplicationRejectsEntrypointThatBypassesGatewayWrapper(t *testing.T) {
 	application := NewApplication(ApplicationSpec{Name: "raw-entrypoint", Modules: []agentslot.Module{
 		componentsModule{manager: newFakeManager()},
@@ -553,3 +567,10 @@ type fakeExecutor struct{}
 func (fakeExecutor) Execute(context.Context, model.ModelRequest) (model.ModelStream, error) {
 	return nil, errors.New("not used in application skeleton test")
 }
+func (fakeExecutor) Inspect(context.Context, model.Config) (model.ExecutionCapabilities, error) {
+	return model.ExecutionCapabilities{
+		Media:     model.Capabilities{InputModalities: []model.Modality{model.ModalityText}, OutputModalities: []model.Modality{model.ModalityText}},
+		Reasoning: []model.Reasoning{model.ReasoningDefault}, ContextWindowTokens: 1000, MaxOutputTokens: 100,
+	}, nil
+}
+func (fakeExecutor) CountTokens(context.Context, model.ModelRequest) (int, error) { return 0, nil }
