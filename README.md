@@ -35,13 +35,13 @@ vary.
 
 ## Status
 
-AgentSlot is a pre-1.0 foundation. `v0.0.2` is the first validation release of
-the complete reference Agent path and is intended to be consumed by real Agent
-projects. It is not a stable-production claim, and public APIs may still change
-based on integration feedback. The composition core works today; the standard
-component map is normative, while its ecosystems remain at their explicitly
-recorded maturity. Every published tag is immutable; later changes receive a
-new semantic version.
+AgentSlot is a pre-1.0 foundation. The next validation release is planned to be
+`v0.0.2`, covering the complete reference Agent path for use by real Agent
+projects. No `v0.0.2` tag has been published yet. It will not be a
+stable-production claim, and public APIs may still change based on integration
+feedback. The composition core works today; the standard component map is
+normative, while its ecosystems remain at their explicitly recorded maturity.
+Every published tag is immutable; later changes receive a new semantic version.
 
 The project's architectural result is the quality of its component map, not a
 large interface count. Each accepted ecosystem must have a clear boundary,

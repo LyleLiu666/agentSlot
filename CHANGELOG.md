@@ -1,14 +1,15 @@
 # Changelog
 
-This file records published AgentSlot releases. The project is pre-1.0: a
-validation release is usable through Go modules, but its public API may change
-when real consumers expose a flawed boundary.
+This file records published releases and the explicitly marked next release
+candidate. The project is pre-1.0: a validation release is usable through Go
+modules, but its public API may change when real consumers expose a flawed
+boundary.
 
-## v0.0.2 - 2026-08-20
+## v0.0.2 - Unreleased
 
-`v0.0.2` is the first end-to-end framework validation release. It is intended
-for integration into real Agent projects; it is not yet a production-stability
-or ecosystem-maturity claim.
+`v0.0.2` is planned as the first end-to-end framework validation release. The
+candidate is intended for integration into real Agent projects before tagging;
+it is not a production-stability or ecosystem-maturity claim.
 
 ### Added
 
