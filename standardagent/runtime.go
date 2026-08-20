@@ -21,6 +21,8 @@ import (
 type applicationRuntime struct {
 	mu           sync.Mutex
 	active       sync.WaitGroup
+	operationCtx context.Context
+	cancel       context.CancelFunc
 	dependencies runtimeDependencies
 	registry     *runtimeRegistry
 	coordinator  *runtimeCoordinator
@@ -42,6 +44,7 @@ func (r *applicationRuntime) start(ctx context.Context) error {
 	if r.started {
 		return agent.NewError(agent.ErrorConflict, "standardagent.start", "application runtime was already started", nil)
 	}
+	r.operationCtx, r.cancel = context.WithCancel(context.Background())
 	r.registry = newRuntimeRegistry()
 	r.observations = newObservationHub(r.dependencies.traces, r.dependencies.metrics, r.dependencies.audits, r.dependencies.usages)
 	r.coordinator = &runtimeCoordinator{
@@ -63,35 +66,69 @@ func (r *applicationRuntime) stop(ctx context.Context) error {
 	r.started = false
 	registry := r.registry
 	observations := r.observations
+	cancel := r.cancel
 	r.mu.Unlock()
 
-	// No new operation can enter after started becomes false. Waiting here
-	// lets already-routed operations finish before the registry is drained.
-	r.active.Wait()
+	if cancel != nil {
+		cancel()
+	}
+	// Closing the registry first cancels every active Session Runtime. Waiting
+	// for routed Gateway operations before this point would deadlock because an
+	// operation such as SendAndWait is itself waiting for that Runtime to end.
+	var closeError error
+	if registry != nil {
+		closeError = registry.closeAll(ctx)
+	}
+	activeDone := make(chan struct{})
+	go func() {
+		r.active.Wait()
+		close(activeDone)
+	}()
+	select {
+	case <-activeDone:
+		return errors.Join(closeError, r.finishStop(ctx, observations))
+	case <-ctx.Done():
+		// Runtime cancellation has already begun. Keep the observation hub and
+		// coordinator reachable until operations that honored it have drained,
+		// then release them without making a timed-out caller wait forever.
+		go func() {
+			<-activeDone
+			_ = r.finishStop(context.Background(), observations)
+		}()
+		return errors.Join(closeError, ctx.Err())
+	}
+}
 
+func (r *applicationRuntime) finishStop(ctx context.Context, observations *observationHub) error {
 	r.mu.Lock()
+	r.operationCtx = nil
+	r.cancel = nil
 	r.registry = nil
 	r.coordinator = nil
 	r.gateway = nil
 	r.observations = nil
 	r.mu.Unlock()
-	var closeError error
-	if registry != nil {
-		closeError = registry.closeAll(ctx)
-	}
-	return errors.Join(closeError, observations.stop(ctx))
+	return observations.stop(ctx)
 }
 
-func (r *applicationRuntime) acquire() (*runtimeCoordinator, func(), error) {
+func (r *applicationRuntime) acquire(ctx context.Context) (*runtimeCoordinator, context.Context, func(), error) {
 	r.mu.Lock()
-	if !r.started || r.coordinator == nil {
+	if !r.started || r.coordinator == nil || r.operationCtx == nil {
 		r.mu.Unlock()
-		return nil, nil, notStartedError()
+		return nil, nil, nil, notStartedError()
 	}
 	r.active.Add(1)
 	coordinator := r.coordinator
+	lifetime := r.operationCtx
 	r.mu.Unlock()
-	return coordinator, r.active.Done, nil
+	operationCtx, cancel := context.WithCancel(ctx)
+	stopLifetimeCancellation := context.AfterFunc(lifetime, cancel)
+	release := func() {
+		stopLifetimeCancellation()
+		cancel()
+		r.active.Done()
+	}
+	return coordinator, operationCtx, release, nil
 }
 
 func (r *applicationRuntime) command(key string) (interaction.InteractionCommand, bool) {

@@ -283,7 +283,7 @@ func TestSessionRuntimesShareOneAssembledComponentSet(t *testing.T) {
 		t.Fatalf("binding access: %v", err)
 	}
 	fixedGateway := target.(*gateway)
-	coordinator, release, err := fixedGateway.runtime.acquire()
+	coordinator, _, release, err := fixedGateway.runtime.acquire(context.Background())
 	if err != nil {
 		t.Fatalf("acquire coordinator: %v", err)
 	}
