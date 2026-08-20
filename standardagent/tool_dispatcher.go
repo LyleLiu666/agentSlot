@@ -68,11 +68,18 @@ func (d *toolDispatcher) definitions() []tool.Definition {
 }
 
 func (d *toolDispatcher) dispatch(ctx context.Context, calls []agent.ToolCall) []tool.ToolResult {
+	return d.dispatchPrepared(ctx, calls, nil)
+}
+
+// dispatchPrepared lets the Runtime durably cross the execution boundary
+// after policy and approval succeed but before a Tool can observe the call.
+// A nil callback is reserved for dispatcher unit tests that have no Session.
+func (d *toolDispatcher) dispatchPrepared(ctx context.Context, calls []agent.ToolCall, beforeInvoke func(agent.ToolCall) error) []tool.ToolResult {
 	results := make([]tool.ToolResult, len(calls))
 	for index := 0; index < len(calls); {
 		installed, ok := d.tools[calls[index].Name]
 		if !ok || installed.safety == tool.Serial {
-			results[index] = d.invoke(ctx, calls[index])
+			results[index] = d.invoke(ctx, calls[index], beforeInvoke)
 			index++
 			continue
 		}
@@ -89,7 +96,7 @@ func (d *toolDispatcher) dispatch(ctx context.Context, calls []agent.ToolCall) [
 			wait.Add(1)
 			go func(callIndex int) {
 				defer wait.Done()
-				results[callIndex] = d.invoke(ctx, calls[callIndex])
+				results[callIndex] = d.invoke(ctx, calls[callIndex], beforeInvoke)
 			}(callIndex)
 		}
 		wait.Wait()
@@ -98,7 +105,7 @@ func (d *toolDispatcher) dispatch(ctx context.Context, calls []agent.ToolCall) [
 	return results
 }
 
-func (d *toolDispatcher) invoke(ctx context.Context, call agent.ToolCall) (result tool.ToolResult) {
+func (d *toolDispatcher) invoke(ctx context.Context, call agent.ToolCall, beforeInvoke func(agent.ToolCall) error) (result tool.ToolResult) {
 	installed, ok := d.tools[call.Name]
 	if !ok {
 		return failedToolResult(call.ID, "tool_not_found", "requested tool is not installed")
@@ -108,6 +115,11 @@ func (d *toolDispatcher) invoke(ctx context.Context, call agent.ToolCall) (resul
 	}
 	if failure := d.authorize(ctx, call); failure != nil {
 		return *failure
+	}
+	if beforeInvoke != nil {
+		if err := beforeInvoke(call); err != nil {
+			return failedToolResult(call.ID, "execution_state_error", "tool execution could not be started safely")
+		}
 	}
 	d.observeToolStarted(call)
 	defer func() {

@@ -82,6 +82,10 @@ The runtime boundary below the Assembly is explicit:
    SessionModelConfig together with revision/CAS transaction state.
    `SessionStore.Recover` is the explicit resume-time crash boundary; ordinary
    `Load` is read-only and cannot terminate a legitimately active Run.
+   A published ToolCall is journaled as `prepared` until policy and approval
+   finish. The fixed Runtime persists `pending` immediately before invocation.
+   Recovery resumes the original prepared call, while pending means execution
+   may have started and therefore converges to `outcome_unknown` without replay.
 3. Successful `CreateSession` or `ResumeSession` initializes one AgentRuntime
    with an immutable AgentRuntimeConfig snapshot and the components selected by
    Assembly. Create initializes SessionModelConfig from the Agent default; resume

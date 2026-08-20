@@ -330,7 +330,10 @@ structured clients then invoke that one Gateway command backend. The
 `interaction/inprocess` package provides a function-style GatewayChannel, and
 [`interaction/cli`](interaction/cli) provides a lifecycle-owned line protocol;
 both expose only GatewayAccess. `policy.guard` and `approval.service` now gate
-tool execution without gaining loop control. Trace, Metric, Audit, and Usage
+tool execution without gaining loop control. A durable ToolCall is `prepared`
+while policy or approval is pending, and crosses to `pending` immediately
+before invocation. Recovery can resume only the original prepared call;
+pending calls become `outcome_unknown` and are never replayed. Trace, Metric, Audit, and Usage
 chains are passive, and [`observe/jsonlines`](observe/jsonlines) is an explicit
 default sink. [`session.FileStore`](session/file_store.go) is a crash-safe
 single-process persistent implementation. These implementations do not make

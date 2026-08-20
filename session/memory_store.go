@@ -262,8 +262,8 @@ func validateNewSession(initial NewSession) error {
 		if err := entry.Validate(initial.Session.ID); err != nil {
 			return invalid("session.create", err.Error())
 		}
-		if entry.Status == JournalPending && (initial.RunState != RunRunning || entry.RunID != initial.ActiveRunID) {
-			return invalid("session.create", "pending journal must belong to the active run")
+		if unfinishedJournal(entry.Status) && (initial.RunState != RunRunning || entry.RunID != initial.ActiveRunID) {
+			return invalid("session.create", "unfinished journal must belong to the active run")
 		}
 	}
 	if err := validateContext(initial.Context, initial.Session.ID); err != nil {
@@ -477,8 +477,8 @@ func applyChanges(snapshot *Snapshot, request CommitRequest) error {
 			}
 		}
 	}
-	if snapshot.RunState == RunIdle && hasPendingJournal(snapshot.RunJournal) {
-		return journalConflict("idle session cannot retain pending tool execution")
+	if snapshot.RunState == RunIdle && hasUnfinishedJournal(snapshot.RunJournal) {
+		return journalConflict("idle session cannot retain unfinished tool execution")
 	}
 	if err := validateQueueClaims(snapshot.Queue, snapshot.RunState, snapshot.ActiveRunID); err != nil {
 		return err
@@ -669,21 +669,31 @@ func applyJournal(snapshot *Snapshot, entry JournalEntry, sessionID agent.Sessio
 	}
 	index := journalIndex(snapshot.RunJournal, entry)
 	if index < 0 {
-		if entry.Status != JournalPending || entry.ToolCall == nil {
-			return journalConflict("terminal journal has no pending entry")
+		if !unfinishedJournal(entry.Status) || entry.ToolCall == nil {
+			return journalConflict("journal must begin in an unfinished state")
 		}
 		if snapshot.RunState != RunRunning || snapshot.ActiveRunID != entry.RunID {
-			return journalConflict("pending tool execution must belong to the active run")
+			return journalConflict("prepared tool call must belong to the active run")
 		}
 		snapshot.RunJournal = append(snapshot.RunJournal, cloneJournalEntry(entry))
 		return nil
 	}
 	current := &snapshot.RunJournal[index]
-	if current.Status != JournalPending {
+	if !unfinishedJournal(current.Status) {
 		return journalConflict("journal entry already has a terminal outcome")
 	}
+	if entry.Status == JournalPrepared {
+		return journalConflict("journal entry is already prepared")
+	}
 	if entry.Status == JournalPending {
-		return journalConflict("journal entry is already pending")
+		if current.Status != JournalPrepared {
+			return journalConflict("journal entry is already pending")
+		}
+		if current.RunID != entry.RunID || current.StepID != entry.StepID || current.ToolCall == nil || !sameToolCall(*current.ToolCall, *entry.ToolCall) {
+			return journalConflict("journal update changed the prepared tool identity")
+		}
+		current.Status = JournalPending
+		return nil
 	}
 	if entry.ToolResult == nil {
 		return journalConflict("terminal journal requires a result")
@@ -726,8 +736,13 @@ func recoverAggregate(snapshot *Snapshot) (bool, error) {
 		}
 		changed = true
 	}
+	hasPrepared := false
 	for index := range snapshot.RunJournal {
 		entry := &snapshot.RunJournal[index]
+		if entry.Status == JournalPrepared && entry.ToolCall != nil && entry.RunID == interruptedRunID {
+			hasPrepared = true
+			continue
+		}
 		if entry.Status != JournalPending || entry.ToolCall == nil {
 			continue
 		}
@@ -742,7 +757,7 @@ func recoverAggregate(snapshot *Snapshot) (bool, error) {
 		entry.Status = JournalOutcomeUnknown
 		changed = true
 	}
-	if snapshot.RunState == RunRunning {
+	if snapshot.RunState == RunRunning && !hasPrepared {
 		if started, terminal := runFacts(snapshot.History, interruptedRunID); started != nil && terminal == nil {
 			interrupted := *started
 			interrupted.Kind = RunInterrupted
@@ -757,7 +772,7 @@ func recoverAggregate(snapshot *Snapshot) (bool, error) {
 	}
 	for index := range snapshot.Queue {
 		item := &snapshot.Queue[index]
-		if !interruptedRunID.Valid() {
+		if !interruptedRunID.Valid() || hasPrepared {
 			continue
 		}
 		if item.ClaimedBy == interruptedRunID {
@@ -825,6 +840,7 @@ func validateContextRun(history []HistoryFact, contextView ContextView) error {
 }
 
 func validateToolTransactions(history []HistoryFact, changes []Change) error {
+	prepared := make(map[agent.ToolCallID]*JournalEntry)
 	pending := make(map[agent.ToolCallID]*JournalEntry)
 	terminal := make(map[agent.ToolCallID]*JournalEntry)
 	appendedCalls := make(map[agent.ToolCallID]*agent.ToolCall)
@@ -836,7 +852,9 @@ func validateToolTransactions(history []HistoryFact, changes []Change) error {
 		case AppendToolResult:
 			appendedResults[change.ToolResult.CallID] = change.ToolResult
 		case UpdateRunJournal:
-			if change.Journal.Status == JournalPending {
+			if change.Journal.Status == JournalPrepared {
+				prepared[change.Journal.ToolCall.ID] = change.Journal
+			} else if change.Journal.Status == JournalPending {
 				pending[change.Journal.ToolCall.ID] = change.Journal
 			} else {
 				terminal[change.Journal.ToolCall.ID] = change.Journal
@@ -861,12 +879,15 @@ func validateToolTransactions(history []HistoryFact, changes []Change) error {
 	for _, change := range changes {
 		switch change.Kind {
 		case AppendToolCall:
-			entry := pending[change.ToolCall.ID]
+			entry := prepared[change.ToolCall.ID]
 			if entry == nil {
-				return journalConflict("tool call and pending journal must be committed together")
+				entry = pending[change.ToolCall.ID]
+			}
+			if entry == nil {
+				return journalConflict("tool call and unfinished journal must be committed together")
 			}
 			if !sameToolCall(*change.ToolCall, *entry.ToolCall) {
-				return journalConflict("pending journal does not match the appended tool call")
+				return journalConflict("prepared journal does not match the appended tool call")
 			}
 		case AppendToolResult:
 			entry := terminal[change.ToolResult.CallID]
@@ -878,15 +899,15 @@ func validateToolTransactions(history []HistoryFact, changes []Change) error {
 			}
 		case UpdateRunJournal:
 			callID := change.Journal.ToolCall.ID
-			if change.Journal.Status == JournalPending {
+			if change.Journal.Status == JournalPrepared || (change.Journal.Status == JournalPending && appendedCalls[callID] != nil) {
 				call := appendedCalls[callID]
 				if call == nil {
-					return journalConflict("pending journal has no committed tool call")
+					return journalConflict("prepared journal has no committed tool call")
 				}
 				if !sameToolCall(*call, *change.Journal.ToolCall) {
-					return journalConflict("pending journal changed the appended tool identity")
+					return journalConflict("prepared journal changed the appended tool identity")
 				}
-			} else {
+			} else if change.Journal.Status != JournalPending {
 				result := appendedResults[callID]
 				if result == nil {
 					return journalConflict("terminal journal has no committed tool result")
@@ -1016,16 +1037,16 @@ func validateHistoryConsistency(sessionID agent.SessionID, history []HistoryFact
 		if !calls[entry.ToolCall.ID] {
 			return journalConflict("initial journal has no history tool call")
 		}
-		if entry.Status == JournalPending && results[entry.ToolCall.ID] {
-			return journalConflict("pending journal already has a history result")
+		if unfinishedJournal(entry.Status) && results[entry.ToolCall.ID] {
+			return journalConflict("unfinished journal already has a history result")
 		}
-		if entry.Status == JournalPending {
+		if unfinishedJournal(entry.Status) {
 			pending[entry.ToolCall.ID] = true
 		}
-		if entry.Status != JournalPending && !results[entry.ToolCall.ID] {
+		if !unfinishedJournal(entry.Status) && !results[entry.ToolCall.ID] {
 			return journalConflict("terminal journal has no history result")
 		}
-		if entry.Status != JournalPending {
+		if !unfinishedJournal(entry.Status) {
 			result := findToolResult(history, entry.ToolCall.ID)
 			if result == nil || !sameToolResult(*result, *entry.ToolResult) {
 				return journalConflict("terminal journal result differs from initial history")
@@ -1138,13 +1159,17 @@ func journalIndex(entries []JournalEntry, target JournalEntry) int {
 	return -1
 }
 
-func hasPendingJournal(entries []JournalEntry) bool {
+func hasUnfinishedJournal(entries []JournalEntry) bool {
 	for _, entry := range entries {
-		if entry.Status == JournalPending {
+		if unfinishedJournal(entry.Status) {
 			return true
 		}
 	}
 	return false
+}
+
+func unfinishedJournal(status JournalStatus) bool {
+	return status == JournalPrepared || status == JournalPending
 }
 
 func sameToolCall(left, right agent.ToolCall) bool {
