@@ -3,6 +3,7 @@
 package model
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 )
@@ -55,6 +56,34 @@ func (m Modality) String() string {
 	default:
 		return fmt.Sprintf("unknown(%d)", uint8(m))
 	}
+}
+
+// MarshalJSON exposes the stable semantic name. This method is also required
+// to prevent slices of the uint8-backed Modality type from being mistaken for
+// opaque bytes and encoded as base64 by encoding/json.
+func (m Modality) MarshalJSON() ([]byte, error) {
+	if !m.Valid() {
+		return nil, fmt.Errorf("%w %q", ErrUnknownModality, m)
+	}
+	return json.Marshal(m.String())
+}
+
+// UnmarshalJSON accepts only a stable semantic name from the closed standard
+// vocabulary. Numeric values and null are not portable wire representations.
+func (m *Modality) UnmarshalJSON(data []byte) error {
+	if m == nil {
+		return fmt.Errorf("%w: nil target", ErrUnknownModality)
+	}
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return fmt.Errorf("%w: %v", ErrUnknownModality, err)
+	}
+	parsed, err := ParseModality(value)
+	if err != nil {
+		return err
+	}
+	*m = parsed
+	return nil
 }
 
 // ParseModality parses one stable modality wire name.

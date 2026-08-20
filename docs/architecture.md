@@ -265,9 +265,10 @@ following are true:
 4. a future addition can be made as an explicit standard revision.
 
 Model media modality is one such boundary: `text`, `image`, and `audio` are
-standard values, while provider wire blocks and model IDs are not. Tool input
-is another: JSON Schema Draft 2020-12 is standard, while provider-specific
-keyword and size limits are not.
+standard values and their JSON representation uses those exact names, while
+provider wire blocks and model IDs are not. Tool input is another: JSON Schema
+Draft 2020-12 is standard, while provider-specific keyword and size limits are
+not.
 
 Replaceable behavior, policy, storage, transport, and provider implementation
 remain Slot components. Stable semantics are not made configurable merely to
