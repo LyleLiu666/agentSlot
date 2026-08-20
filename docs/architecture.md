@@ -285,6 +285,12 @@ This keeps unstable provider and product details out of the universal layer.
 
 ## Stable release gate
 
+Pre-1.0 validation tags may be published so real Agent projects can exercise
+the framework and produce the evidence required below. Such a tag is not a
+claim of API stability or ecosystem maturity. A release commit must first be
+pushed to `main` and pass remote CI; an annotated tag is then created on that
+exact `main` commit and pushed without later movement.
+
 The composition API is ready for a stable release only after:
 
 1. At least two independent SDK ecosystems declare real slots over their existing interfaces.
@@ -300,7 +306,7 @@ implementation format.
 
 ## Current implementation frontier
 
-The published foundation now includes fifteen standard domain contracts and
+The published foundation now includes sixteen standard domain contracts and
 typed Slots for Session management/storage, model execution/catalogs, tools,
 context, hooks, interaction, tool policy/approval, and passive observation.
 The `standardagent` package supplies the

@@ -16,6 +16,9 @@ Typed component slots and deterministic composition for agent systems.
 > order, and release gate for turning mapped responsibilities into proven
 > component ecosystems.
 
+> **Release history:** [CHANGELOG](CHANGELOG.md). Pre-1.0 validation releases
+> are intended for real-project feedback and do not promise API stability.
+
 > **Agent runtime decisions and implementation design:**
 > [Agent 设计的架构讨论](docs/agent-architecture-discussion.zh-CN.md) |
 > [Agent 框架全景架构](docs/agent-framework-architecture.zh-CN.md) |
@@ -41,11 +44,13 @@ vary.
 
 ## Status
 
-AgentSlot is a pre-1.0 foundation. Tagged releases are consumable through Go
-modules. The composition core works today; the standard domain interface map is
-normative, while its method-level contracts are being admitted in evidence-led
-stages. Every published tag is immutable; compatible fixes and additions
-receive a new semantic version.
+AgentSlot is a pre-1.0 foundation. `v0.0.2` is the first validation release of
+the complete reference Agent path: it is intended to be consumed by real Agent
+projects so the current contracts can be tested outside this repository. It is
+not a stable-production claim, and public APIs may still change based on that
+evidence. The composition core works today; the standard component map is
+normative, while its ecosystems remain at their explicitly recorded maturity.
+Every published tag is immutable; later changes receive a new semantic version.
 
 The project's architectural result is the quality of its component map, not a
 large interface count. Each accepted ecosystem must have a clear boundary,
