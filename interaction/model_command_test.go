@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	agentslot "github.com/LyleLiu666/agentSlot"
@@ -55,6 +56,10 @@ func TestModelCommandQueriesCurrentSelectionAndAvailableModels(t *testing.T) {
 	}
 	if len(data.Models) != 1 || data.Models[0].ProviderKey != "provider-b" || data.Models[0].ModelID != "model-b" || data.Models[0].ContextWindowTokens != 128_000 {
 		t.Fatalf("available models = %#v", data.Models)
+	}
+	if !strings.Contains(string(result.Data), `"input_modalities":["text","image"]`) ||
+		!strings.Contains(string(result.Data), `"output_modalities":["text"]`) {
+		t.Fatalf("model command modality JSON = %s", result.Data)
 	}
 	if len(actions.applied) != 0 {
 		t.Fatalf("query unexpectedly applied actions: %#v", actions.applied)

@@ -1,12 +1,36 @@
 package model_test
 
 import (
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
 
 	"github.com/LyleLiu666/agentSlot/model"
 )
+
+func TestModalityJSONUsesStableSemanticNamesInsteadOfByteEncoding(t *testing.T) {
+	encoded, err := json.Marshal([]model.Modality{model.ModalityText, model.ModalityImage, model.ModalityAudio})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != `["text","image","audio"]` {
+		t.Fatalf("modality JSON = %s", encoded)
+	}
+	var decoded []model.Modality
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(decoded, model.AllModalities()) {
+		t.Fatalf("decoded modalities = %#v", decoded)
+	}
+	for _, invalid := range []string{`"video"`, `1`, `null`} {
+		var modality model.Modality
+		if err := json.Unmarshal([]byte(invalid), &modality); !errors.Is(err, model.ErrUnknownModality) {
+			t.Fatalf("Unmarshal(%s) error = %v, want ErrUnknownModality", invalid, err)
+		}
+	}
+}
 
 func TestCanonicalModalitiesAreClosedAndStable(t *testing.T) {
 	want := []struct {

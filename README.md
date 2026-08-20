@@ -274,7 +274,8 @@ coverage behind a family name.
 
 The first fixed domain vocabularies are available in the [`model`](model) and
 [`tool`](tool) leaf packages: model input/output modalities are text, image, and
-audio; model-facing tool inputs use self-contained JSON Schema Draft 2020-12.
+audio, serialized by those stable names rather than numeric or byte encodings;
+model-facing tool inputs use self-contained JSON Schema Draft 2020-12.
 Caller and Hook input uses `agent.MessageInput`, which carries content only;
 the fixed Runtime allocates MessageID, Session/Run/Step containment, role, and
 timestamp atomically when it creates a durable `agent.Message` fact.
