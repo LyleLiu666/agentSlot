@@ -18,7 +18,7 @@ type gateway struct {
 	runtime *applicationRuntime
 }
 
-func withCoordinator[T any](ctx context.Context, g *gateway, operation func(*runtimeCoordinator) (T, error)) (T, error) {
+func withCoordinator[T any](ctx context.Context, g *gateway, operation func(context.Context, *runtimeCoordinator) (T, error)) (T, error) {
 	var zero T
 	if err := ctx.Err(); err != nil {
 		return zero, err
@@ -26,27 +26,27 @@ func withCoordinator[T any](ctx context.Context, g *gateway, operation func(*run
 	if g == nil || g.runtime == nil {
 		return zero, notStartedError()
 	}
-	coordinator, release, err := g.runtime.acquire()
+	coordinator, operationCtx, release, err := g.runtime.acquire(ctx)
 	if err != nil {
 		return zero, err
 	}
 	defer release()
-	return operation(coordinator)
+	return operation(operationCtx, coordinator)
 }
 
-func withRuntime[T any](ctx context.Context, g *gateway, id agent.SessionID, operation func(runtimeAccess) (T, error)) (T, error) {
-	return withCoordinator(ctx, g, func(coordinator *runtimeCoordinator) (T, error) {
+func withRuntime[T any](ctx context.Context, g *gateway, id agent.SessionID, operation func(context.Context, runtimeAccess) (T, error)) (T, error) {
+	return withCoordinator(ctx, g, func(operationCtx context.Context, coordinator *runtimeCoordinator) (T, error) {
 		runtime, err := coordinator.runtime(id)
 		if err != nil {
 			var zero T
 			return zero, err
 		}
-		return operation(runtime)
+		return operation(operationCtx, runtime)
 	})
 }
 
 func (g *gateway) ListSessions(ctx context.Context, request interaction.ListSessionsRequest) (interaction.SessionList, error) {
-	return withCoordinator(ctx, g, func(*runtimeCoordinator) (interaction.SessionList, error) {
+	return withCoordinator(ctx, g, func(context.Context, *runtimeCoordinator) (interaction.SessionList, error) {
 		// The authoritative list is a persisted Session query, not a projection
 		// of currently open Runtime entries. Session persistence arrives in the
 		// next implementation round, so this skeleton must not return a lie.
@@ -55,45 +55,45 @@ func (g *gateway) ListSessions(ctx context.Context, request interaction.ListSess
 }
 
 func (g *gateway) CreateSession(ctx context.Context, request interaction.CreateSessionRequest) (interaction.SessionOpened, error) {
-	return withCoordinator(ctx, g, func(coordinator *runtimeCoordinator) (interaction.SessionOpened, error) {
-		return coordinator.create(ctx, request)
+	return withCoordinator(ctx, g, func(operationCtx context.Context, coordinator *runtimeCoordinator) (interaction.SessionOpened, error) {
+		return coordinator.create(operationCtx, request)
 	})
 }
 
 func (g *gateway) ResumeSession(ctx context.Context, request interaction.ResumeSessionRequest) (interaction.SessionOpened, error) {
-	return withCoordinator(ctx, g, func(coordinator *runtimeCoordinator) (interaction.SessionOpened, error) {
-		return coordinator.resume(ctx, request)
+	return withCoordinator(ctx, g, func(operationCtx context.Context, coordinator *runtimeCoordinator) (interaction.SessionOpened, error) {
+		return coordinator.resume(operationCtx, request)
 	})
 }
 
 func (g *gateway) ForkSession(ctx context.Context, request interaction.ForkSessionRequest) (interaction.SessionOpened, error) {
-	return withCoordinator(ctx, g, func(coordinator *runtimeCoordinator) (interaction.SessionOpened, error) {
-		return coordinator.fork(ctx, request)
+	return withCoordinator(ctx, g, func(operationCtx context.Context, coordinator *runtimeCoordinator) (interaction.SessionOpened, error) {
+		return coordinator.fork(operationCtx, request)
 	})
 }
 
 func (g *gateway) StartSessionFromSummary(ctx context.Context, request interaction.SummarySessionRequest) (interaction.SessionOpened, error) {
-	return withCoordinator(ctx, g, func(coordinator *runtimeCoordinator) (interaction.SessionOpened, error) {
-		return coordinator.summary(ctx, request)
+	return withCoordinator(ctx, g, func(operationCtx context.Context, coordinator *runtimeCoordinator) (interaction.SessionOpened, error) {
+		return coordinator.summary(operationCtx, request)
 	})
 }
 
 func (g *gateway) Send(ctx context.Context, request interaction.SendRequest) (interaction.EnqueueReceipt, error) {
-	return withRuntime(ctx, g, request.SessionID, func(runtime runtimeAccess) (interaction.EnqueueReceipt, error) {
-		return runtime.send(ctx, request)
+	return withRuntime(ctx, g, request.SessionID, func(operationCtx context.Context, runtime runtimeAccess) (interaction.EnqueueReceipt, error) {
+		return runtime.send(operationCtx, request)
 	})
 }
 
 func (g *gateway) SendAndWait(ctx context.Context, request interaction.SendRequest) (interaction.RunResult, error) {
-	return withRuntime(ctx, g, request.SessionID, func(runtime runtimeAccess) (interaction.RunResult, error) {
-		receipt, err := runtime.send(ctx, request)
+	return withRuntime(ctx, g, request.SessionID, func(operationCtx context.Context, runtime runtimeAccess) (interaction.RunResult, error) {
+		receipt, err := runtime.send(operationCtx, request)
 		if err != nil {
 			return interaction.RunResult{}, err
 		}
-		if err := runtime.idle(ctx, interaction.WhenIdleRequest{SessionID: request.SessionID}); err != nil {
+		if err := runtime.idle(operationCtx, interaction.WhenIdleRequest{SessionID: request.SessionID}); err != nil {
 			return interaction.RunResult{}, err
 		}
-		snapshot, err := historyThroughInput(ctx, runtime, request.SessionID, receipt.MessageID)
+		snapshot, err := historyThroughInput(operationCtx, runtime, request.SessionID, receipt.MessageID)
 		if err != nil {
 			return interaction.RunResult{}, err
 		}
@@ -165,81 +165,81 @@ func assistantHasText(message agent.Message) bool {
 }
 
 func (g *gateway) Steer(ctx context.Context, request interaction.SteerRequest) (interaction.EnqueueReceipt, error) {
-	return withRuntime(ctx, g, request.SessionID, func(runtime runtimeAccess) (interaction.EnqueueReceipt, error) {
-		return runtime.steer(ctx, request)
+	return withRuntime(ctx, g, request.SessionID, func(operationCtx context.Context, runtime runtimeAccess) (interaction.EnqueueReceipt, error) {
+		return runtime.steer(operationCtx, request)
 	})
 }
 
 func (g *gateway) RunPending(ctx context.Context, request interaction.RunPendingRequest) (interaction.RunReceipt, error) {
-	return withRuntime(ctx, g, request.SessionID, func(runtime runtimeAccess) (interaction.RunReceipt, error) {
-		return runtime.pending(ctx, request)
+	return withRuntime(ctx, g, request.SessionID, func(operationCtx context.Context, runtime runtimeAccess) (interaction.RunReceipt, error) {
+		return runtime.pending(operationCtx, request)
 	})
 }
 
 func (g *gateway) Cancel(ctx context.Context, request interaction.CancelRequest) error {
-	_, err := withRuntime(ctx, g, request.SessionID, func(runtime runtimeAccess) (struct{}, error) {
-		return struct{}{}, runtime.cancel(ctx, request)
+	_, err := withRuntime(ctx, g, request.SessionID, func(operationCtx context.Context, runtime runtimeAccess) (struct{}, error) {
+		return struct{}{}, runtime.cancel(operationCtx, request)
 	})
 	return err
 }
 
 func (g *gateway) WhenIdle(ctx context.Context, request interaction.WhenIdleRequest) error {
-	_, err := withRuntime(ctx, g, request.SessionID, func(runtime runtimeAccess) (struct{}, error) {
-		return struct{}{}, runtime.idle(ctx, request)
+	_, err := withRuntime(ctx, g, request.SessionID, func(operationCtx context.Context, runtime runtimeAccess) (struct{}, error) {
+		return struct{}{}, runtime.idle(operationCtx, request)
 	})
 	return err
 }
 
 func (g *gateway) EditQueued(ctx context.Context, request interaction.EditQueuedRequest) (interaction.CommitReceipt, error) {
-	return withRuntime(ctx, g, request.SessionID, func(runtime runtimeAccess) (interaction.CommitReceipt, error) {
-		return runtime.editQueued(ctx, request)
+	return withRuntime(ctx, g, request.SessionID, func(operationCtx context.Context, runtime runtimeAccess) (interaction.CommitReceipt, error) {
+		return runtime.editQueued(operationCtx, request)
 	})
 }
 
 func (g *gateway) DeleteQueued(ctx context.Context, request interaction.DeleteQueuedRequest) (interaction.CommitReceipt, error) {
-	return withRuntime(ctx, g, request.SessionID, func(runtime runtimeAccess) (interaction.CommitReceipt, error) {
-		return runtime.deleteQueued(ctx, request)
+	return withRuntime(ctx, g, request.SessionID, func(operationCtx context.Context, runtime runtimeAccess) (interaction.CommitReceipt, error) {
+		return runtime.deleteQueued(operationCtx, request)
 	})
 }
 
 func (g *gateway) ReclassifyQueued(ctx context.Context, request interaction.ReclassifyQueuedRequest) (interaction.CommitReceipt, error) {
-	return withRuntime(ctx, g, request.SessionID, func(runtime runtimeAccess) (interaction.CommitReceipt, error) {
-		return runtime.reclassifyQueued(ctx, request)
+	return withRuntime(ctx, g, request.SessionID, func(operationCtx context.Context, runtime runtimeAccess) (interaction.CommitReceipt, error) {
+		return runtime.reclassifyQueued(operationCtx, request)
 	})
 }
 
 func (g *gateway) ModelConfig(ctx context.Context, request interaction.ModelConfigRequest) (interaction.ModelConfigView, error) {
-	return withRuntime(ctx, g, request.SessionID, func(runtime runtimeAccess) (interaction.ModelConfigView, error) {
-		return runtime.modelConfig(ctx, request)
+	return withRuntime(ctx, g, request.SessionID, func(operationCtx context.Context, runtime runtimeAccess) (interaction.ModelConfigView, error) {
+		return runtime.modelConfig(operationCtx, request)
 	})
 }
 
 func (g *gateway) UpdateModelConfig(ctx context.Context, request interaction.UpdateModelConfigRequest) (interaction.CommitReceipt, error) {
-	return withRuntime(ctx, g, request.SessionID, func(runtime runtimeAccess) (interaction.CommitReceipt, error) {
-		return runtime.updateModelConfig(ctx, request)
+	return withRuntime(ctx, g, request.SessionID, func(operationCtx context.Context, runtime runtimeAccess) (interaction.CommitReceipt, error) {
+		return runtime.updateModelConfig(operationCtx, request)
 	})
 }
 
 func (g *gateway) View(ctx context.Context, request interaction.SessionViewRequest) (interaction.SessionView, error) {
-	return withRuntime(ctx, g, request.SessionID, func(runtime runtimeAccess) (interaction.SessionView, error) {
-		return runtime.view(ctx, request)
+	return withRuntime(ctx, g, request.SessionID, func(operationCtx context.Context, runtime runtimeAccess) (interaction.SessionView, error) {
+		return runtime.view(operationCtx, request)
 	})
 }
 
 func (g *gateway) History(ctx context.Context, request interaction.HistoryRequest) (interaction.HistoryPage, error) {
-	return withRuntime(ctx, g, request.SessionID, func(runtime runtimeAccess) (interaction.HistoryPage, error) {
-		return runtime.history(ctx, request)
+	return withRuntime(ctx, g, request.SessionID, func(operationCtx context.Context, runtime runtimeAccess) (interaction.HistoryPage, error) {
+		return runtime.history(operationCtx, request)
 	})
 }
 
 func (g *gateway) Subscribe(ctx context.Context, request interaction.SubscribeRequest) (interaction.EventStream, error) {
-	return withRuntime(ctx, g, request.SessionID, func(runtime runtimeAccess) (interaction.EventStream, error) {
-		return runtime.subscribe(ctx, request)
+	return withRuntime(ctx, g, request.SessionID, func(operationCtx context.Context, runtime runtimeAccess) (interaction.EventStream, error) {
+		return runtime.subscribe(operationCtx, request)
 	})
 }
 
 func (g *gateway) Commands(ctx context.Context, _ interaction.CommandScope) ([]interaction.CommandDescriptor, error) {
-	return withCoordinator(ctx, g, func(*runtimeCoordinator) ([]interaction.CommandDescriptor, error) {
+	return withCoordinator(ctx, g, func(context.Context, *runtimeCoordinator) ([]interaction.CommandDescriptor, error) {
 		descriptors := make([]interaction.CommandDescriptor, 0, len(g.runtime.dependencies.commandDescriptors))
 		for _, descriptor := range g.runtime.dependencies.commandDescriptors {
 			descriptors = append(descriptors, cloneCommandDescriptor(descriptor))
@@ -256,7 +256,7 @@ func (g *gateway) InvokeCommand(ctx context.Context, invocation interaction.Comm
 	if g == nil || g.runtime == nil {
 		return interaction.CommandResult{}, notStartedError()
 	}
-	coordinator, release, err := g.runtime.acquire()
+	coordinator, operationCtx, release, err := g.runtime.acquire(ctx)
 	if err != nil {
 		return interaction.CommandResult{}, err
 	}
@@ -267,7 +267,7 @@ func (g *gateway) InvokeCommand(ctx context.Context, invocation interaction.Comm
 	}
 	actions := &commandActions{coordinator: coordinator, scope: invocation.Scope, actor: invocation.Actor, open: true}
 	defer actions.close()
-	return command.Invoke(ctx, invocation, actions)
+	return command.Invoke(operationCtx, invocation, actions)
 }
 
 func cloneCommandDescriptor(descriptor interaction.CommandDescriptor) interaction.CommandDescriptor {
@@ -280,8 +280,8 @@ func cloneCommandDescriptor(descriptor interaction.CommandDescriptor) interactio
 }
 
 func (g *gateway) CloseSession(ctx context.Context, request interaction.CloseSessionRequest) error {
-	_, err := withCoordinator(ctx, g, func(coordinator *runtimeCoordinator) (struct{}, error) {
-		return struct{}{}, coordinator.close(ctx, request)
+	_, err := withCoordinator(ctx, g, func(operationCtx context.Context, coordinator *runtimeCoordinator) (struct{}, error) {
+		return struct{}{}, coordinator.close(operationCtx, request)
 	})
 	return err
 }
