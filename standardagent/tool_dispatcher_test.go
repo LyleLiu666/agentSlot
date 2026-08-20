@@ -7,6 +7,7 @@ import (
 
 	agentslot "github.com/LyleLiu666/agentSlot"
 	agent "github.com/LyleLiu666/agentSlot/agent"
+	"github.com/LyleLiu666/agentSlot/policy"
 	"github.com/LyleLiu666/agentSlot/tool"
 )
 
@@ -20,7 +21,7 @@ func TestToolDispatcherRunsParallelSafeBatchBeforeSerialCall(t *testing.T) {
 		{Key: "first", Value: &dispatcherTool{name: "first", safety: tool.ParallelSafe, started: firstStarted, release: release, schema: schema}},
 		{Key: "second", Value: &dispatcherTool{name: "second", safety: tool.ParallelSafe, started: secondStarted, release: release, schema: schema}},
 		{Key: "serial", Value: &dispatcherTool{name: "serial", safety: tool.Serial, started: serialStarted, schema: schema}},
-	})
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +60,7 @@ func TestToolDispatcherReturnsSafeFailuresForUnknownAndInvalidArguments(t *testi
 	schema := dispatcherSchema(t)
 	dispatcher, err := newToolDispatcher([]agentslot.Named[tool.Tool]{{
 		Key: "known", Value: &dispatcherTool{name: "known", safety: tool.Serial, started: make(chan struct{}), schema: schema},
-	}})
+	}}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,18 +75,92 @@ func TestToolDispatcherReturnsSafeFailuresForUnknownAndInvalidArguments(t *testi
 func TestToolDispatcherRejectsSlotKeyDefinitionDrift(t *testing.T) {
 	_, err := newToolDispatcher([]agentslot.Named[tool.Tool]{{
 		Key: "slot-key", Value: &dispatcherTool{name: "different", safety: tool.Serial, started: make(chan struct{}), schema: dispatcherSchema(t)},
-	}})
+	}}, nil, nil)
 	if err == nil {
 		t.Fatal("dispatcher accepted Tool key/definition drift")
 	}
 }
 
+func TestToolDispatcherRequiresApprovalWithoutGivingPolicyMutationAuthority(t *testing.T) {
+	arguments := make(chan string, 1)
+	guard := policy.GuardFunc(func(_ context.Context, action policy.Action) (policy.Decision, error) {
+		action.Tool.Call.Arguments[0] = '['
+		return policy.Decision{Effect: policy.RequireApproval, Reason: "external effect"}, nil
+	})
+	approval := policy.ApprovalFunc(func(_ context.Context, request policy.ApprovalRequest) (policy.ApprovalDecision, error) {
+		if string(request.Action.Tool.Call.Arguments) != `{}` || request.Reason != "external effect" {
+			t.Errorf("approval request = %#v", request)
+		}
+		return policy.ApprovalDecision{Approved: true}, nil
+	})
+	dispatcher, err := newToolDispatcher([]agentslot.Named[tool.Tool]{{
+		Key: "effect", Value: &dispatcherTool{
+			name: "effect", safety: tool.Serial, started: make(chan struct{}), schema: dispatcherSchema(t), arguments: arguments,
+		},
+	}}, []policy.PolicyGuard{guard}, approval)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := dispatcher.dispatch(context.Background(), []agent.ToolCall{dispatcherCall("call-1", "effect")})[0]
+	if result.Status != tool.ResultSucceeded {
+		t.Fatalf("approved result = %#v", result)
+	}
+	if got := <-arguments; got != `{}` {
+		t.Fatalf("tool received policy-mutated arguments %q", got)
+	}
+}
+
+func TestToolDispatcherFailsClosedForPolicyAndApprovalFailures(t *testing.T) {
+	tests := []struct {
+		name     string
+		guard    policy.PolicyGuard
+		approval policy.ApprovalService
+		code     string
+	}{
+		{name: "denied", guard: policy.GuardFunc(func(context.Context, policy.Action) (policy.Decision, error) {
+			return policy.Decision{Effect: policy.Deny, Reason: "blocked"}, nil
+		}), code: "policy_denied"},
+		{name: "guard error", guard: policy.GuardFunc(func(context.Context, policy.Action) (policy.Decision, error) {
+			return policy.Decision{}, context.DeadlineExceeded
+		}), code: "policy_error"},
+		{name: "missing approval", guard: policy.GuardFunc(func(context.Context, policy.Action) (policy.Decision, error) {
+			return policy.Decision{Effect: policy.RequireApproval, Reason: "confirm"}, nil
+		}), code: "approval_required"},
+		{name: "approval denied", guard: policy.GuardFunc(func(context.Context, policy.Action) (policy.Decision, error) {
+			return policy.Decision{Effect: policy.RequireApproval, Reason: "confirm"}, nil
+		}), approval: policy.ApprovalFunc(func(context.Context, policy.ApprovalRequest) (policy.ApprovalDecision, error) {
+			return policy.ApprovalDecision{Approved: false, Reason: "operator declined"}, nil
+		}), code: "approval_denied"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			started := make(chan struct{})
+			dispatcher, err := newToolDispatcher([]agentslot.Named[tool.Tool]{{
+				Key: "effect", Value: &dispatcherTool{name: "effect", safety: tool.Serial, started: started, schema: dispatcherSchema(t)},
+			}}, []policy.PolicyGuard{test.guard}, test.approval)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := dispatcher.dispatch(context.Background(), []agent.ToolCall{dispatcherCall("call-1", "effect")})[0]
+			if result.Status != tool.ResultFailed || result.Error == nil || result.Error.Code != test.code {
+				t.Fatalf("result = %#v", result)
+			}
+			select {
+			case <-started:
+				t.Fatal("blocked tool was invoked")
+			default:
+			}
+		})
+	}
+}
+
 type dispatcherTool struct {
-	name    string
-	safety  tool.ParallelSafety
-	started chan struct{}
-	release <-chan struct{}
-	schema  tool.InputSchema
+	name      string
+	safety    tool.ParallelSafety
+	started   chan struct{}
+	release   <-chan struct{}
+	schema    tool.InputSchema
+	arguments chan<- string
 }
 
 func (t *dispatcherTool) Definition() tool.Definition {
@@ -94,6 +169,9 @@ func (t *dispatcherTool) Definition() tool.Definition {
 func (t *dispatcherTool) ParallelSafety() tool.ParallelSafety { return t.safety }
 func (t *dispatcherTool) Invoke(_ context.Context, invocation tool.ToolInvocation) tool.ToolResult {
 	close(t.started)
+	if t.arguments != nil {
+		t.arguments <- string(invocation.Call.Arguments)
+	}
 	if t.release != nil {
 		<-t.release
 	}

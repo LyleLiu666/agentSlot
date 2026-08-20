@@ -9,10 +9,12 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	agent "github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/interaction"
 	"github.com/LyleLiu666/agentSlot/model"
+	"github.com/LyleLiu666/agentSlot/observe"
 	"github.com/LyleLiu666/agentSlot/session"
 )
 
@@ -23,6 +25,7 @@ type applicationRuntime struct {
 	registry     *runtimeRegistry
 	coordinator  *runtimeCoordinator
 	gateway      *gateway
+	observations *observationHub
 	started      bool
 }
 
@@ -40,10 +43,11 @@ func (r *applicationRuntime) start(ctx context.Context) error {
 		return agent.NewError(agent.ErrorConflict, "standardagent.start", "application runtime was already started", nil)
 	}
 	r.registry = newRuntimeRegistry()
+	r.observations = newObservationHub(r.dependencies.traces, r.dependencies.metrics, r.dependencies.audits, r.dependencies.usages)
 	r.coordinator = &runtimeCoordinator{
 		manager:    r.dependencies.manager,
 		registry:   r.registry,
-		components: r.dependencies.runtimeComponents(),
+		components: r.dependencies.runtimeComponents(r.observations),
 	}
 	r.gateway = &gateway{runtime: r}
 	r.started = true
@@ -58,6 +62,7 @@ func (r *applicationRuntime) stop(ctx context.Context) error {
 	}
 	r.started = false
 	registry := r.registry
+	observations := r.observations
 	r.mu.Unlock()
 
 	// No new operation can enter after started becomes false. Waiting here
@@ -68,11 +73,13 @@ func (r *applicationRuntime) stop(ctx context.Context) error {
 	r.registry = nil
 	r.coordinator = nil
 	r.gateway = nil
+	r.observations = nil
 	r.mu.Unlock()
-	if registry == nil {
-		return nil
+	var closeError error
+	if registry != nil {
+		closeError = registry.closeAll(ctx)
 	}
-	return registry.closeAll(ctx)
+	return errors.Join(closeError, observations.stop(ctx))
 }
 
 func (r *applicationRuntime) acquire() (*runtimeCoordinator, func(), error) {
@@ -472,6 +479,9 @@ func newRuntimeInstance(s session.Session, components *runtimeComponents) (*runt
 		return nil, agent.NewError(agent.ErrorInternal, "standardagent.runtime", "SessionManager returned an invalid SessionID", nil)
 	}
 	runtime.observer = newHookObserver(components.hooks)
+	components.observations.publishTrace(observe.TraceRecord{
+		Kind: observe.TraceRuntimeOpened, At: time.Now().UTC(), Identity: observe.Identity{SessionID: runtime.id()},
+	})
 	return runtime, nil
 }
 

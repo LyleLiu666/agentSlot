@@ -250,6 +250,7 @@ type ModelEventKind string
 const (
 	EventDelta    ModelEventKind = "delta"
 	EventReset    ModelEventKind = "reset"
+	EventUsage    ModelEventKind = "usage"
 	EventComplete ModelEventKind = "complete"
 	EventFailed   ModelEventKind = "failed"
 )
@@ -261,7 +262,20 @@ type ModelEvent struct {
 	AttemptID string
 	Text      string
 	Output    *Completion
+	Usage     *Usage
 	Err       error
+}
+
+// Usage is one Provider-reported physical attempt measurement. Executors do
+// not estimate missing values or merge retries into a fictional attempt.
+type Usage struct {
+	InputTokens  int
+	OutputTokens int
+	TotalTokens  int
+}
+
+func (u Usage) Valid() bool {
+	return u.InputTokens >= 0 && u.OutputTokens >= 0 && u.TotalTokens >= u.InputTokens+u.OutputTokens
 }
 
 // Completion is one identity-free logical model result. The fixed Runtime,
@@ -307,19 +321,23 @@ func (c ToolCallRequest) Valid() bool {
 func (e ModelEvent) Validate() error {
 	switch e.Kind {
 	case EventDelta:
-		if e.Text == "" || e.Output != nil || e.Err != nil {
+		if e.Text == "" || e.Output != nil || e.Usage != nil || e.Err != nil {
 			return errors.New("model: delta event requires text and no terminal payload")
 		}
 	case EventReset:
-		if e.Text != "" || e.Output != nil || e.Err != nil {
+		if e.Text != "" || e.Output != nil || e.Usage != nil || e.Err != nil {
 			return errors.New("model: reset event cannot carry content or error")
 		}
+	case EventUsage:
+		if e.AttemptID == "" || e.Text != "" || e.Output != nil || e.Usage == nil || !e.Usage.Valid() || e.Err != nil {
+			return errors.New("model: usage event requires one valid physical-attempt measurement")
+		}
 	case EventComplete:
-		if e.Text != "" || e.Output == nil || !e.Output.Valid() || e.Err != nil {
+		if e.Text != "" || e.Output == nil || !e.Output.Valid() || e.Usage != nil || e.Err != nil {
 			return errors.New("model: complete event requires output and no error")
 		}
 	case EventFailed:
-		if e.Text != "" || e.Err == nil || e.Output != nil {
+		if e.Text != "" || e.Err == nil || e.Output != nil || e.Usage != nil {
 			return errors.New("model: failed event requires an error and no message")
 		}
 	default:

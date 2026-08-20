@@ -189,6 +189,10 @@ func cloneFakeExecution(source FakeExecution) FakeExecution {
 
 func cloneModelEvent(source ModelEvent) ModelEvent {
 	copy := source
+	if source.Usage != nil {
+		usage := *source.Usage
+		copy.Usage = &usage
+	}
 	if source.Output != nil {
 		output := Completion{Parts: append([]agent.MessagePart(nil), source.Output.Parts...)}
 		output.ToolCalls = make([]ToolCallRequest, len(source.Output.ToolCalls))

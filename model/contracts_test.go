@@ -62,6 +62,7 @@ func TestModelEventsSeparateTemporaryAndTerminalFacts(t *testing.T) {
 	valid := []model.ModelEvent{
 		{Kind: model.EventDelta, Text: "partial"},
 		{Kind: model.EventReset},
+		{Kind: model.EventUsage, AttemptID: "attempt-1", Usage: &model.Usage{InputTokens: 2, OutputTokens: 3, TotalTokens: 5}},
 		{Kind: model.EventComplete, Output: output},
 		{Kind: model.EventFailed, Err: errors.New("provider failed")},
 	}
@@ -81,6 +82,9 @@ func TestModelEventsSeparateTemporaryAndTerminalFacts(t *testing.T) {
 	}
 	if err := (model.ModelEvent{Kind: model.EventReset, Text: "stale"}).Validate(); err == nil {
 		t.Fatal("reset event with text accepted")
+	}
+	if err := (model.ModelEvent{Kind: model.EventUsage, AttemptID: "attempt-1", Usage: &model.Usage{InputTokens: 3, OutputTokens: 2, TotalTokens: 4}}).Validate(); err == nil {
+		t.Fatal("inconsistent usage event accepted")
 	}
 }
 

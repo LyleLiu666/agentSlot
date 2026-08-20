@@ -212,8 +212,9 @@ flowchart LR
 `interaction.command` 是可选 `Many` Slot，只向 Gateway 注册 UI-neutral 的结构化命令。
 Gateway 输出命令名称、字段、选项、确认要求、结果和后续动作；不同 Entrypoint 可以把
 同一个 `model` 命令渲染成 `/model`、菜单、按钮或表单。命令不能直接访问 Store 或
-Runtime，也不能实现第二套循环。框架提供显式安装的默认 `model` 命令和函数式进程内
-Entrypoint；二者都是对上述边界的参考实现，不会自动安装，也不把具体 UI 写进框架。
+Runtime，也不能实现第二套循环。框架提供显式安装的默认 `model` 命令、函数式进程内
+Entrypoint 和行式 CLI Entrypoint；它们都是对上述边界的参考实现，不会自动安装，也不把
+具体 UI 写进框架。
 
 ## 7. Session、AgentRuntime 与固定循环
 
@@ -310,7 +311,7 @@ stateDiagram-v2
 | 交互适配 Slot | InteractionCommand、Gateway transport/identity/route/delivery | Agent 项目 | 可以，但不能替换 Gateway 核心 |
 | 平台能力 Slot | Policy、Approval、Authorization、Memory、Checkpoint、Workspace、Environment、Artifact、Credential、Workflow、Mailbox | Agent 项目/Profile | 可以 |
 | 运维与商业 Slot | Event/Observer、Usage、Price、Quota、Billing、Audit、Trace、Metric、Health | Agent 项目/Profile | 可以 |
-| 默认实现 | 默认 Compactor、标准 Tool 包、内存 Store、Provider adapter | AgentSlot 或生态 | 可以替换或不安装 |
+| 默认实现 | 默认 Compactor、标准 Tool 包、内存/文件 Store、Provider/CLI/JSON Lines adapter | AgentSlot 或生态 | 可以替换或不安装 |
 | 产品配置 | Prompt、ToolKeys、默认模型、Provider 地址、凭据引用、限额 | Agent 产品 | 可以配置 |
 | Runtime 内部端口 | Clock、ID 生成器、锁、调度器、事件泵 | 固定层内部 | 仅测试注入，不是公共 Slot |
 

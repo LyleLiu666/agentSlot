@@ -297,23 +297,27 @@ implementation format.
 
 ## Current implementation frontier
 
-The published foundation now includes ten standard domain contracts and typed
-Slots for Session management/storage, model execution/catalogs, tools, context,
-hooks, and interaction boundaries. The `standardagent` package supplies the
+The published foundation now includes sixteen standard domain contracts and
+typed Slots for Session management/storage, model execution/catalogs, tools,
+context, hooks, interaction, tool policy/approval, and passive observation.
+The `standardagent` package supplies the
 fixed Gateway, private RuntimeAccess binding, per-Session AgentRuntime state
 machine, ToolDispatcher, Context assembly, controlled Hook execution, and
 idle-only model switching. Reference implementations currently include the
-in-memory Session aggregate, deterministic model executor, static model
-catalog, tail compactor, explicitly installed Bash tool, optional built-in
-`model` InteractionCommand, and function-style in-process Entrypoint. The fixed
-Gateway now provides live temporary/durable events, Snapshot/revision
-subscription, and non-stream aggregation. It still defers:
+in-memory and crash-safe file Session aggregates, deterministic and OpenAI Chat
+Compatible model executors, static model catalog, tail compactor, explicitly
+installed Bash/file/HTTP tools, the built-in `model` InteractionCommand,
+function-style in-process and line-oriented CLI Entrypoints, deterministic
+tool policy/approval, and a JSON Lines observation module. The fixed Gateway
+provides live temporary/durable events, Snapshot/revision subscription, and
+non-stream aggregation. The branch-free reference Agent under
+`examples/reference` verifies the CLI → Gateway → Runtime → real Provider →
+Bash → Provider → persistent Session chain. The remaining frontier includes:
 
-- real Provider and production SessionStore adapters;
-- policy, approval, broader official tools, and operational sinks;
-- configuration schemas, secret resolution, and out-of-process adapters;
-- reusable conformance suites, independent implementations, and Proven
-  component ecosystems.
+- configuration schemas and secret-resolution components;
+- out-of-process Web/RPC/ACP adapters, caller identity, and reliable delivery;
+- distributed Session execution leases and deployment coordination;
+- reusable conformance suites and Proven component ecosystems.
 
 These are implemented in the order and maturity process defined by the
 [Standard Component Map](../COMPONENT_MAP.md). Dependency order controls

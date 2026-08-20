@@ -201,7 +201,7 @@ type SnapshotRequest struct {
 }
 
 type SubscribeRequest struct {
-	SessionID     agent.SessionID
+	SessionID agent.SessionID
 	// AfterRevision must equal the current revision returned by Snapshot.
 	// A conflict means a commit occurred between Snapshot and Subscribe and
 	// the caller must repeat that handshake.

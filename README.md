@@ -1,5 +1,8 @@
 # AgentSlot
 
+AgentSlot requires Go 1.25 or newer. The official file tools use the
+root-confined atomic rename support introduced with `os.Root.Rename`.
+
 Typed component slots and deterministic composition for agent systems.
 
 > **Start with the AgentSlot Standard Component Map:**
@@ -23,7 +26,8 @@ Typed component slots and deterministic composition for agent systems.
 The standard AgentRuntime and its model/tool loop are framework behavior, not a
 replaceable Slot. The replaceable parts are narrower: one SessionManager, one
 SessionStore, one ModelExecutor, zero or more Tools, ordered Context and Hook
-components, one or more Entrypoints, and optional keyed InteractionCommands.
+components, one or more Entrypoints, optional keyed InteractionCommands,
+Policy/Approval, and passive observation chains.
 AgentSlot makes those cardinalities explicit and validates the assembled system
 before startup.
 
@@ -273,9 +277,10 @@ audio; model-facing tool inputs use self-contained JSON Schema Draft 2020-12.
 Caller and Hook input uses `agent.MessageInput`, which carries content only;
 the fixed Runtime allocates MessageID, Session/Run/Step containment, role, and
 timestamp atomically when it creates a durable `agent.Message` fact.
-Ten standard component contracts are now available in the
-`session`, `model`, `tool`, `context`, `hook`, and `interaction` packages. They
-are Contracted, but no domain ecosystem is yet Conformant or Proven.
+Sixteen standard component contracts are now available in the `session`,
+`model`, `tool`, `context`, `hook`, `interaction`, `policy`, and `observe`
+packages. They are Contracted, but no domain ecosystem is yet Conformant or
+Proven.
 
 The `standardagent` package implements the application-scoped Runtime registry,
 coordinator, fixed Gateway, GatewayAccess binding, Entrypoint wrapper, automatic
@@ -291,13 +296,19 @@ unbounded in-memory queue. Disconnecting a subscriber never cancels its Run.
 text messages rather than executing a second model path. Run start/terminal
 facts retain the frozen model configuration. The
 `model` package includes an explicitly installed deterministic
-`FakeModelExecutor` for development and contract tests. The fixed Runtime also
+`FakeModelExecutor` for development and contract tests, while
+[`model/openaicompat`](model/openaicompat) provides a real streaming Chat
+Completions-compatible Executor with physical Attempt IDs, bounded output,
+retry/reset handling, and Provider-reported token usage. The fixed Runtime also
 owns ToolDispatcher semantics: call/pending and result/terminal commits,
 Serial/ParallelSafe batches, safe structured failures, and mandatory model
 continuation. [`tool/bash`](tool/bash) is the first explicitly installed
 built-in Tool; it fixes working directory, explicit environment, timeout,
 process-group cancellation, and separate output limits. It is never installed
-by import or by `standardagent.NewApplication`. The Runtime now builds and
+by import or by `standardagent.NewApplication`. The official
+[`tool/files`](tool/files) package adds root-confined read/CAS-write/exact-edit
+tools, and [`tool/http`](tool/http) adds an allowlisted bounded HTTP client.
+The Runtime now builds and
 persists versioned Context projections, runs ordered ContextSource and Hook
 chains, enforces model protocol and hard token limits, projects unsupported
 attachments without rewriting History, and validates idle-only model switches
@@ -305,11 +316,39 @@ through ModelExecutor capabilities. `model.catalog` has a typed contract and
 an explicit StaticCatalog reference implementation. Applications can
 explicitly install `interaction.NewModelCommandModule`; slash, menu, and
 structured clients then invoke that one Gateway command backend. The
-`interaction/inprocess` package provides the first function-style Entrypoint
-and exposes only GatewayAccess. These reference implementations do not make the
-corresponding Slots Conformant or Proven, and no Web/RPC transport or reliable
-delivery ACK is implied. Importing any package still has no registration or
-startup side effect.
+`interaction/inprocess` package provides a function-style Entrypoint, and
+[`interaction/cli`](interaction/cli) provides a lifecycle-owned line protocol;
+both expose only GatewayAccess. `policy.guard` and `approval.service` now gate
+tool execution without gaining loop control. Trace, Metric, Audit, and Usage
+chains are passive, and [`observe/jsonlines`](observe/jsonlines) is an explicit
+default sink. [`session.FileStore`](session/file_store.go) is a crash-safe
+single-process persistent implementation. These implementations do not make
+their Slots Conformant or Proven, and no Web/RPC transport, distributed Session
+lease, or reliable-delivery ACK is implied. Importing any package still has no
+registration or startup side effect.
+
+## Reference agent
+
+[`examples/reference`](examples/reference) assembles the complete public path:
+file-backed Sessions, the OpenAI-compatible Executor, fixed Runtime/Gateway,
+CLI, model command, Policy/Approval, Bash, file and HTTP tools, and JSON Lines
+observations. It never obtains an AgentRuntime or branches on a concrete
+component type.
+
+```sh
+AGENTSLOT_API_KEY=... \
+AGENTSLOT_MODEL=... \
+go run ./examples/reference
+```
+
+`AGENTSLOT_PROVIDER_URL` defaults to `https://api.openai.com/v1`.
+`AGENTSLOT_WORKSPACE`, `AGENTSLOT_SESSION_DIR`, and the comma-separated
+`AGENTSLOT_HTTP_HOSTS` configure explicit local and network boundaries. Tool
+effects are denied unless `AGENTSLOT_APPROVE_EFFECTS=true`; `file_read` remains
+read-only and does not require that approval. In the CLI, ordinary lines are
+user messages, while `/help`, `/model`, `/cancel`, `/pending`, and `/quit` are
+explicit protocol entries. `/model` without arguments returns structured
+choices; a JSON object supplies a selection.
 
 ## Relationship to previous-generation SDKs
 

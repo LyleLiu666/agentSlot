@@ -9,6 +9,8 @@ import (
 	"github.com/LyleLiu666/agentSlot/hook"
 	"github.com/LyleLiu666/agentSlot/interaction"
 	"github.com/LyleLiu666/agentSlot/model"
+	"github.com/LyleLiu666/agentSlot/observe"
+	"github.com/LyleLiu666/agentSlot/policy"
 	"github.com/LyleLiu666/agentSlot/session"
 	"github.com/LyleLiu666/agentSlot/tool"
 )
@@ -54,6 +56,12 @@ func (m *runtimeModule) RequiredSlots() []agentslot.Requirement {
 		agentslot.OptionalChain(agentcontext.SourceSlot),
 		agentslot.OptionalOne(agentcontext.CompactorSlot),
 		agentslot.OptionalChain(hook.HookSlot),
+		agentslot.OptionalChain(policy.GuardSlot),
+		agentslot.OptionalOne(policy.ApprovalSlot),
+		agentslot.OptionalChain(observe.TraceSlot),
+		agentslot.OptionalChain(observe.MetricSlot),
+		agentslot.OptionalChain(observe.AuditSlot),
+		agentslot.OptionalChain(observe.UsageSlot),
 		agentslot.OptionalMany(interaction.CommandSlot),
 	}
 }
@@ -97,7 +105,15 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 			if err != nil {
 				return nil, err
 			}
-			dispatcher, err := newToolDispatcher(selectedTools)
+			guards, err := agentslot.ResolveChain(resolver, policy.GuardSlot)
+			if err != nil {
+				return nil, err
+			}
+			approval, _, err := agentslot.ResolveOptionalOne(resolver, policy.ApprovalSlot)
+			if err != nil {
+				return nil, err
+			}
+			dispatcher, err := newToolDispatcher(selectedTools, guards, approval)
 			if err != nil {
 				return nil, err
 			}
@@ -117,11 +133,28 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 			if err != nil {
 				return nil, err
 			}
+			traces, err := agentslot.ResolveChain(resolver, observe.TraceSlot)
+			if err != nil {
+				return nil, err
+			}
+			metrics, err := agentslot.ResolveChain(resolver, observe.MetricSlot)
+			if err != nil {
+				return nil, err
+			}
+			audits, err := agentslot.ResolveChain(resolver, observe.AuditSlot)
+			if err != nil {
+				return nil, err
+			}
+			usages, err := agentslot.ResolveChain(resolver, observe.UsageSlot)
+			if err != nil {
+				return nil, err
+			}
 			state := newApplicationRuntime(runtimeDependencies{
 				manager: manager, store: store, executor: executor,
 				commands: commands, commandDescriptors: commandDescriptors,
 				tools: selectedTools, dispatcher: dispatcher, catalogs: catalogs, config: cloneAgentRuntimeConfig(m.config), sources: sources,
 				compactor: compactor, hooks: hooks,
+				traces: traces, metrics: metrics, audits: audits, usages: usages,
 			})
 			m.state = state
 			return state, nil
@@ -161,34 +194,41 @@ type runtimeDependencies struct {
 	sources            []agentcontext.ContextSource
 	compactor          agentcontext.ContextCompactor
 	hooks              []hook.AgentHook
+	traces             []observe.TraceSink
+	metrics            []observe.MetricSink
+	audits             []observe.AuditSink
+	usages             []observe.UsageRecorder
 }
 
 // runtimeComponents is one immutable application-level dependency set shared
 // by every Session Runtime. Runtime instances retain component references;
 // they do not copy tools, stores, executors, or clients per Session.
 type runtimeComponents struct {
-	store      session.SessionStore
-	executor   model.ModelExecutor
-	tools      []agentslot.Named[tool.Tool]
-	sources    []agentcontext.ContextSource
-	compactor  agentcontext.ContextCompactor
-	hooks      []hook.AgentHook
-	dispatcher *toolDispatcher
-	catalogs   []agentslot.Named[model.ModelCatalog]
-	config     AgentRuntimeConfig
+	store        session.SessionStore
+	executor     model.ModelExecutor
+	tools        []agentslot.Named[tool.Tool]
+	sources      []agentcontext.ContextSource
+	compactor    agentcontext.ContextCompactor
+	hooks        []hook.AgentHook
+	dispatcher   *toolDispatcher
+	catalogs     []agentslot.Named[model.ModelCatalog]
+	config       AgentRuntimeConfig
+	observations *observationHub
 }
 
-func (d runtimeDependencies) runtimeComponents() *runtimeComponents {
+func (d runtimeDependencies) runtimeComponents(observations *observationHub) *runtimeComponents {
+	dispatcher := d.dispatcher.withObservations(observations)
 	return &runtimeComponents{
-		store:      d.store,
-		executor:   d.executor,
-		tools:      append([]agentslot.Named[tool.Tool](nil), d.tools...),
-		sources:    append([]agentcontext.ContextSource(nil), d.sources...),
-		compactor:  d.compactor,
-		hooks:      append([]hook.AgentHook(nil), d.hooks...),
-		dispatcher: d.dispatcher,
-		catalogs:   append([]agentslot.Named[model.ModelCatalog](nil), d.catalogs...),
-		config:     cloneAgentRuntimeConfig(d.config),
+		store:        d.store,
+		executor:     d.executor,
+		tools:        append([]agentslot.Named[tool.Tool](nil), d.tools...),
+		sources:      append([]agentcontext.ContextSource(nil), d.sources...),
+		compactor:    d.compactor,
+		hooks:        append([]hook.AgentHook(nil), d.hooks...),
+		dispatcher:   dispatcher,
+		catalogs:     append([]agentslot.Named[model.ModelCatalog](nil), d.catalogs...),
+		config:       cloneAgentRuntimeConfig(d.config),
+		observations: observations,
 	}
 }
 

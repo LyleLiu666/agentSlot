@@ -247,15 +247,18 @@ AgentSlot 禁止反射扫描、`init()` 自动注册和隐藏的全局组件容�
 
 ### 当前开发进度
 
-通用 Assembly、标准 Slot 合同、固定 Gateway/Runtime 主骨架、Session 内存参考实现、
-固定执行状态机、ToolDispatcher/Bash、Context/Hook/模型配置交互，以及第一批 Gateway
-命令与呈现批次已经完成。
+通用 Assembly、标准 Slot 合同、固定 Gateway/Runtime 主骨架、Session 内存与文件实现、
+固定执行状态机、ToolDispatcher/Bash/文件/HTTP、Context/Hook/模型配置交互、Gateway
+命令与呈现，以及第一批真实生态适配已经完成。
 当前 Runtime 会安装版本化 Context、执行可替换 Source/Compactor、校验模型协议和硬
 Token 上限，并通过 Gateway 在 idle 状态完成带兼容性确认的模型切换。`ModelCatalog`
-是第 10 个进入 Contracted 的生态位。框架现已提供显式安装的 `model` 命令、函数式
-进程内 Entrypoint、Gateway live event、非流式同 Run 聚合和 Snapshot/revision 重连。
-所有这些仍是开发与合同证据：尚无生态位达到 Conformant 或 Proven；下一批是真实
-Provider、持久 Store、传输适配器和观察/策略生态，不把完整生产部署条件作为开发门禁。
+曾是第 10 个进入 Contracted 的生态位；PolicyGuard、ApprovalService、TraceSink、
+MetricSink、AuditSink 和 UsageRecorder 使当前总数达到 16。框架现已提供显式安装的
+`model` 命令、函数式进程内 Entrypoint、行式 CLI、Gateway live event、非流式同 Run
+聚合、Snapshot/revision 重连、OpenAI Chat Compatible Executor、FileSessionStore、
+JSON Lines 观察模块和无具体 Runtime 分支的参考 Agent。所有这些仍是开发与合同证据：
+尚无生态位达到 Conformant 或 Proven；下一步是共享 conformance suite、更多独立适配器
+与跨进程 Gateway 能力，不把完整生产部署条件错误设成开发门禁。
 
 ## 9. 参考实现分三层
 

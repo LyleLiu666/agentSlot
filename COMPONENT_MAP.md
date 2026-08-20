@@ -25,17 +25,17 @@ Current repository reality:
 | Inventory | Count |
 | --- | ---: |
 | Mapped standard component ecosystems | 42 |
-| Standardized domain vocabularies | 2 |
-| Contracted AgentSlot-owned domain interfaces | 10 |
+| Standardized domain vocabularies | 4 |
+| Contracted AgentSlot-owned domain interfaces | 16 |
 | Conformant component ecosystems | 0 |
 | Proven component ecosystems | 0 |
 | Assembled standard component ecosystems | 0 |
 
 The generic composition protocol exports five Go interfaces: `Module`,
-`SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. Ten
-domain contracts are now defined in the `session`, `model`, `tool`, `context`,
-`hook`, and `interaction` packages; they are Contracted but not yet Conformant
-or Proven.
+`SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. Sixteen domain
+contracts are now defined in the `session`, `model`, `tool`, `context`, `hook`,
+`interaction`, `policy`, and `observe` packages; they are Contracted but not
+yet Conformant or Proven.
 
 ## Runnable standard profile
 
@@ -134,13 +134,14 @@ method-level contract is an engineering result.
 | **Proven** | At least two semantically independent implementations pass the conformance suite. Wrappers over the same implementation count once. |
 | **Assembled** | A reference application exchanges proven implementations through the Slot without concrete-type branches. |
 
-Ten foundational domain rows are now **Contracted**: each has a public domain
-interface, typed Slot, and contract tests. `session.manager` and `session.store`
-also have one reference in-memory implementation with focused behavior tests,
-and `model.executor` has one deterministic Fake implementation consumed by the
-fixed Runtime. The `tool` contract has one built-in Bash implementation consumed
-through the fixed dispatcher. None has a reusable conformance suite or an
-independent second implementation; they therefore remain Contracted rather than
+Sixteen foundational domain rows are now **Contracted**: each has a public
+domain interface, typed Slot, and contract tests. The repository now contains
+independent memory and crash-safe file Session stores, deterministic Fake and
+OpenAI Chat Compatible executors, Bash/file/HTTP tools, in-process and CLI
+Entrypoints, deterministic tool policy/approval components, and a JSON Lines
+observation module. The fixed Runtime consumes these components without
+concrete-type branches. No ecosystem yet has the reusable conformance suite
+required by the next maturity level, so all remain Contracted rather than
 Conformant or Proven. Every other domain row remains **Mapped**.
 
 The score is measured by proven component ecosystems, not by the number of
@@ -268,9 +269,17 @@ invariant.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `policy.guard` | `PolicyGuard` | `Chain` | optional | Evaluates proposed model, tool, data, or execution actions in deterministic order. | Mapped |
-| `approval.service` | `ApprovalService` | `One` | optional; risk profiles may require it | Requests and resolves human approval independently of a particular TUI or gateway. | Mapped |
+| `policy.guard` | `PolicyGuard` | `Chain` | optional | Evaluates a detached proposed tool action in deterministic order without gaining execution authority. | Contracted |
+| `approval.service` | `ApprovalService` | `One` | optional; risk profiles may require it | Resolves an approval request after policy requires confirmation, independently of a particular UI. | Contracted |
 | `authorization.provider` | `AuthorizationProvider` | `One` | optional | Decides whether an authenticated principal may perform an agent operation. | Mapped |
+
+The initial portable policy vocabulary is intentionally narrow: one detached
+tool-action proposal and exactly three effects—`allow`, `deny`, and
+`require_approval`. Guards cannot replace arguments or execute an action. The
+fixed dispatcher evaluates every Guard, resolves approval when required, and
+remains the sole owner of the original invocation. New policy action kinds
+require separate evidence rather than widening this contract with an opaque
+map.
 
 ### 7. Multi-agent and workflow
 
@@ -304,9 +313,10 @@ may render the stable key `model` as `/model`, a menu, a button, or a form, but
 does not execute a separate command implementation. InteractionCommand cannot
 access SessionStore, Runtime access, or the model/tool loop directly.
 The framework currently provides an explicitly installed built-in `model`
-command and a function-style `interaction/inprocess` Entrypoint as reference
-implementations. Importing either package installs nothing, and one reference
-implementation does not advance either ecosystem beyond Contracted maturity.
+command, a function-style `interaction/inprocess` Entrypoint, and a line-oriented
+`interaction/cli` Entrypoint as reference implementations. Importing any package
+installs nothing; the absence of a shared conformance suite keeps these
+ecosystems at Contracted maturity.
 
 AgentSlot standardizes neither transient-chunk cursors nor client ACK cursors.
 Reconnect uses a client revision and Session Snapshot, followed by a live
@@ -321,7 +331,7 @@ state is not a standard Slot or Session fact and cannot change run completion.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `usage.recorder` | `UsageRecorder` | `Chain` | optional | Records normalized model, tool, storage, or execution usage events. | Mapped |
+| `usage.recorder` | `UsageRecorder` | `Chain` | optional | Receives Provider-reported token usage for one identified physical model attempt. | Contracted |
 | `price.resolver` | `PriceResolver` | `One` | optional | Resolves versioned prices for normalized usage. | Mapped |
 | `quota.guard` | `QuotaGuard` | `One` | optional | Accepts or rejects work against declared budgets and quotas. | Mapped |
 | `billing.ledger` | `BillingLedger` | `One` | optional | Persists auditable charges, credits, and reservation outcomes. | Mapped |
@@ -330,10 +340,20 @@ state is not a standard Slot or Session fact and cannot change run completion.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `audit.sink` | `AuditSink` | `Chain` | optional | Receives security- and governance-relevant records. | Mapped |
-| `trace.sink` | `TraceSink` | `Chain` | optional | Receives correlated runtime spans and events. | Mapped |
-| `metric.sink` | `MetricSink` | `Chain` | optional | Receives normalized counters, gauges, and distributions. | Mapped |
+| `audit.sink` | `AuditSink` | `Chain` | optional | Receives model-config and tool-policy decision facts without message content or tool arguments. | Contracted |
+| `trace.sink` | `TraceSink` | `Chain` | optional | Receives correlated Runtime, Run, model-attempt, and tool lifecycle facts. | Contracted |
+| `metric.sink` | `MetricSink` | `Chain` | optional | Receives normalized counters and duration measurements with detached attributes. | Contracted |
 | `health.contributor` | `HealthContributor` | `Chain` | optional | Reports component readiness and health without exposing configuration values. | Mapped |
+
+The `observe` package fixes the fourth finite vocabulary family: correlated
+Runtime/Run/model-attempt/tool trace facts, counter or duration metrics,
+model-config/tool-decision audits, and Provider-reported model token usage.
+These chains are passive and best-effort. They receive no message content,
+tool arguments, credentials, component values, or mutation capability; they
+are not a second Session ledger. A product that must reject an action uses
+Policy/Approval before execution instead of treating sink availability as an
+authorization decision. `observe/jsonlines` is an explicitly installed,
+thread-safe reference implementation.
 
 ## Standard contract admission
 

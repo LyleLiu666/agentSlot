@@ -23,15 +23,15 @@
 | 资产 | 数量 |
 | --- | ---: |
 | 已映射的标准组件生态位 | 42 |
-| 已标准化的领域词汇 | 2 |
-| 已定义契约的 AgentSlot 自有领域接口 | 10 |
+| 已标准化的领域词汇 | 4 |
+| 已定义契约的 AgentSlot 自有领域接口 | 16 |
 | 通过一致性验证的组件生态位 | 0 |
 | 已由独立实现证明的组件生态位 | 0 |
 | 已进入标准装配的组件生态位 | 0 |
 
 独立的组装协议目前导出了五个 Go 接口：`Module`、`SlotRequirer`、
 `Registrar`、`Contribution` 和 `Lifecycle`。它们是框架机制，不能代替
-地图中 42 个 Agent 领域组件生态位；其中 10 个已经具备公开合同。
+地图中 42 个 Agent 领域组件生态位；其中 16 个已经具备公开合同。
 
 ## 可运行标准 Profile
 
@@ -117,12 +117,13 @@ flowchart LR
 | **已证明（Proven）** | 至少两个语义上独立的实现通过一致性测试；同一实现的不同包装只能算一个。 |
 | **已装配（Assembled）** | 参考应用能够通过 Slot 替换已证明的实现，不包含具体类型分支。 |
 
-当前已有 10 个基础领域生态位进入**已定义契约（Contracted）**：它们拥有公开
-领域接口、typed Slot 和合同测试。`session.manager` 与 `session.store` 已有一个
-内存参考实现及行为测试，`model.executor` 已有一个被固定 Runtime 实际消费的确定性
-Fake 实现，`tool` 已有一个经固定 Dispatcher 消费的内置 Bash 实现；但它们都还没有
-可复用的一致性测试套件或第二个独立实现，因此仍不能标为
-**已通过一致性验证**或**已证明**。其他生态位仍处于**已映射（Mapped）**阶段。
+当前已有 16 个基础领域生态位进入**已定义契约（Contracted）**：它们拥有公开
+领域接口、typed Slot 和合同测试。仓库已经包含相互独立的内存/崩溃安全文件
+SessionStore、确定性 Fake/OpenAI Chat Compatible Executor、Bash/文件/HTTP 工具、
+进程内/CLI Entrypoint、确定性的工具策略与审批组件，以及 JSON Lines 观察模块；固定
+Runtime 不按具体类型分支即可消费它们。由于尚未建立可复用的一致性测试套件，所有
+这些生态位仍保持 Contracted，不能标为**已通过一致性验证**或**已证明**。其他生态位
+仍处于**已映射（Mapped）**阶段。
 
 成绩以已经证明的组件生态位计算，不按 Module、包或接口方法的数量计算。
 一个 Module 可以向多个 Slot 提供组件，多个 Module 也可以共同向一个
@@ -238,9 +239,14 @@ Context，绝不能改写 History。
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `policy.guard` | `PolicyGuard` | `Chain` | 可选 | 以确定顺序评估模型、工具、数据或执行操作。 | 已映射 |
-| `approval.service` | `ApprovalService` | `One` | 可选；高风险 Profile 可要求 | 请求并处理人工审批，不依赖某个具体 TUI 或 Gateway。 | 已映射 |
+| `policy.guard` | `PolicyGuard` | `Chain` | 可选 | 按确定顺序评估隔离副本形式的拟议工具动作，但不取得工具执行权。 | 已定义契约 |
+| `approval.service` | `ApprovalService` | `One` | 可选；高风险 Profile 可要求 | 在策略要求确认后解析审批请求，不依赖某个具体 UI。 | 已定义契约 |
 | `authorization.provider` | `AuthorizationProvider` | `One` | 可选 | 判断已认证主体是否有权执行某项 Agent 操作。 | 已映射 |
+
+首批可移植策略词汇刻意保持精炼：一种隔离副本形式的工具动作，以及严格三个效果——
+`allow`、`deny`、`require_approval`。Guard 不能替换参数或执行动作；固定 Dispatcher
+按序评估全部 Guard，在需要时解析审批，并始终独占原始调用的执行权。增加新的策略动作
+类型必须另行积累证据，不能用无约束 map 偷偷扩大合同。
 
 ### 7. 多 Agent 与工作流
 
@@ -270,9 +276,9 @@ Context，绝不能改写 History。
 调用合同。Entrypoint 可以把 `model` 渲染为 `/model`、菜单、按钮或表单，但不能执行
 另一套命令实现。InteractionCommand 不能直接访问 SessionStore、RuntimeAccess 或
 模型/工具循环。
-框架当前提供显式安装的内置 `model` 命令和函数式 `interaction/inprocess` Entrypoint
-作为参考实现；import 不会自动安装组件，单个参考实现也不足以让任一生态位超过
-“已定义契约”成熟度。
+框架当前提供显式安装的内置 `model` 命令、函数式 `interaction/inprocess` Entrypoint
+和行式 `interaction/cli` Entrypoint；import 不会自动安装组件，尚无共享一致性测试
+套件，因此这些生态位保持“已定义契约”成熟度。
 
 AgentSlot 不标准化临时 chunk 游标或客户端 ACK 游标。重连使用客户端 revision
 与 Session Snapshot，并从该 Snapshot 的当前 revision 建立实时订阅。断线不会取消
@@ -284,7 +290,7 @@ Run；超过有界进程内事件缓存的慢订阅者会被明确关闭并通�
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `usage.recorder` | `UsageRecorder` | `Chain` | 可选 | 记录标准化的模型、工具、存储或执行用量事件。 | 已映射 |
+| `usage.recorder` | `UsageRecorder` | `Chain` | 可选 | 接收由 Provider 报告、属于某次具名物理模型 Attempt 的 Token 用量。 | 已定义契约 |
 | `price.resolver` | `PriceResolver` | `One` | 可选 | 为标准化用量解析带版本的价格。 | 已映射 |
 | `quota.guard` | `QuotaGuard` | `One` | 可选 | 根据明确的预算和配额接受或拒绝工作。 | 已映射 |
 | `billing.ledger` | `BillingLedger` | `One` | 可选 | 持久化可审计的费用、抵扣和额度预留结果。 | 已映射 |
@@ -293,10 +299,17 @@ Run；超过有界进程内事件缓存的慢订阅者会被明确关闭并通�
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `audit.sink` | `AuditSink` | `Chain` | 可选 | 接收安全和治理相关记录。 | 已映射 |
-| `trace.sink` | `TraceSink` | `Chain` | 可选 | 接收相互关联的运行时 Span 和事件。 | 已映射 |
-| `metric.sink` | `MetricSink` | `Chain` | 可选 | 接收标准化的计数器、仪表和分布指标。 | 已映射 |
+| `audit.sink` | `AuditSink` | `Chain` | 可选 | 接收模型配置变更和工具策略决策事实，不包含消息内容或工具参数。 | 已定义契约 |
+| `trace.sink` | `TraceSink` | `Chain` | 可选 | 接收相互关联的 Runtime、Run、模型 Attempt 和工具生命周期事实。 | 已定义契约 |
+| `metric.sink` | `MetricSink` | `Chain` | 可选 | 接收带隔离属性副本的标准化计数与耗时度量。 | 已定义契约 |
 | `health.contributor` | `HealthContributor` | `Chain` | 可选 | 报告组件就绪状态与健康状况，但不暴露配置值。 | 已映射 |
+
+`observe` 包固定第四组有限词汇：相互关联的 Runtime/Run/模型 Attempt/工具 Trace 事实、
+计数或耗时 Metric、模型配置/工具决策 Audit，以及由 Provider 报告的模型 Token Usage。
+这些 Chain 是被动、尽力投递的观察面，不接收消息内容、工具参数、凭据、组件值或修改
+能力，也不是第二份 Session 账本。必须拒绝动作的产品应在执行前使用 Policy/Approval，
+不能把观察 Sink 是否可用当成授权结论。`observe/jsonlines` 是显式安装、线程安全的参考
+实现。
 
 ## 标准契约准入规则
 

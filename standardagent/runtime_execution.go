@@ -11,6 +11,7 @@ import (
 	"github.com/LyleLiu666/agentSlot/hook"
 	"github.com/LyleLiu666/agentSlot/interaction"
 	"github.com/LyleLiu666/agentSlot/model"
+	"github.com/LyleLiu666/agentSlot/observe"
 	"github.com/LyleLiu666/agentSlot/session"
 	"github.com/LyleLiu666/agentSlot/tool"
 )
@@ -90,6 +91,7 @@ func (r *runtimeInstance) executeStep(run *activeRun, step agent.StepID) (stepOu
 		return stepFailed, ""
 	}
 	defer stream.Close()
+	seenAttempts := make(map[string]bool)
 	for {
 		event, err := stream.Recv(run.ctx)
 		if err != nil {
@@ -101,14 +103,32 @@ func (r *runtimeInstance) executeStep(run *activeRun, step agent.StepID) (stepOu
 		if err := event.Validate(); err != nil {
 			return stepFailed, ""
 		}
+		if event.AttemptID != "" && !seenAttempts[event.AttemptID] {
+			seenAttempts[event.AttemptID] = true
+			r.observeModelAttempt(observe.TraceModelAttemptStarted, run, step, event.AttemptID)
+			r.components.observations.publishMetric(observe.MetricRecord{
+				Name: observe.MetricModelAttemptTotal, Kind: observe.MetricCounter, Value: 1, At: time.Now().UTC(),
+				Attributes: map[string]string{"provider": run.config.ProviderKey, "model": run.config.ModelID},
+			})
+		}
 		switch event.Kind {
 		case model.EventDelta:
 			r.events.publish(interaction.Event{Kind: interaction.EventChunk, SessionID: r.id(), RunID: run.id, StepID: step, AttemptID: event.AttemptID, Text: event.Text})
 		case model.EventReset:
+			r.observeModelAttempt(observe.TraceModelAttemptReset, run, step, event.AttemptID)
 			r.events.publish(interaction.Event{Kind: interaction.EventReset, SessionID: r.id(), RunID: run.id, StepID: step, AttemptID: event.AttemptID})
+		case model.EventUsage:
+			r.components.observations.publishUsage(observe.UsageRecord{
+				Kind: observe.UsageModel, At: time.Now().UTC(),
+				Identity:    observe.Identity{SessionID: r.id(), RunID: run.id, StepID: step},
+				ProviderKey: run.config.ProviderKey, ModelID: run.config.ModelID, AttemptID: event.AttemptID,
+				InputTokens: event.Usage.InputTokens, OutputTokens: event.Usage.OutputTokens, TotalTokens: event.Usage.TotalTokens,
+			})
 		case model.EventFailed:
+			r.observeModelAttempt(observe.TraceModelAttemptFailed, run, step, event.AttemptID)
 			return stepFailed, ""
 		case model.EventComplete:
+			r.observeModelAttempt(observe.TraceModelAttemptDone, run, step, event.AttemptID)
 			calls, canceled, err := r.commitCompletion(run, step, *event.Output)
 			if canceled {
 				return stepCanceled, ""
@@ -140,6 +160,13 @@ func (r *runtimeInstance) executeStep(run *activeRun, step agent.StepID) (stepOu
 			return stepNatural, ""
 		}
 	}
+}
+
+func (r *runtimeInstance) observeModelAttempt(kind observe.TraceKind, run *activeRun, step agent.StepID, attemptID string) {
+	r.components.observations.publishTrace(observe.TraceRecord{
+		Kind: kind, At: time.Now().UTC(), AttemptID: attemptID,
+		Identity: observe.Identity{SessionID: r.id(), RunID: run.id, StepID: step},
+	})
 }
 
 func (r *runtimeInstance) commitCompletion(run *activeRun, step agent.StepID, output model.Completion) ([]agent.ToolCall, bool, error) {
@@ -361,6 +388,9 @@ func (r *runtimeInstance) recoverAfterRunFailureLocked(run *activeRun) {
 		r.closing = true
 		r.observer.stop()
 		r.events.close()
+		r.components.observations.publishTrace(observe.TraceRecord{
+			Kind: observe.TraceRuntimeClosed, At: time.Now().UTC(), Identity: observe.Identity{SessionID: r.id()},
+		})
 		close(r.closeDone)
 		return
 	}
@@ -431,7 +461,41 @@ func (r *runtimeInstance) commitLocked(ctx context.Context, expected agent.Revis
 	r.revisionValue.Store(uint64(commit.Revision))
 	r.observer.publish(hook.CommitView{SessionID: r.id(), RunID: runIDForCommit(changes), Revision: commit.Revision})
 	r.publishCommitEvents(commit.Revision, changes)
+	r.publishCommitObservations(changes)
 	return commit, nil
+}
+
+func (r *runtimeInstance) publishCommitObservations(changes []session.Change) {
+	now := time.Now().UTC()
+	for _, change := range changes {
+		if change.RunFact != nil {
+			kind := observe.TraceRunStarted
+			outcome := "started"
+			switch change.RunFact.Kind {
+			case session.RunCompleted:
+				kind, outcome = observe.TraceRunCompleted, "completed"
+			case session.RunCanceled:
+				kind, outcome = observe.TraceRunCanceled, "canceled"
+			case session.RunFailed, session.RunInterrupted:
+				kind, outcome = observe.TraceRunFailed, string(change.RunFact.Kind)
+			}
+			identity := observe.Identity{SessionID: r.id(), RunID: change.RunFact.RunID}
+			r.components.observations.publishTrace(observe.TraceRecord{Kind: kind, At: now, Identity: identity})
+			if change.RunFact.Kind != session.RunStarted {
+				r.components.observations.publishMetric(observe.MetricRecord{
+					Name: observe.MetricRunTotal, Kind: observe.MetricCounter, Value: 1, At: now,
+					Attributes: map[string]string{"outcome": outcome},
+				})
+			}
+		}
+		if change.SessionEvent != nil && change.SessionEvent.Kind == session.EventModelConfigChanged {
+			current := change.SessionEvent.ModelConfigChanged.Current
+			r.components.observations.publishAudit(observe.AuditRecord{
+				Kind: observe.AuditModelConfigChanged, At: now, Identity: observe.Identity{SessionID: r.id()},
+				Action: current.ProviderKey + "/" + current.ModelID, Decision: "committed",
+			})
+		}
+	}
 }
 
 func (r *runtimeInstance) publishCommitEvents(revision agent.Revision, changes []session.Change) {

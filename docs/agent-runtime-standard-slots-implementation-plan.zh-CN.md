@@ -787,17 +787,28 @@ sequenceDiagram
 - `interaction.entrypoint` 与 `interaction.command` 仍保持 Contracted；一个进程内实现和
   一个默认命令不足以晋级 Conformant 或 Proven。
 
-### 阶段 9：真实 Provider、持久化与生态适配
+### 阶段 9：真实 Provider、持久化与生态适配（已完成基础实现）
 
-- 接入至少一个真实 Provider、一个真实 SessionStore 和一个 CLI/TUI 或 Web 传输适配器，
-  并让参考 Agent 只依赖标准 Slot 与 GatewayAccess，不按具体 Runtime 类型分支。
-- 接入 Policy/Approval、文件与 HTTP 等官方可选工具，以及 Trace、Metric、Audit、Usage
-  等观察组件；组件均保持显式安装和可替换。
-- 验证真实 Provider 的物理 Attempt、retry/continuation、用量事件与错误映射；验证
-  MemoryStore/FakeExecutor 路径和真实组件路径遵守同一核心不变量。
-- 完成 Bash、Session、Gateway、Runtime、Provider 的真实全链路。跨进程 wire protocol、
-  生产 ACK、企业部署和所有生态位 Proven 不作为本轮开发启动门禁，但实现到的适配器必须
-  有自己的合同、故障和并发测试。
+- 已实现单进程、崩溃安全的 FileSessionStore；完整 Session 聚合采用私有文件、临时
+  文件 fsync、原子 rename 和 revision/CAS，重启后可以恢复同一个 Session。
+- 已实现 OpenAI Chat Compatible 流式 ModelExecutor：一次逻辑调用可以包含多个物理
+  Attempt，支持有界 SSE、retry/reset、工具调用片段聚合、安全错误映射和 Provider
+  报告的 Token Usage。它没有把某个 Provider 的 wire 类型泄漏给 Runtime。
+- 已将 `policy.guard` 与 `approval.service` 接入固定 ToolDispatcher。Guard 只收到调用
+  副本并返回 allow/deny/require-approval；策略、审批或插件 panic 均 fail closed，只有
+  Dispatcher 可以执行原始 ToolInvocation。
+- 已提供显式安装的根目录约束文件工具（读、SHA-256 CAS 写、精确编辑）和允许列表
+  HTTP 工具；二者都覆盖越界、并发、大小、超时和结构化失败测试。
+- 已定义并接入 Trace、Metric、Audit、Usage 四条被动 Chain Slot，并提供线程安全的
+  JSON Lines 模块。观察实现不在 Runtime 锁内运行，其错误或 panic 不控制 Runtime。
+- 已实现生命周期归属的行式 CLI Entrypoint。普通文本走 SendAndWait；明确 `/slash`
+  走固定 Gateway 命令或控制面，不用关键词匹配猜测自然语言意图。
+- `examples/reference` 只装配公共模块并调用 Gateway/CLI，不取得具体 Runtime 类型。
+  真实全链路测试覆盖 CLI、Gateway、Runtime、OpenAI-compatible Provider、Bash 工具
+  回传、assistant 完整消息、FileSessionStore 持久化和进程重启 Resume。
+- 以上生态位仍保持 Contracted：独立实现数量增加不等于已经拥有共享 conformance
+  suite。跨进程 wire protocol、可靠投递、调用者身份、分布式 Session 租约和企业部署
+  继续作为后续能力，而不是本轮开发门禁。
 
 阶段 2 起所有可运行测试都必须经过固定 Gateway；后续阶段只是逐步把 Session、Runtime、
 模型、工具、Context 和真实适配器接入这条已经固定的边界。任何测试入口不得绕过 Gateway
