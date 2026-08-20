@@ -561,6 +561,9 @@ func (fakeStore) Recover(context.Context, session.SessionRef) (session.Snapshot,
 func (fakeStore) Commit(context.Context, session.CommitRequest) (session.Commit, error) {
 	return session.Commit{}, nil
 }
+func (fakeStore) HistoryPage(context.Context, session.HistoryPageRequest) (session.HistoryPage, error) {
+	return session.HistoryPage{}, nil
+}
 
 type fakeExecutor struct{}
 

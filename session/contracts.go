@@ -7,6 +7,7 @@ package session
 import (
 	"context"
 	"fmt"
+	"time"
 
 	agentslot "github.com/LyleLiu666/agentSlot"
 	agent "github.com/LyleLiu666/agentSlot/agent"
@@ -114,31 +115,70 @@ func (e SessionEvent) Validate() error {
 	return nil
 }
 
-// HistoryFact is one ordered, append-only fact in a Session's canonical
-// ledger. Exactly one payload is present. Context is responsible for
-// projecting these facts into a provider-valid message sequence.
+// HistorySequence is the immutable order of a fact inside one Session.
+type HistorySequence uint64
+
+// ContextVersion identifies one durable logical model-request projection.
+type ContextVersion uint64
+
+// HistoryFactKind is the closed public vocabulary of complete Session
+// History. Context decides which facts form a legal model protocol sequence.
+type HistoryFactKind string
+
+const (
+	FactMessage             HistoryFactKind = "message"
+	FactToolCall            HistoryFactKind = "tool_call"
+	FactToolResult          HistoryFactKind = "tool_result"
+	FactRun                 HistoryFactKind = "run"
+	FactModelAttempt        HistoryFactKind = "model_attempt"
+	FactModelConfigChanged  HistoryFactKind = "model_config_changed"
+	FactContextContribution HistoryFactKind = "context_contribution"
+	FactRunBudgetExceeded   HistoryFactKind = "run_budget_exceeded"
+)
+
+// HistoryFact is one ordered, append-only fact in a complete Session History.
+// Store assigns its envelope; callers supply exactly one typed payload.
 type HistoryFact struct {
-	Message    *agent.Message
-	ToolCall   *agent.ToolCall
-	ToolResult *tool.ToolResult
-	Run        *RunFact
+	FactID    agent.FactID
+	Sequence  HistorySequence
+	SessionID agent.SessionID
+	RunID     agent.RunID
+	StepID    agent.StepID
+	At        time.Time
+	Actor     agent.ActorIdentity
+	Kind      HistoryFactKind
+
+	Message             *agent.Message
+	ToolCall            *agent.ToolCall
+	ToolResult          *tool.ToolResult
+	Run                 *RunFact
+	ModelAttempt        *ModelAttemptFact
+	ModelConfigChanged  *ModelConfigChange
+	ContextContribution *ContextContributionFact
+	RunBudgetExceeded   *RunBudgetExceededFact
 }
 
 // Validate checks the payload and its Session containment. Tool results do
 // not carry a SessionID themselves; the store pairs them with their call.
 func (f HistoryFact) Validate(sessionID agent.SessionID) error {
+	if f.FactID.Valid() || f.Sequence != 0 || f.SessionID.Valid() || !f.At.IsZero() || f.Actor.Valid() || f.Kind != "" || f.RunID.Valid() || f.StepID.Valid() {
+		if !f.FactID.Valid() || f.Sequence == 0 || f.SessionID != sessionID || f.At.IsZero() || !f.Actor.Valid() || f.Kind != f.payloadKind() {
+			return fmt.Errorf("session: history fact envelope is invalid")
+		}
+	}
+	return f.validatePayload(sessionID)
+}
+
+func (f HistoryFact) validatePayload(sessionID agent.SessionID) error {
 	count := 0
-	if f.Message != nil {
-		count++
-	}
-	if f.ToolCall != nil {
-		count++
-	}
-	if f.ToolResult != nil {
-		count++
-	}
-	if f.Run != nil {
-		count++
+	for _, present := range []bool{
+		f.Message != nil, f.ToolCall != nil, f.ToolResult != nil, f.Run != nil,
+		f.ModelAttempt != nil, f.ModelConfigChanged != nil,
+		f.ContextContribution != nil, f.RunBudgetExceeded != nil,
+	} {
+		if present {
+			count++
+		}
 	}
 	if count != 1 {
 		return fmt.Errorf("session: history fact requires exactly one payload")
@@ -160,6 +200,119 @@ func (f HistoryFact) Validate(sessionID agent.SessionID) error {
 		if err := f.Run.Validate(sessionID); err != nil {
 			return err
 		}
+	case f.ModelAttempt != nil:
+		if err := f.ModelAttempt.Validate(); err != nil {
+			return err
+		}
+	case f.ModelConfigChanged != nil:
+		if err := (SessionEvent{Kind: EventModelConfigChanged, ModelConfigChanged: f.ModelConfigChanged}).Validate(); err != nil {
+			return err
+		}
+	case f.ContextContribution != nil:
+		if err := f.ContextContribution.Validate(sessionID); err != nil {
+			return err
+		}
+	case f.RunBudgetExceeded != nil:
+		if err := f.RunBudgetExceeded.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (f HistoryFact) payloadKind() HistoryFactKind {
+	switch {
+	case f.Message != nil:
+		return FactMessage
+	case f.ToolCall != nil:
+		return FactToolCall
+	case f.ToolResult != nil:
+		return FactToolResult
+	case f.Run != nil:
+		return FactRun
+	case f.ModelAttempt != nil:
+		return FactModelAttempt
+	case f.ModelConfigChanged != nil:
+		return FactModelConfigChanged
+	case f.ContextContribution != nil:
+		return FactContextContribution
+	case f.RunBudgetExceeded != nil:
+		return FactRunBudgetExceeded
+	default:
+		return ""
+	}
+}
+
+// ModelAttemptKind records a physical provider request boundary.
+type ModelAttemptKind string
+
+const (
+	AttemptStarted        ModelAttemptKind = "started"
+	AttemptSucceeded      ModelAttemptKind = "succeeded"
+	AttemptFailed         ModelAttemptKind = "failed"
+	AttemptCanceled       ModelAttemptKind = "canceled"
+	AttemptOutcomeUnknown ModelAttemptKind = "outcome_unknown"
+)
+
+func (k ModelAttemptKind) Valid() bool {
+	return k == AttemptStarted || k == AttemptSucceeded || k == AttemptFailed || k == AttemptCanceled || k == AttemptOutcomeUnknown
+}
+
+type ModelAttemptFact struct {
+	AttemptID         agent.AttemptID
+	RunID             agent.RunID
+	StepID            agent.StepID
+	Kind              ModelAttemptKind
+	ProviderKey       string
+	ModelID           string
+	ProviderRequestID string
+	Usage             model.TokenUsage
+	ErrorCode         string
+}
+
+func (f ModelAttemptFact) Validate() error {
+	if !f.AttemptID.Valid() || !f.RunID.Valid() || !f.StepID.Valid() || !f.Kind.Valid() || f.ModelID == "" {
+		return fmt.Errorf("session: invalid model attempt fact")
+	}
+	if err := f.Usage.Validate(); err != nil {
+		return err
+	}
+	if f.Kind == AttemptStarted && (f.Usage.TotalTokens != 0 || f.ErrorCode != "") {
+		return fmt.Errorf("session: started attempt cannot contain terminal outcome")
+	}
+	return nil
+}
+
+type ContextContributionFact struct {
+	RunID     agent.RunID
+	StepID    agent.StepID
+	SourceKey string
+	Inputs    []model.Input
+}
+
+func (f ContextContributionFact) Validate(sessionID agent.SessionID) error {
+	if !f.RunID.Valid() || !f.StepID.Valid() || f.SourceKey == "" {
+		return fmt.Errorf("session: invalid context contribution fact")
+	}
+	for _, input := range f.Inputs {
+		wrongMessageSession := input.Message != nil && input.Message.SessionID != sessionID
+		wrongCallSession := input.ToolCall != nil && input.ToolCall.SessionID != sessionID
+		if !input.Valid() || input.SystemPrompt != nil || wrongMessageSession || wrongCallSession {
+			return fmt.Errorf("session: invalid context contribution input")
+		}
+	}
+	return nil
+}
+
+type RunBudgetExceededFact struct {
+	RunID      agent.RunID
+	UsedTokens int64
+	MaxTokens  int64
+}
+
+func (f RunBudgetExceededFact) Validate() error {
+	if !f.RunID.Valid() || f.MaxTokens <= 0 || f.UsedTokens < f.MaxTokens {
+		return fmt.Errorf("session: invalid run budget fact")
 	}
 	return nil
 }
@@ -204,12 +357,13 @@ func (f RunFact) Validate(sessionID agent.SessionID) error {
 // ContextView is the current legal dynamic model projection and its source
 // revision. Inputs exclude fixed SystemPrompt and Tool definitions; TokenCount
 // measures the complete assembled request that used this projection. It is not
-// the History fact ledger.
+// the complete Session History.
 type ContextView struct {
-	Version        uint64
-	SourceRevision agent.Revision
-	TokenCount     int
-	Inputs         []model.Input
+	Version               ContextVersion
+	SourceRevision        agent.Revision
+	SourceHistorySequence HistorySequence
+	TokenCount            int
+	Inputs                []model.Input
 }
 
 // Delivery classifies queued input before it is claimed by a Run.
@@ -363,6 +517,18 @@ type SessionStore interface {
 	Load(context.Context, SessionRef) (Snapshot, error)
 	Recover(context.Context, SessionRef) (Snapshot, error)
 	Commit(context.Context, CommitRequest) (Commit, error)
+	HistoryPage(context.Context, HistoryPageRequest) (HistoryPage, error)
+}
+
+type HistoryPageRequest struct {
+	SessionID             agent.SessionID
+	BeforeHistorySequence HistorySequence
+	StepLimit             int
+}
+
+type HistoryPage struct {
+	Facts   []HistoryFact
+	HasMore bool
 }
 
 // NewSession is the complete initial aggregate supplied by SessionManager.
@@ -391,6 +557,7 @@ type CommitRequest struct {
 	SessionID        agent.SessionID
 	ExpectedRevision agent.Revision
 	IdempotencyKey   string
+	Actor            agent.ActorIdentity
 	Changes          []Change
 }
 
@@ -402,6 +569,9 @@ func (r CommitRequest) Validate() error {
 	}
 	if r.IdempotencyKey == "" {
 		return fmt.Errorf("session: commit requires an idempotency key")
+	}
+	if (r.Actor.Kind != "" || r.Actor.ID != "") && !r.Actor.Valid() {
+		return fmt.Errorf("session: commit actor identity is invalid")
 	}
 	if len(r.Changes) == 0 {
 		return fmt.Errorf("session: commit requires at least one change")
@@ -419,21 +589,24 @@ func (r CommitRequest) Validate() error {
 type ChangeKind string
 
 const (
-	AppendMessage      ChangeKind = "append_message"
-	AppendToolCall     ChangeKind = "append_tool_call"
-	AppendToolResult   ChangeKind = "append_tool_result"
-	AppendRunFact      ChangeKind = "append_run_fact"
-	AppendSessionEvent ChangeKind = "append_session_event"
-	EnqueueMessage     ChangeKind = "enqueue_message"
-	ClaimQueue         ChangeKind = "claim_queue"
-	ConsumeQueue       ChangeKind = "consume_queue"
-	EditQueue          ChangeKind = "edit_queue"
-	DeleteQueue        ChangeKind = "delete_queue"
-	ReclassifyQueue    ChangeKind = "reclassify_queue"
-	SetContext         ChangeKind = "set_context"
-	SetModelConfig     ChangeKind = "set_model_config"
-	SetRunState        ChangeKind = "set_run_state"
-	UpdateRunJournal   ChangeKind = "update_run_journal"
+	AppendMessage             ChangeKind = "append_message"
+	AppendToolCall            ChangeKind = "append_tool_call"
+	AppendToolResult          ChangeKind = "append_tool_result"
+	AppendRunFact             ChangeKind = "append_run_fact"
+	AppendModelAttempt        ChangeKind = "append_model_attempt"
+	AppendContextContribution ChangeKind = "append_context_contribution"
+	AppendRunBudgetExceeded   ChangeKind = "append_run_budget_exceeded"
+	AppendSessionEvent        ChangeKind = "append_session_event"
+	EnqueueMessage            ChangeKind = "enqueue_message"
+	ClaimQueue                ChangeKind = "claim_queue"
+	ConsumeQueue              ChangeKind = "consume_queue"
+	EditQueue                 ChangeKind = "edit_queue"
+	DeleteQueue               ChangeKind = "delete_queue"
+	ReclassifyQueue           ChangeKind = "reclassify_queue"
+	SetContext                ChangeKind = "set_context"
+	SetModelConfig            ChangeKind = "set_model_config"
+	SetRunState               ChangeKind = "set_run_state"
+	UpdateRunJournal          ChangeKind = "update_run_journal"
 )
 
 // Change is a provider-neutral, single-payload aggregate update accepted by
@@ -444,6 +617,9 @@ type Change struct {
 	ToolCall              *agent.ToolCall
 	ToolResult            *tool.ToolResult
 	RunFact               *RunFact
+	ModelAttempt          *ModelAttemptFact
+	ContextContribution   *ContextContributionFact
+	RunBudgetExceeded     *RunBudgetExceededFact
 	SessionEvent          *SessionEvent
 	QueueItem             *QueueItem
 	QueueClaim            *QueueClaim
@@ -483,6 +659,27 @@ func (c Change) Validate(sessionID agent.SessionID) error {
 			return fmt.Errorf("session: appended run fact is missing")
 		}
 		if err := c.RunFact.Validate(sessionID); err != nil {
+			return err
+		}
+	case AppendModelAttempt:
+		if c.ModelAttempt == nil {
+			return fmt.Errorf("session: appended model attempt is missing")
+		}
+		if err := c.ModelAttempt.Validate(); err != nil {
+			return err
+		}
+	case AppendContextContribution:
+		if c.ContextContribution == nil {
+			return fmt.Errorf("session: appended context contribution is missing")
+		}
+		if err := c.ContextContribution.Validate(sessionID); err != nil {
+			return err
+		}
+	case AppendRunBudgetExceeded:
+		if c.RunBudgetExceeded == nil {
+			return fmt.Errorf("session: appended run budget fact is missing")
+		}
+		if err := c.RunBudgetExceeded.Validate(); err != nil {
 			return err
 		}
 	case AppendSessionEvent:
@@ -551,6 +748,9 @@ func (c Change) payloadCount() int {
 		c.ToolCall != nil,
 		c.ToolResult != nil,
 		c.RunFact != nil,
+		c.ModelAttempt != nil,
+		c.ContextContribution != nil,
+		c.RunBudgetExceeded != nil,
 		c.SessionEvent != nil,
 		c.QueueItem != nil,
 		c.QueueClaim != nil,

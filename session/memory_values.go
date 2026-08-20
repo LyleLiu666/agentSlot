@@ -43,7 +43,7 @@ func cloneSessionEvent(source SessionEvent) SessionEvent {
 }
 
 func cloneHistoryFact(source HistoryFact) HistoryFact {
-	copy := HistoryFact{}
+	copy := source
 	if source.Message != nil {
 		message := cloneMessage(*source.Message)
 		copy.Message = &message
@@ -60,6 +60,28 @@ func cloneHistoryFact(source HistoryFact) HistoryFact {
 		run := *source.Run
 		run.ModelConfig = cloneModelConfig(source.Run.ModelConfig)
 		copy.Run = &run
+	}
+	if source.ModelAttempt != nil {
+		attempt := *source.ModelAttempt
+		copy.ModelAttempt = &attempt
+	}
+	if source.ModelConfigChanged != nil {
+		change := *source.ModelConfigChanged
+		change.Previous = cloneModelConfig(change.Previous)
+		change.Current = cloneModelConfig(change.Current)
+		copy.ModelConfigChanged = &change
+	}
+	if source.ContextContribution != nil {
+		contribution := *source.ContextContribution
+		contribution.Inputs = make([]model.Input, len(source.ContextContribution.Inputs))
+		for index, input := range source.ContextContribution.Inputs {
+			contribution.Inputs[index] = cloneModelInput(input)
+		}
+		copy.ContextContribution = &contribution
+	}
+	if source.RunBudgetExceeded != nil {
+		budget := *source.RunBudgetExceeded
+		copy.RunBudgetExceeded = &budget
 	}
 	return copy
 }

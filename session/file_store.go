@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	fileStoreFormat           = "agentslot.session-file/v0"
+	fileStoreFormat           = "agentslot.session-file/v1"
 	maxFileStoreDocumentBytes = 256 << 20
 )
 
@@ -91,6 +91,10 @@ func (s *FileStore) Create(ctx context.Context, initial NewSession) (Snapshot, e
 	if initial.RunState == "" {
 		initial.RunState = RunIdle
 	}
+	history, err := prepareInitialHistory(initial.Session.ID, initial.History)
+	if err != nil {
+		return Snapshot{}, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.ensureOpenLocked("session.file_store.create"); err != nil {
@@ -103,7 +107,7 @@ func (s *FileStore) Create(ctx context.Context, initial NewSession) (Snapshot, e
 		return Snapshot{}, agent.NewError(agent.ErrorUnavailable, "session.file_store.create", "cannot inspect session file", err)
 	}
 	snapshot := cloneSnapshot(Snapshot{
-		Session: initial.Session, Revision: 1, History: initial.History,
+		Session: initial.Session, Revision: 1, History: history,
 		Context: initial.Context, Queue: initial.Queue, RunJournal: initial.RunJournal,
 		ModelConfig: initial.ModelConfig, RunState: initial.RunState, ActiveRunID: initial.ActiveRunID,
 	})
@@ -113,6 +117,25 @@ func (s *FileStore) Create(ctx context.Context, initial NewSession) (Snapshot, e
 		return Snapshot{}, err
 	}
 	return cloneSnapshot(snapshot), nil
+}
+
+func (s *FileStore) HistoryPage(ctx context.Context, request HistoryPageRequest) (HistoryPage, error) {
+	if err := contextErr(ctx, "session.file_store.history_page"); err != nil {
+		return HistoryPage{}, err
+	}
+	if !request.SessionID.Valid() {
+		return HistoryPage{}, invalid("session.file_store.history_page", "session ID is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.ensureOpenLocked("session.file_store.history_page"); err != nil {
+		return HistoryPage{}, err
+	}
+	document, err := s.readLocked(request.SessionID)
+	if err != nil {
+		return HistoryPage{}, err
+	}
+	return historyPage(document.Snapshot.History, request)
 }
 
 func (s *FileStore) Load(ctx context.Context, ref SessionRef) (Snapshot, error) {
@@ -150,7 +173,11 @@ func (s *FileStore) Recover(ctx context.Context, ref SessionRef) (Snapshot, erro
 	if err != nil {
 		return Snapshot{}, err
 	}
-	if recoverAggregate(&document.Snapshot) {
+	changed, err := recoverAggregate(&document.Snapshot)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if changed {
 		document.Snapshot.Revision++
 		document.Snapshot.Session.Revision = document.Snapshot.Revision
 		if err := s.persistLocked(ctx, s.path(ref.SessionID), document); err != nil {
@@ -336,9 +363,12 @@ func validateFileDocument(id agent.SessionID, document fileStoreDocument) error 
 	if !snapshot.RunState.Valid() || (snapshot.RunState == RunRunning) != snapshot.ActiveRunID.Valid() {
 		return errors.New("run state and active run are inconsistent")
 	}
-	for _, fact := range snapshot.History {
+	for index, fact := range snapshot.History {
 		if err := fact.Validate(id); err != nil {
 			return err
+		}
+		if fact.Sequence != HistorySequence(index+1) {
+			return errors.New("history sequence is not contiguous")
 		}
 	}
 	for _, item := range snapshot.Queue {
@@ -380,6 +410,9 @@ func validateFileDocument(id agent.SessionID, document fileStoreDocument) error 
 }
 
 func unrecoverableFile(id agent.SessionID, message string, cause error) error {
+	if cause != nil {
+		message = fmt.Sprintf("%s: %v", message, cause)
+	}
 	return agent.NewCodedError(agent.ErrorInternal, agent.CodeSessionUnrecoverable, "session.file_store", fmt.Sprintf("%s: %s", message, id), cause)
 }
 

@@ -405,7 +405,7 @@ func TestMemoryManagerCreateResumeForkAndSummaryPreserveModelRules(t *testing.T)
 	if forkView.Session.ParentSessionID != source.Session.ID || forkView.Session.ParentRevision != updated.Revision || forkView.ModelConfig.ModelID != selected.ModelID {
 		t.Fatalf("fork provenance/config = %#v / %#v", forkView.Session, forkView.ModelConfig)
 	}
-	if len(forkView.History) != 1 || forkView.History[0].Message.ID == user.ID || forkView.History[0].Message.SessionID != forkView.Session.ID {
+	if len(forkView.History) != 2 || forkView.History[0].Message == nil || forkView.History[0].Message.ID == user.ID || forkView.History[0].Message.SessionID != forkView.Session.ID || forkView.History[1].ModelConfigChanged == nil {
 		t.Fatalf("fork history identities = %#v", forkView.History)
 	}
 	if len(forkView.Context.Inputs) != 0 || forkView.Context.Version != 0 || forkView.Context.SourceRevision != 0 {

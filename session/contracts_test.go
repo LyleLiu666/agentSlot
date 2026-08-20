@@ -59,6 +59,9 @@ func (store) Recover(context.Context, session.SessionRef) (session.Snapshot, err
 func (store) Commit(context.Context, session.CommitRequest) (session.Commit, error) {
 	return session.Commit{}, nil
 }
+func (store) HistoryPage(context.Context, session.HistoryPageRequest) (session.HistoryPage, error) {
+	return session.HistoryPage{}, nil
+}
 
 type module struct{}
 

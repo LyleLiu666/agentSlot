@@ -51,6 +51,42 @@ type Config struct {
 	Parameters  Parameters
 }
 
+// TokenUsage is the provider-neutral accounting result for one physical
+// attempt. Cached input and reasoning tokens are subsets and must not be added
+// to TotalTokens a second time.
+type TokenUsage struct {
+	InputTokens       int64
+	OutputTokens      int64
+	CachedInputTokens int64
+	CacheWriteTokens  int64
+	ReasoningTokens   int64
+	TotalTokens       int64
+	Estimated         bool
+	EstimateSource    string
+}
+
+// Validate enforces portable accounting relationships. Provider-specific
+// billing interpretation remains in the adapter.
+func (u TokenUsage) Validate() error {
+	if u.InputTokens < 0 || u.OutputTokens < 0 || u.CachedInputTokens < 0 ||
+		u.CacheWriteTokens < 0 || u.ReasoningTokens < 0 || u.TotalTokens < 0 {
+		return errors.New("model: token usage cannot be negative")
+	}
+	if u.CachedInputTokens > u.InputTokens {
+		return errors.New("model: cached input tokens exceed input tokens")
+	}
+	if u.ReasoningTokens > u.OutputTokens {
+		return errors.New("model: reasoning tokens exceed output tokens")
+	}
+	if u.TotalTokens < u.InputTokens+u.OutputTokens {
+		return errors.New("model: total tokens are smaller than input plus output")
+	}
+	if u.Estimated != (u.EstimateSource != "") {
+		return errors.New("model: estimated token usage requires exactly one estimate source")
+	}
+	return nil
+}
+
 // Validate checks only portable model invariants. Provider existence and
 // capability compatibility belong to the selected ModelExecutor.
 func (c Config) Validate() error {

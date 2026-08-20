@@ -19,6 +19,8 @@ func TestStableIdentityTypesValidateNonEmptyTrimmedValues(t *testing.T) {
 		{"step", agent.StepID("step-1").Valid},
 		{"message", agent.MessageID("message-1").Valid},
 		{"tool call", agent.ToolCallID("call-1").Valid},
+		{"fact", agent.FactID("fact-1").Valid},
+		{"attempt", agent.AttemptID("attempt-1").Valid},
 	}
 	for _, test := range valid {
 		t.Run(test.name, func(t *testing.T) {
@@ -30,6 +32,15 @@ func TestStableIdentityTypesValidateNonEmptyTrimmedValues(t *testing.T) {
 
 	if agent.SessionID(" ").Valid() || agent.RunID("").Valid() {
 		t.Fatal("empty or whitespace identity reported valid")
+	}
+}
+
+func TestActorIdentityUsesFiniteOriginVocabulary(t *testing.T) {
+	if !(agent.ActorIdentity{Kind: agent.ActorRemoteUser, ID: "user-1"}).Valid() {
+		t.Fatal("valid remote actor was rejected")
+	}
+	if (agent.ActorIdentity{Kind: "admin", ID: "user-1"}).Valid() || (agent.ActorIdentity{Kind: agent.ActorService}).Valid() {
+		t.Fatal("invalid actor identity was accepted")
 	}
 }
 

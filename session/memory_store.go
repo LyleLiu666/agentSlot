@@ -55,6 +55,10 @@ func (s *MemoryStore) Create(ctx context.Context, initial NewSession) (Snapshot,
 	if initial.RunState == "" {
 		initial.RunState = RunIdle
 	}
+	history, err := prepareInitialHistory(initial.Session.ID, initial.History)
+	if err != nil {
+		return Snapshot{}, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, exists := s.sessions[initial.Session.ID]; exists {
@@ -66,7 +70,7 @@ func (s *MemoryStore) Create(ctx context.Context, initial NewSession) (Snapshot,
 	copy := cloneSnapshot(Snapshot{
 		Session:     initial.Session,
 		Revision:    1,
-		History:     initial.History,
+		History:     history,
 		Context:     initial.Context,
 		Queue:       initial.Queue,
 		RunJournal:  initial.RunJournal,
@@ -77,6 +81,22 @@ func (s *MemoryStore) Create(ctx context.Context, initial NewSession) (Snapshot,
 	copy.Session.Revision = copy.Revision
 	s.sessions[copy.Session.ID] = &memoryAggregate{snapshot: copy, idempotency: make(map[string]memoryCommit)}
 	return cloneSnapshot(copy), nil
+}
+
+func (s *MemoryStore) HistoryPage(ctx context.Context, request HistoryPageRequest) (HistoryPage, error) {
+	if err := contextErr(ctx, "session.history_page"); err != nil {
+		return HistoryPage{}, err
+	}
+	if !request.SessionID.Valid() {
+		return HistoryPage{}, invalid("session.history_page", "session ID is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	aggregate, ok := s.sessions[request.SessionID]
+	if !ok {
+		return HistoryPage{}, agent.NewCodedError(agent.ErrorNotFound, agent.CodeSessionNotFound, "session.history_page", "session not found", nil)
+	}
+	return historyPage(aggregate.snapshot.History, request)
 }
 
 func (s *MemoryStore) Load(ctx context.Context, ref SessionRef) (Snapshot, error) {
@@ -111,7 +131,11 @@ func (s *MemoryStore) Recover(ctx context.Context, ref SessionRef) (Snapshot, er
 	if !ok {
 		return Snapshot{}, agent.NewCodedError(agent.ErrorNotFound, agent.CodeSessionNotFound, "session.recover", "session not found", nil)
 	}
-	if recoverAggregate(&aggregate.snapshot) {
+	changed, err := recoverAggregate(&aggregate.snapshot)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if changed {
 		aggregate.snapshot.Revision++
 		aggregate.snapshot.Session.Revision = aggregate.snapshot.Revision
 	}
@@ -193,7 +217,7 @@ func validateNewSession(initial NewSession) error {
 		return invalid("session.create", "idle session cannot have an active run")
 	}
 	for _, fact := range initial.History {
-		if err := fact.Validate(initial.Session.ID); err != nil {
+		if err := fact.validatePayload(initial.Session.ID); err != nil {
 			return invalid("session.create", err.Error())
 		}
 	}
@@ -222,7 +246,7 @@ func validateNewSession(initial NewSession) error {
 	if err := validateContext(initial.Context, initial.Session.ID); err != nil {
 		return err
 	}
-	if initial.Context.Version != 0 || initial.Context.SourceRevision != 0 || initial.Context.TokenCount != 0 || len(initial.Context.Inputs) != 0 {
+	if initial.Context.Version != 0 || initial.Context.SourceRevision != 0 || initial.Context.SourceHistorySequence != 0 || initial.Context.TokenCount != 0 || len(initial.Context.Inputs) != 0 {
 		return invalid("session.create", "new session context must be empty and unversioned")
 	}
 	if err := validateHistoryConsistency(initial.Session.ID, initial.History, initial.RunJournal); err != nil {
@@ -279,7 +303,9 @@ func applyChanges(snapshot *Snapshot, request CommitRequest) error {
 				return historyConflict("message ID already exists")
 			}
 			message := cloneMessage(*change.Message)
-			snapshot.History = append(snapshot.History, HistoryFact{Message: &message})
+			if err := appendHistoryFact(&snapshot.History, request.SessionID, HistoryFact{Message: &message}, request.Actor); err != nil {
+				return historyConflict(err.Error())
+			}
 		case AppendToolCall:
 			if containsToolCall(snapshot.History, change.ToolCall.ID) {
 				return historyConflict("tool call ID already exists")
@@ -292,7 +318,9 @@ func applyChanges(snapshot *Snapshot, request CommitRequest) error {
 				return historyConflict("tool call containment differs from its assistant message")
 			}
 			call := cloneToolCall(*change.ToolCall)
-			snapshot.History = append(snapshot.History, HistoryFact{ToolCall: &call})
+			if err := appendHistoryFact(&snapshot.History, request.SessionID, HistoryFact{ToolCall: &call}, request.Actor); err != nil {
+				return historyConflict(err.Error())
+			}
 		case AppendToolResult:
 			if _, ok := findToolCall(snapshot.History, change.ToolResult.CallID); !ok {
 				return historyConflict("tool result has no preceding tool call")
@@ -301,15 +329,35 @@ func applyChanges(snapshot *Snapshot, request CommitRequest) error {
 				return historyConflict("tool call already has a terminal result")
 			}
 			result := cloneToolResult(*change.ToolResult)
-			snapshot.History = append(snapshot.History, HistoryFact{ToolResult: &result})
+			if err := appendHistoryFact(&snapshot.History, request.SessionID, HistoryFact{ToolResult: &result}, request.Actor); err != nil {
+				return historyConflict(err.Error())
+			}
 		case AppendRunFact:
-			if err := appendRunFact(snapshot, *change.RunFact); err != nil {
+			if err := appendRunFact(snapshot, *change.RunFact, request.Actor); err != nil {
 				return err
+			}
+		case AppendModelAttempt:
+			if err := appendModelAttemptFact(snapshot, *change.ModelAttempt, request.Actor); err != nil {
+				return err
+			}
+		case AppendContextContribution:
+			contribution := *change.ContextContribution
+			if err := appendHistoryFact(&snapshot.History, request.SessionID, HistoryFact{ContextContribution: &contribution}, request.Actor); err != nil {
+				return historyConflict(err.Error())
+			}
+		case AppendRunBudgetExceeded:
+			budget := *change.RunBudgetExceeded
+			if err := appendHistoryFact(&snapshot.History, request.SessionID, HistoryFact{RunBudgetExceeded: &budget}, request.Actor); err != nil {
+				return historyConflict(err.Error())
 			}
 		case AppendSessionEvent:
 			event := cloneSessionEvent(*change.SessionEvent)
 			event.Revision = snapshot.Revision.Next()
 			snapshot.Events = append(snapshot.Events, event)
+			modelChange := *event.ModelConfigChanged
+			if err := appendHistoryFact(&snapshot.History, request.SessionID, HistoryFact{ModelConfigChanged: &modelChange}, request.Actor); err != nil {
+				return historyConflict(err.Error())
+			}
 		case EnqueueMessage:
 			if change.QueueItem.Claimed() {
 				return invalid("session.commit", "new queue item cannot already be claimed")
@@ -451,7 +499,7 @@ func applyRunState(snapshot *Snapshot, change RunStateChange) error {
 	return nil
 }
 
-func appendRunFact(snapshot *Snapshot, fact RunFact) error {
+func appendRunFact(snapshot *Snapshot, fact RunFact, actor agent.ActorIdentity) error {
 	started, terminal := runFacts(snapshot.History, fact.RunID)
 	switch fact.Kind {
 	case RunStarted:
@@ -474,8 +522,36 @@ func appendRunFact(snapshot *Snapshot, fact RunFact) error {
 	}
 	copy := fact
 	copy.ModelConfig = cloneModelConfig(fact.ModelConfig)
-	snapshot.History = append(snapshot.History, HistoryFact{Run: &copy})
-	return nil
+	return appendHistoryFact(&snapshot.History, snapshot.Session.ID, HistoryFact{Run: &copy}, actor)
+}
+
+func appendModelAttemptFact(snapshot *Snapshot, fact ModelAttemptFact, actor agent.ActorIdentity) error {
+	var started, terminal *ModelAttemptFact
+	for index := range snapshot.History {
+		attempt := snapshot.History[index].ModelAttempt
+		if attempt == nil || attempt.AttemptID != fact.AttemptID {
+			continue
+		}
+		if attempt.Kind == AttemptStarted {
+			started = attempt
+		} else {
+			terminal = attempt
+		}
+	}
+	if fact.Kind == AttemptStarted {
+		if started != nil || terminal != nil {
+			return historyConflict("model attempt already started")
+		}
+	} else {
+		if started == nil || terminal != nil {
+			return historyConflict("model attempt terminal requires one unterminated start")
+		}
+		if started.RunID != fact.RunID || started.StepID != fact.StepID || started.ProviderKey != fact.ProviderKey || started.ModelID != fact.ModelID {
+			return historyConflict("model attempt terminal changed identity")
+		}
+	}
+	copy := fact
+	return appendHistoryFact(&snapshot.History, snapshot.Session.ID, HistoryFact{ModelAttempt: &copy}, actor)
 }
 
 func runFacts(history []HistoryFact, runID agent.RunID) (*RunFact, *RunFact) {
@@ -530,9 +606,33 @@ func applyJournal(snapshot *Snapshot, entry JournalEntry, sessionID agent.Sessio
 	return nil
 }
 
-func recoverAggregate(snapshot *Snapshot) bool {
+func recoverAggregate(snapshot *Snapshot) (bool, error) {
 	changed := false
 	interruptedRunID := snapshot.ActiveRunID
+	startedAttempts := make(map[agent.AttemptID]ModelAttemptFact)
+	terminalAttempts := make(map[agent.AttemptID]bool)
+	for _, fact := range snapshot.History {
+		if fact.ModelAttempt == nil {
+			continue
+		}
+		if fact.ModelAttempt.Kind == AttemptStarted {
+			startedAttempts[fact.ModelAttempt.AttemptID] = *fact.ModelAttempt
+		} else {
+			terminalAttempts[fact.ModelAttempt.AttemptID] = true
+		}
+	}
+	for attemptID, started := range startedAttempts {
+		if terminalAttempts[attemptID] {
+			continue
+		}
+		terminal := started
+		terminal.Kind = AttemptOutcomeUnknown
+		terminal.ErrorCode = "process_interrupted"
+		if err := appendHistoryFact(&snapshot.History, snapshot.Session.ID, HistoryFact{ModelAttempt: &terminal}, agent.ActorIdentity{}); err != nil {
+			return false, agent.NewError(agent.ErrorInternal, "session.recover", "cannot terminate orphaned model attempt", err)
+		}
+		changed = true
+	}
 	for index := range snapshot.RunJournal {
 		entry := &snapshot.RunJournal[index]
 		if entry.Status != JournalPending || entry.ToolCall == nil {
@@ -540,7 +640,9 @@ func recoverAggregate(snapshot *Snapshot) bool {
 		}
 		if !hasToolResult(snapshot.History, entry.ToolCall.ID) {
 			result := toolUnknown(entry.ToolCall.ID)
-			snapshot.History = append(snapshot.History, HistoryFact{ToolResult: &result})
+			if err := appendHistoryFact(&snapshot.History, snapshot.Session.ID, HistoryFact{ToolResult: &result}, agent.ActorIdentity{}); err != nil {
+				return false, agent.NewError(agent.ErrorInternal, "session.recover", "cannot append unknown tool result", err)
+			}
 		}
 		result := toolUnknown(entry.ToolCall.ID)
 		entry.ToolResult = &result
@@ -552,7 +654,9 @@ func recoverAggregate(snapshot *Snapshot) bool {
 			interrupted := *started
 			interrupted.Kind = RunInterrupted
 			interrupted.ModelConfig = cloneModelConfig(started.ModelConfig)
-			snapshot.History = append(snapshot.History, HistoryFact{Run: &interrupted})
+			if err := appendHistoryFact(&snapshot.History, snapshot.Session.ID, HistoryFact{Run: &interrupted}, agent.ActorIdentity{}); err != nil {
+				return false, agent.NewError(agent.ErrorInternal, "session.recover", "cannot append interrupted run", err)
+			}
 		}
 		snapshot.RunState = RunIdle
 		snapshot.ActiveRunID = ""
@@ -574,7 +678,7 @@ func recoverAggregate(snapshot *Snapshot) bool {
 			changed = true
 		}
 	}
-	return changed
+	return changed, nil
 }
 
 func validateContext(contextView ContextView, sessionID agent.SessionID) error {
@@ -685,8 +789,10 @@ func validateHistoryConsistency(sessionID agent.SessionID, history []HistoryFact
 	journalEntries := make(map[agent.ToolCallID]bool)
 	runStarts := make(map[agent.RunID]*RunFact)
 	runTerminals := make(map[agent.RunID]bool)
+	attemptStarts := make(map[agent.AttemptID]*ModelAttemptFact)
+	attemptTerminals := make(map[agent.AttemptID]bool)
 	for _, fact := range history {
-		if err := fact.Validate(sessionID); err != nil {
+		if err := fact.validatePayload(sessionID); err != nil {
 			return historyConflict(err.Error())
 		}
 		if fact.Message != nil {
@@ -729,6 +835,24 @@ func validateHistoryConsistency(sessionID agent.SessionID, history []HistoryFact
 					return historyConflict("initial run terminal changed frozen model config")
 				}
 				runTerminals[fact.Run.RunID] = true
+			}
+		}
+		if fact.ModelAttempt != nil {
+			attempt := fact.ModelAttempt
+			if attempt.Kind == AttemptStarted {
+				if attemptStarts[attempt.AttemptID] != nil || attemptTerminals[attempt.AttemptID] {
+					return historyConflict("duplicate initial model attempt start")
+				}
+				attemptStarts[attempt.AttemptID] = attempt
+			} else {
+				started := attemptStarts[attempt.AttemptID]
+				if started == nil || attemptTerminals[attempt.AttemptID] {
+					return historyConflict("initial model attempt terminal has no unique start")
+				}
+				if started.RunID != attempt.RunID || started.StepID != attempt.StepID || started.ProviderKey != attempt.ProviderKey || started.ModelID != attempt.ModelID {
+					return historyConflict("initial model attempt terminal changed identity")
+				}
+				attemptTerminals[attempt.AttemptID] = true
 			}
 		}
 	}

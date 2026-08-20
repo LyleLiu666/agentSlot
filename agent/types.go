@@ -24,6 +24,8 @@ type (
 	StepID      string
 	MessageID   string
 	ToolCallID  string
+	FactID      string
+	AttemptID   string
 )
 
 func (id AgentID) Valid() bool     { return validID(string(id)) }
@@ -33,6 +35,8 @@ func (id RunID) Valid() bool       { return validID(string(id)) }
 func (id StepID) Valid() bool      { return validID(string(id)) }
 func (id MessageID) Valid() bool   { return validID(string(id)) }
 func (id ToolCallID) Valid() bool  { return validID(string(id)) }
+func (id FactID) Valid() bool      { return validID(string(id)) }
+func (id AttemptID) Valid() bool   { return validID(string(id)) }
 
 func validID(value string) bool {
 	return value != "" && strings.TrimSpace(value) == value
@@ -43,6 +47,32 @@ type Revision uint64
 
 // Next returns the next revision without mutating the receiver.
 func (r Revision) Next() Revision { return r + 1 }
+
+// ActorKind is the finite origin vocabulary attached to durable Session
+// facts. Authentication remains the GatewayChannel's responsibility; this
+// value contains no credential or authorization decision.
+type ActorKind string
+
+const (
+	ActorLocalUser  ActorKind = "local_user"
+	ActorRemoteUser ActorKind = "remote_user"
+	ActorService    ActorKind = "service"
+	ActorAgent      ActorKind = "agent"
+)
+
+func (k ActorKind) Valid() bool {
+	return k == ActorLocalUser || k == ActorRemoteUser || k == ActorService || k == ActorAgent
+}
+
+// ActorIdentity records who caused a durable fact without carrying secrets.
+type ActorIdentity struct {
+	Kind ActorKind
+	ID   string
+}
+
+func (a ActorIdentity) Valid() bool {
+	return a.Kind.Valid() && validID(a.ID)
+}
 
 // Role is the stable semantic role of a persisted message.
 type Role string
