@@ -280,10 +280,16 @@ are Contracted, but no domain ecosystem is yet Conformant or Proven.
 The `standardagent` package implements the application-scoped Runtime registry,
 coordinator, fixed Gateway, GatewayAccess binding, Entrypoint wrapper, automatic
 standard profile, and the fixed Session AgentRuntime state machine. Send,
-Steer, RunPending, Cancel, WhenIdle, Close, Queue mutation, and model-config
-commands now execute through the Gateway. Model calls consume temporary
-delta/reset events without persisting them and commit only complete assistant
-output; Run start/terminal facts retain the frozen model configuration. The
+SendAndWait, Steer, RunPending, Cancel, WhenIdle, Close, Queue mutation, and
+model-config commands now execute through the Gateway. `Subscribe` publishes
+live delta/reset events with Run, Step, and physical Attempt identity plus
+durable commit/state notifications; temporary output and client cursors are not
+persisted. A subscriber first obtains the current Snapshot revision, and a slow
+subscriber is closed explicitly so it can reconnect instead of growing an
+unbounded in-memory queue. Disconnecting a subscriber never cancels its Run.
+`SendAndWait` wraps the same Run and returns only that Run's durable assistant
+text messages rather than executing a second model path. Run start/terminal
+facts retain the frozen model configuration. The
 `model` package includes an explicitly installed deterministic
 `FakeModelExecutor` for development and contract tests. The fixed Runtime also
 owns ToolDispatcher semantics: call/pending and result/terminal commits,
@@ -296,9 +302,14 @@ persists versioned Context projections, runs ordered ContextSource and Hook
 chains, enforces model protocol and hard token limits, projects unsupported
 attachments without rewriting History, and validates idle-only model switches
 through ModelExecutor capabilities. `model.catalog` has a typed contract and
-an explicit StaticCatalog reference implementation. Reconnectable Gateway
-event streaming remains in its dedicated implementation round. Importing any
-package still has no registration or startup side effect.
+an explicit StaticCatalog reference implementation. Applications can
+explicitly install `interaction.NewModelCommandModule`; slash, menu, and
+structured clients then invoke that one Gateway command backend. The
+`interaction/inprocess` package provides the first function-style Entrypoint
+and exposes only GatewayAccess. These reference implementations do not make the
+corresponding Slots Conformant or Proven, and no Web/RPC transport or reliable
+delivery ACK is implied. Importing any package still has no registration or
+startup side effect.
 
 ## Relationship to previous-generation SDKs
 

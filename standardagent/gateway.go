@@ -7,6 +7,8 @@ import (
 
 	agent "github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/interaction"
+	"github.com/LyleLiu666/agentSlot/model"
+	"github.com/LyleLiu666/agentSlot/session"
 )
 
 // gateway is the fixed, application-scoped user-operation boundary. It owns
@@ -80,6 +82,59 @@ func (g *gateway) Send(ctx context.Context, request interaction.SendRequest) (in
 	return withRuntime(ctx, g, request.SessionID, func(runtime runtimeAccess) (interaction.EnqueueReceipt, error) {
 		return runtime.send(ctx, request)
 	})
+}
+
+func (g *gateway) SendAndWait(ctx context.Context, request interaction.SendRequest) (interaction.RunResult, error) {
+	return withRuntime(ctx, g, request.SessionID, func(runtime runtimeAccess) (interaction.RunResult, error) {
+		receipt, err := runtime.send(ctx, request)
+		if err != nil {
+			return interaction.RunResult{}, err
+		}
+		if err := runtime.idle(ctx, interaction.WhenIdleRequest{SessionID: request.SessionID}); err != nil {
+			return interaction.RunResult{}, err
+		}
+		snapshot, err := runtime.snapshot(ctx, interaction.SnapshotRequest{SessionID: request.SessionID})
+		if err != nil {
+			return interaction.RunResult{}, err
+		}
+		return aggregateRunResult(snapshot, receipt.MessageID)
+	})
+}
+
+func aggregateRunResult(snapshot interaction.SessionSnapshot, inputID agent.MessageID) (interaction.RunResult, error) {
+	result := interaction.RunResult{SessionID: snapshot.SessionID, InputMessageID: inputID, Revision: snapshot.Revision}
+	for _, fact := range snapshot.History {
+		if fact.Message != nil && fact.Message.ID == inputID {
+			result.RunID = fact.Message.RunID
+			break
+		}
+	}
+	if !result.RunID.Valid() {
+		return interaction.RunResult{}, agent.NewCodedError(agent.ErrorConflict, agent.CodeNoPendingWork, "gateway.send_and_wait", "input was accepted but did not start a Run", nil)
+	}
+	for _, fact := range snapshot.History {
+		if fact.Message != nil && fact.Message.RunID == result.RunID && fact.Message.Role == agent.RoleAssistant && assistantHasText(*fact.Message) {
+			message := *fact.Message
+			message.Parts = cloneRuntimeParts(message.Parts)
+			result.AssistantMessages = append(result.AssistantMessages, message)
+		}
+		if fact.Run != nil && fact.Run.RunID == result.RunID && fact.Run.Kind != session.RunStarted {
+			result.Outcome = fact.Run.Kind
+		}
+	}
+	if !result.Outcome.Valid() || result.Outcome == session.RunStarted {
+		return interaction.RunResult{}, agent.NewError(agent.ErrorInternal, "gateway.send_and_wait", "Run became idle without a terminal History fact", nil)
+	}
+	return result, nil
+}
+
+func assistantHasText(message agent.Message) bool {
+	for _, part := range message.Parts {
+		if part.Kind == agent.PartText {
+			return true
+		}
+	}
+	return false
 }
 
 func (g *gateway) Steer(ctx context.Context, request interaction.SteerRequest) (interaction.EnqueueReceipt, error) {
@@ -220,7 +275,7 @@ func (a *commandActions) Apply(ctx context.Context, request interaction.ActionRe
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	if !a.open || a.coordinator == nil {
-		return interaction.ActionResult{}, agent.NewCodedError(agent.ErrorConflict, agent.CodeRuntimeClosed, "gateway.command_action", "command action scope is closed", nil)
+		return interaction.ActionResult{}, closedCommandActionError()
 	}
 	runtime, err := a.coordinator.runtime(a.scope.SessionID)
 	if err != nil {
@@ -256,6 +311,38 @@ func (a *commandActions) Apply(ctx context.Context, request interaction.ActionRe
 	default:
 		return interaction.ActionResult{}, agent.NewError(agent.ErrorInvalidInput, "gateway.command_action", "unsupported command action", nil)
 	}
+}
+
+func (a *commandActions) CurrentModelConfig(ctx context.Context) (interaction.ModelConfigView, error) {
+	if err := ctx.Err(); err != nil {
+		return interaction.ModelConfigView{}, err
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if !a.open || a.coordinator == nil {
+		return interaction.ModelConfigView{}, closedCommandActionError()
+	}
+	runtime, err := a.coordinator.runtime(a.scope.SessionID)
+	if err != nil {
+		return interaction.ModelConfigView{}, err
+	}
+	return runtime.modelConfig(ctx, interaction.ModelConfigRequest{SessionID: a.scope.SessionID})
+}
+
+func (a *commandActions) AvailableModels(ctx context.Context) ([]model.Descriptor, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if !a.open || a.coordinator == nil {
+		return nil, closedCommandActionError()
+	}
+	return a.coordinator.models(ctx)
+}
+
+func closedCommandActionError() error {
+	return agent.NewCodedError(agent.ErrorConflict, agent.CodeRuntimeClosed, "gateway.command_action", "command action scope is closed", nil)
 }
 
 func runtimeUnavailable(op string) error {

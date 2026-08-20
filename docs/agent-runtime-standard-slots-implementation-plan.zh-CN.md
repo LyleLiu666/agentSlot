@@ -162,6 +162,7 @@ func (g *Gateway) ResumeSession(context.Context, ResumeSessionRequest) (SessionO
 func (g *Gateway) ForkSession(context.Context, ForkSessionRequest) (SessionOpened, error)
 func (g *Gateway) StartSessionFromSummary(context.Context, SummarySessionRequest) (SessionOpened, error)
 func (g *Gateway) Send(context.Context, SendRequest) (EnqueueReceipt, error)
+func (g *Gateway) SendAndWait(context.Context, SendRequest) (RunResult, error)
 func (g *Gateway) Steer(context.Context, SteerRequest) (EnqueueReceipt, error)
 func (g *Gateway) RunPending(context.Context, RunPendingRequest) (RunReceipt, error)
 func (g *Gateway) Cancel(context.Context, CancelRequest) error
@@ -368,9 +369,11 @@ type InteractionCommand interface {
 - CommandActions 是 Gateway 提供的受控能力，不能暴露 `*AgentRuntime`、RuntimeAccess、
   SessionStore 或内部锁，也不能重新进入 `InvokeCommand` 形成命令递归。命令不能修改
   Runtime 内部状态或实现模型循环。
-- `model` 命令可以在自己的 Module 构造阶段声明 ModelCatalog 依赖，用于展示候选项；
-  用户确认后通过 CommandActions 调用 `UpdateModelConfig`。默认实现属于可选组件包，
-  不硬编码进 Runtime。
+- 框架提供可显式安装的 `interaction.NewModelCommandModule`。其命令通过本次 Invocation
+  绑定的 CommandActions 读取 SessionModelConfig 与 ModelCatalog 候选项，用户确认后再
+  请求 `UpdateModelConfig`；它拿不到 Runtime、Store 或 Catalog 组件对象。默认实现属于
+  可选组件包，不硬编码进 Runtime，也不会因 import 自动安装。自定义命令 Module 仍可
+  对自己声明的标准 Slot 依赖使用普通 Build 构造注入。
 
 ### 6.10 AgentRuntime 的固定命令面
 
@@ -627,9 +630,11 @@ sequenceDiagram
     end
 ```
 
-临时 chunk 只用于当前连接和事件订阅，不持久化。半流失败时 Executor 可以发出
-`reset`，Gateway 撤销相应临时投影，Entrypoint 丢弃对应展示；最终只有完整消息提交
-History。
+临时 chunk 只用于当前连接和事件订阅，不持久化。delta/reset 事件携带 RunID、StepID
+和 AttemptID；半流失败时 Executor 可以发出 `reset`，Entrypoint 据此撤销对应物理尝试
+的临时投影。最终只有完整消息提交 History。单订阅者的进程内缓存有固定安全上限；
+落后的订阅者收到明确 overflow 并按 Snapshot/revision 重连，不能用无界内存伪装可靠
+投递。
 
 ## 12. Gateway、断线与重连
 
@@ -645,7 +650,10 @@ History。
 - Gateway 核心与 carrier 无关；只有跨进程 Entrypoint 使用 RPC 或其他 wire protocol。
 - 远程连接断开不取消 Run；Cancel 必须是显式 Gateway 命令。
 - 流式是内部唯一执行路径；非流式由 Gateway 聚合本 Run 全部 assistant 文本消息。
-- 重连以客户端持有的 revision 请求 Session Snapshot，再订阅后续持久事件。
+- 重连以客户端持有的 revision 请求完整 Session Snapshot；只有携带该 Snapshot 当前
+  revision 的 Subscribe 才建立后续实时订阅。Snapshot 与订阅之间若已有新提交，订阅
+  返回 revision conflict，调用方重新获取 Snapshot，不能静默制造事件缺口。
+- 订阅关闭或 overflow 只结束观察，不调用 Cancel，也不改变 Run 事实。
 - AgentSlot 不保存 chunk 游标或框架级客户端 ACK；可靠投递由具体传输适配器或外部
   消息系统私有实现，不能改变 History、Context、Run 或业务完成状态。
 
@@ -735,8 +743,10 @@ History。
 
 - 已使用 FakeModelExecutor 测试临时 chunk、reset、完整结果、最终失败和取消；Executor
   只返回无持久身份的 Completion，唯一由 Runtime 分配 Message/Run/Step 身份。
-- 两种不同 Provider 协议验证重试/continuation 差异不泄漏到 Runtime。
-- 测试 AttemptID 进入运维/用量事件但不进入 History。
+- Executor 合同允许在一次逻辑调用内管理 Provider-specific retry/continuation，Runtime
+  只消费统一事件；真实 Provider 差异的端到端证据属于阶段 9。
+- AttemptID 已无损进入临时 Gateway 事件且不进入 History；运维/用量事件的持久或外发
+  证据属于阶段 9 的观察组件。
 
 ### 阶段 6：工具循环与崩溃恢复（固定 Dispatcher 与 Bash 已完成）
 
@@ -759,18 +769,35 @@ History。
 - 已实现 `ModelExecutor.Inspect/CountTokens`、`ModelCatalog`/`StaticCatalog`、idle-only
   模型配置切换、结构化兼容性确认，以及与配置更新同事务的
   `ModelConfigChanged` Session 事件。Run 内继续使用启动时冻结的配置。
-- 当前没有把 TailCompactor 宣称为所有 Agent 的默认算法，也没有实现 Slash/Web UI；
-  Session History 查询工具与 Gateway 命令呈现分别留在后续工具/交互批次。
+- 当前没有把 TailCompactor 宣称为所有 Agent 的默认算法，也没有实现 Web/TUI；
+  Session History 查询工具留在后续工具批次，Gateway 命令呈现进入阶段 8。
 
-### 阶段 8：真实传输、交互命令与生态适配
+### 阶段 8：InteractionCommand 与进程内 Gateway 呈现（已完成基础实现）
 
-- 测试进程内 Gateway 调用与至少一种跨进程适配器的业务语义一致，流式/非流式事实一致、
-  断线不停 Run、Snapshot/revision 重连。
-- 测试多 Workspace、多 Session 路由、权限和无内存句柄泄漏。
-- 测试 InteractionCommand 只注册一次到 Gateway、重复 key 构建失败；多个 Entrypoint
-  从同一命令目录分别渲染 `/model`、菜单和按钮，并最终调用同一
-  UpdateModelConfig 后端语义。
-- 用至少两个独立实现、真实消费者和兼容测试逐项推进成熟度。
+- 已实现统一命令目录、受限 CommandActions、显式安装的默认 `model` 命令和
+  `interaction/inprocess` 函数式 Entrypoint；重复命令 key 继续由 Build 拒绝。
+- 已验证多个 Entrypoint 获得同一个 GatewayAccess 和同一命令目录；显式 `/model`、菜单
+  与直接结构化调用最终执行同一个 UpdateModelConfig 后端事务。Slash 解析只存在于明确
+  协议适配器，不用自然语言关键字猜测命令。
+- 已实现 Gateway live EventStream、`SendAndWait` 非流式聚合和 Snapshot/revision 精确
+  重连握手；流式 commit 与聚合结果引用相同持久消息，断线/慢订阅者 overflow 不取消
+  Run，Session 事件不会串流。
+- EventStream 不持久化 chunk 或客户端 ACK；进程内缓存有安全上限。Web/RPC、生产可靠
+  投递、主体授权和完整跨进程协议不在本阶段冒充完成。
+- `interaction.entrypoint` 与 `interaction.command` 仍保持 Contracted；一个进程内实现和
+  一个默认命令不足以晋级 Conformant 或 Proven。
+
+### 阶段 9：真实 Provider、持久化与生态适配
+
+- 接入至少一个真实 Provider、一个真实 SessionStore 和一个 CLI/TUI 或 Web 传输适配器，
+  并让参考 Agent 只依赖标准 Slot 与 GatewayAccess，不按具体 Runtime 类型分支。
+- 接入 Policy/Approval、文件与 HTTP 等官方可选工具，以及 Trace、Metric、Audit、Usage
+  等观察组件；组件均保持显式安装和可替换。
+- 验证真实 Provider 的物理 Attempt、retry/continuation、用量事件与错误映射；验证
+  MemoryStore/FakeExecutor 路径和真实组件路径遵守同一核心不变量。
+- 完成 Bash、Session、Gateway、Runtime、Provider 的真实全链路。跨进程 wire protocol、
+  生产 ACK、企业部署和所有生态位 Proven 不作为本轮开发启动门禁，但实现到的适配器必须
+  有自己的合同、故障和并发测试。
 
 阶段 2 起所有可运行测试都必须经过固定 Gateway；后续阶段只是逐步把 Session、Runtime、
 模型、工具、Context 和真实适配器接入这条已经固定的边界。任何测试入口不得绕过 Gateway

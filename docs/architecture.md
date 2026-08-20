@@ -107,7 +107,10 @@ The runtime boundary below the Assembly is explicit:
 6. The fixed Gateway is shared by the Application and routes commands/events
    using `AgentID + WorkspaceID + SessionID + RunID`. Entrypoints receive only
    carrier-neutral Gateway access and never receive Runtime objects. In-process
-   adapters call it directly; only out-of-process adapters require RPC.
+   adapters call it directly; only out-of-process adapters require RPC. Live
+   subscriptions begin at an exact Snapshot revision; disconnect and stream
+   overflow do not cancel the Run. Non-streaming calls aggregate the same
+   durable Run facts rather than invoking a second execution path.
 
 ## Application host
 
@@ -301,10 +304,11 @@ fixed Gateway, private RuntimeAccess binding, per-Session AgentRuntime state
 machine, ToolDispatcher, Context assembly, controlled Hook execution, and
 idle-only model switching. Reference implementations currently include the
 in-memory Session aggregate, deterministic model executor, static model
-catalog, tail compactor, and explicitly installed Bash tool. It still defers:
+catalog, tail compactor, explicitly installed Bash tool, optional built-in
+`model` InteractionCommand, and function-style in-process Entrypoint. The fixed
+Gateway now provides live temporary/durable events, Snapshot/revision
+subscription, and non-stream aggregation. It still defers:
 
-- reconnectable Gateway streaming, non-stream aggregation, and the first
-  concrete Entrypoint/command set;
 - real Provider and production SessionStore adapters;
 - policy, approval, broader official tools, and operational sinks;
 - configuration schemas, secret resolution, and out-of-process adapters;

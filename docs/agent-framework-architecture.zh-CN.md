@@ -205,11 +205,15 @@ flowchart LR
   WebSocket、gRPC、ACP 等适配器映射相同语义。
 - 连接断开不会取消 Run；取消必须是显式命令。重连使用 Session Snapshot、revision 和
   后续持久事件，不持久化临时 chunk 游标或框架级客户端 ACK。
+- 当前进程内事件订阅要求从刚取得的 Snapshot revision 开始；若两步之间已有新提交则
+  返回 revision conflict 并重新取 Snapshot。慢订阅者超过固定内存安全上限时收到
+  overflow 并重连，不能让单个 UI 无界占用 Agent 进程内存。
 
 `interaction.command` 是可选 `Many` Slot，只向 Gateway 注册 UI-neutral 的结构化命令。
 Gateway 输出命令名称、字段、选项、确认要求、结果和后续动作；不同 Entrypoint 可以把
 同一个 `model` 命令渲染成 `/model`、菜单、按钮或表单。命令不能直接访问 Store 或
-Runtime，也不能实现第二套循环。
+Runtime，也不能实现第二套循环。框架提供显式安装的默认 `model` 命令和函数式进程内
+Entrypoint；二者都是对上述边界的参考实现，不会自动安装，也不把具体 UI 写进框架。
 
 ## 7. Session、AgentRuntime 与固定循环
 
@@ -291,7 +295,8 @@ stateDiagram-v2
   不能静默截断。
 
 `/model` 只是默认 InteractionCommand 的一种前端渲染，最终仍调用同一个 Gateway
-模型配置命令和同一笔 SessionStore 事务。
+模型配置命令和同一笔 SessionStore 事务。菜单、按钮或直接结构化 Go 调用读取并提交
+同一份命令数据，不存在另一套模型切换后端。
 
 ## 9. 可替换边界
 
@@ -351,8 +356,8 @@ flowchart TD
 - 每个 ToolCallID 只能有一个终态结果。崩溃后未知副作用写入
   `outcome_unknown`，不能自动重跑。
 - ContextVersion 安装必须校验来源 History/Queue revision；Compactor 不能直接写 Store。
-- ModelExecutor 的每次真实请求有 AttemptID，用量与运维事件可记录它，但 Session
-  History 只保存完整业务事实。
+- ModelExecutor 的每次真实请求有 AttemptID；临时 Gateway delta/reset 无损携带它，
+  用量与运维事件也可以记录它，但 Session History 只保存完整业务事实。
 - 半流失败可以由 Executor 重试、续传或终止；若已展示临时内容，发送 reset 撤销临时
   投影。临时 chunk 不持久化。
 - Session 持久化是核心事务，不能交给可选 Hook。Hook 失败记录后继续其他 Hook，不得

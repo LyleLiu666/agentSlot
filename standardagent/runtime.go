@@ -12,6 +12,7 @@ import (
 
 	agent "github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/interaction"
+	"github.com/LyleLiu666/agentSlot/model"
 	"github.com/LyleLiu666/agentSlot/session"
 )
 
@@ -364,6 +365,49 @@ func (c *runtimeCoordinator) close(ctx context.Context, id agent.SessionID) erro
 	return runtime.close(ctx)
 }
 
+func (c *runtimeCoordinator) models(ctx context.Context) ([]model.Descriptor, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var descriptors []model.Descriptor
+	seen := make(map[string]bool)
+	for _, named := range c.components.catalogs {
+		models, err := named.Value.Models(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, descriptor := range models {
+			if err := descriptor.Validate(); err != nil {
+				return nil, agent.NewError(agent.ErrorInternal, "gateway.available_models", "ModelCatalog returned an invalid descriptor", err)
+			}
+			if descriptor.ProviderKey != named.Key {
+				return nil, agent.NewError(agent.ErrorInternal, "gateway.available_models", "ModelCatalog descriptor provider does not match its Slot key", nil)
+			}
+			identity := descriptor.ProviderKey + "\x00" + descriptor.ModelID
+			if seen[identity] {
+				return nil, agent.NewError(agent.ErrorInternal, "gateway.available_models", "ModelCatalog returned a duplicate model identity", nil)
+			}
+			seen[identity] = true
+			descriptors = append(descriptors, cloneModelDescriptor(descriptor))
+		}
+	}
+	sort.Slice(descriptors, func(i, j int) bool {
+		if descriptors[i].ProviderKey != descriptors[j].ProviderKey {
+			return descriptors[i].ProviderKey < descriptors[j].ProviderKey
+		}
+		return descriptors[i].ModelID < descriptors[j].ModelID
+	})
+	return descriptors, nil
+}
+
+func cloneModelDescriptor(source model.Descriptor) model.Descriptor {
+	copy := source
+	copy.Capabilities.Media.InputModalities = append([]model.Modality(nil), source.Capabilities.Media.InputModalities...)
+	copy.Capabilities.Media.OutputModalities = append([]model.Modality(nil), source.Capabilities.Media.OutputModalities...)
+	copy.Capabilities.Reasoning = append([]model.Reasoning(nil), source.Capabilities.Reasoning...)
+	return copy
+}
+
 func opened(runtime runtimeAccess) interaction.SessionOpened {
 	return interaction.SessionOpened{SessionID: runtime.id(), Revision: runtime.revision()}
 }
@@ -403,6 +447,7 @@ type runtimeInstance struct {
 	sequence      atomic.Uint64
 	revisionValue atomic.Uint64
 	observer      *hookObserver
+	events        *eventHub
 }
 
 func newRuntimeInstance(s session.Session, components *runtimeComponents) (*runtimeInstance, error) {
@@ -420,7 +465,7 @@ func newRuntimeInstance(s session.Session, components *runtimeComponents) (*runt
 	close(idleSignal)
 	runtime := &runtimeInstance{
 		session: s, components: components, state: runtimeIdle,
-		idleSignal: idleSignal, closeDone: make(chan struct{}), prefix: hex.EncodeToString(prefixBytes),
+		idleSignal: idleSignal, closeDone: make(chan struct{}), prefix: hex.EncodeToString(prefixBytes), events: newEventHub(),
 	}
 	runtime.revisionValue.Store(uint64(s.Revision()))
 	if !runtime.id().Valid() {
@@ -463,8 +508,23 @@ func (r *runtimeInstance) snapshot(ctx context.Context, request interaction.Snap
 	}, nil
 }
 
-func (r *runtimeInstance) subscribe(context.Context, interaction.SubscribeRequest) (interaction.EventStream, error) {
-	return nil, runtimeUnavailable("gateway.subscribe")
+func (r *runtimeInstance) subscribe(ctx context.Context, request interaction.SubscribeRequest) (interaction.EventStream, error) {
+	if request.SessionID != r.id() {
+		return nil, invalidInput("gateway.subscribe", "SessionID is required")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.ensureOpenLocked("gateway.subscribe"); err != nil {
+		return nil, err
+	}
+	snapshot, err := r.viewLocked(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if request.AfterRevision != snapshot.Revision {
+		return nil, agent.NewCodedError(agent.ErrorConflict, agent.CodeRevisionConflict, "gateway.subscribe", "subscriber must first obtain the current Session Snapshot", nil)
+	}
+	return r.events.subscribe()
 }
 
 func notStartedError() error {

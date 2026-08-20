@@ -136,6 +136,12 @@ func TestInteractionCommandCannotRetainActionsAfterInvocation(t *testing.T) {
 	if !agent.IsCode(err, agent.CodeRuntimeClosed) {
 		t.Fatalf("retained action error = %v, code=%q", err, agent.CodeOf(err))
 	}
+	if _, err := command.actions.CurrentModelConfig(context.Background()); !agent.IsCode(err, agent.CodeRuntimeClosed) {
+		t.Fatalf("retained model query error = %v, code=%q", err, agent.CodeOf(err))
+	}
+	if _, err := command.actions.AvailableModels(context.Background()); !agent.IsCode(err, agent.CodeRuntimeClosed) {
+		t.Fatalf("retained catalog query error = %v, code=%q", err, agent.CodeOf(err))
+	}
 }
 
 func TestCommandActionsAreBoundToInvocationSession(t *testing.T) {

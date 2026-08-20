@@ -85,6 +85,14 @@ func (b *gatewayBinding) Send(ctx context.Context, request interaction.SendReque
 	return target.Send(ctx, request)
 }
 
+func (b *gatewayBinding) SendAndWait(ctx context.Context, request interaction.SendRequest) (interaction.RunResult, error) {
+	target, err := b.access()
+	if err != nil {
+		return interaction.RunResult{}, err
+	}
+	return target.SendAndWait(ctx, request)
+}
+
 func (b *gatewayBinding) Steer(ctx context.Context, request interaction.SteerRequest) (interaction.EnqueueReceipt, error) {
 	target, err := b.access()
 	if err != nil {

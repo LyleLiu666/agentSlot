@@ -248,12 +248,14 @@ AgentSlot 禁止反射扫描、`init()` 自动注册和隐藏的全局组件容�
 ### 当前开发进度
 
 通用 Assembly、标准 Slot 合同、固定 Gateway/Runtime 主骨架、Session 内存参考实现、
-固定执行状态机、ToolDispatcher/Bash，以及 Context/Hook/模型配置交互批次已经完成。
+固定执行状态机、ToolDispatcher/Bash、Context/Hook/模型配置交互，以及第一批 Gateway
+命令与呈现批次已经完成。
 当前 Runtime 会安装版本化 Context、执行可替换 Source/Compactor、校验模型协议和硬
 Token 上限，并通过 Gateway 在 idle 状态完成带兼容性确认的模型切换。`ModelCatalog`
-是第 10 个进入 Contracted 的生态位。所有这些仍是开发与合同证据：尚无生态位达到
-Conformant 或 Proven，下一批是统一 InteractionCommand、进程内 Entrypoint、Gateway
-流式/聚合与 revision 重连，不把真实部署条件作为开发门禁。
+是第 10 个进入 Contracted 的生态位。框架现已提供显式安装的 `model` 命令、函数式
+进程内 Entrypoint、Gateway live event、非流式同 Run 聚合和 Snapshot/revision 重连。
+所有这些仍是开发与合同证据：尚无生态位达到 Conformant 或 Proven；下一批是真实
+Provider、持久 Store、传输适配器和观察/策略生态，不把完整生产部署条件作为开发门禁。
 
 ## 9. 参考实现分三层
 
@@ -340,7 +342,7 @@ AgentSlot 参考这些行为，不复制 pi 的类型、聚合 Session 或产品
 - 验证 running 拒绝更新、Cancel/WhenIdle 后更新、CAS 冲突、跨 Provider 切换、
   兼容性确认和单个 Run 配置不变；
 - 已验证一个 Application Assembly 下的零 Tool、模型流接入、多 Session 隔离和 Runtime
-  idle 常驻；Gateway 对外流式事件在专门批次完成；
+  idle 常驻；Gateway 对外流式/聚合与重连已在后续交互批次完成；
 - 已验证正常完成自动 FIFO，取消、错误和重启后回到 idle 且不自动消费旧 Queue；
 - Run 开始和终态作为 append-only History 事实记录冻结的模型配置及来源 revision，临时
   chunk/reset 不持久化。
@@ -365,9 +367,10 @@ AgentSlot 参考这些行为，不复制 pi 的类型、聚合 Session 或产品
 - Environment、Artifact 和 Credential；
 - Memory、Checkpoint、Workflow 和多 Agent；
 - 固定 Gateway、GatewayAccess、Entrypoint 和私有 RuntimeAccess 已在应用运行骨架阶段
-  建立；本阶段完成 Gateway 传输/身份/路由/投递适配组件、InteractionCommand 和控制命令；
-- 验证 Entrypoint 只能通过 GatewayAccess 接入，进程内直调与跨进程适配语义一致，
-  多种 UI 从同一命令目录渲染并执行同一后端命令；
+  建立；InteractionCommand、默认 `model` 命令、进程内 Entrypoint 和流式/聚合重连也已
+  完成基础实现。本阶段继续完成 Gateway 传输/身份/路由/投递适配组件和控制命令；
+- 已验证 Entrypoint 只能通过 GatewayAccess 接入，多种 UI 表达从同一命令目录执行同一
+  后端命令；下一步以真实跨进程适配器验证 wire 映射不改变这套业务语义；
 - Usage、Billing、Quota、Audit、Trace、Metric 和 Health。
 
 每个阶段只按已经取得的成熟度记分，不因为写了空接口、空 Module 或示例文件就

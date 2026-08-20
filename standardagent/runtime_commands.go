@@ -201,6 +201,7 @@ func (r *runtimeInstance) finishClose(runDone <-chan struct{}) {
 		<-runDone
 	}
 	r.observer.stop()
+	r.events.close()
 	r.mu.Lock()
 	if r.state != runtimeClosed {
 		r.state = runtimeClosed

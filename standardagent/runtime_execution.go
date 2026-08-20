@@ -9,6 +9,7 @@ import (
 
 	agent "github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/hook"
+	"github.com/LyleLiu666/agentSlot/interaction"
 	"github.com/LyleLiu666/agentSlot/model"
 	"github.com/LyleLiu666/agentSlot/session"
 	"github.com/LyleLiu666/agentSlot/tool"
@@ -101,9 +102,10 @@ func (r *runtimeInstance) executeStep(run *activeRun, step agent.StepID) (stepOu
 			return stepFailed, ""
 		}
 		switch event.Kind {
-		case model.EventDelta, model.EventReset:
-			// Temporary output is intentionally not a Session fact. Gateway
-			// publication is added in its dedicated streaming round.
+		case model.EventDelta:
+			r.events.publish(interaction.Event{Kind: interaction.EventChunk, SessionID: r.id(), RunID: run.id, StepID: step, AttemptID: event.AttemptID, Text: event.Text})
+		case model.EventReset:
+			r.events.publish(interaction.Event{Kind: interaction.EventReset, SessionID: r.id(), RunID: run.id, StepID: step, AttemptID: event.AttemptID})
 		case model.EventFailed:
 			return stepFailed, ""
 		case model.EventComplete:
@@ -358,6 +360,7 @@ func (r *runtimeInstance) recoverAfterRunFailureLocked(run *activeRun) {
 		r.state = runtimeClosed
 		r.closing = true
 		r.observer.stop()
+		r.events.close()
 		close(r.closeDone)
 		return
 	}
@@ -427,7 +430,32 @@ func (r *runtimeInstance) commitLocked(ctx context.Context, expected agent.Revis
 	}
 	r.revisionValue.Store(uint64(commit.Revision))
 	r.observer.publish(hook.CommitView{SessionID: r.id(), RunID: runIDForCommit(changes), Revision: commit.Revision})
+	r.publishCommitEvents(commit.Revision, changes)
 	return commit, nil
+}
+
+func (r *runtimeInstance) publishCommitEvents(revision agent.Revision, changes []session.Change) {
+	runID := runIDForCommit(changes)
+	published := false
+	for _, change := range changes {
+		if change.Message == nil {
+			continue
+		}
+		message := *change.Message
+		message.Parts = cloneRuntimeParts(message.Parts)
+		r.events.publish(interaction.Event{Kind: interaction.EventCommitted, SessionID: r.id(), RunID: message.RunID, StepID: message.StepID, Revision: revision, Message: &message})
+		published = true
+	}
+	kind := interaction.EventCommitted
+	for _, change := range changes {
+		if change.RunState != nil {
+			kind = interaction.EventState
+			break
+		}
+	}
+	if !published || kind == interaction.EventState {
+		r.events.publish(interaction.Event{Kind: kind, SessionID: r.id(), RunID: runID, Revision: revision})
+	}
 }
 
 func (r *runtimeInstance) ensureOpenLocked(operation string) error {

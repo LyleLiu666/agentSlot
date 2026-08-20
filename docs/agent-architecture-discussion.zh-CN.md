@@ -193,9 +193,9 @@ RuntimeCoordinator 只操作注册表，不拥有它。
 
 - **问题 / 背景：** 临时 chunk 不持久化，客户端仍需要在重连后恢复一致界面。
 - **最终决定：** 重连时读取 Session Snapshot 和持久化 revision；AgentSlot 不保存临时 chunk 游标，也不保存框架级客户端 ACK 或消费游标。
-- **必须满足的不变量：** Snapshot 只包含已提交事实和当前状态；客户端以 revision 去重和替换本地临时内容；传输回执不能改变 History、Context、Run 或业务完成状态。
+- **必须满足的不变量：** Snapshot 只包含已提交事实和当前状态；客户端以 revision 去重和替换本地临时内容；传输回执不能改变 History、Context、Run 或业务完成状态。实时订阅缓存必须有内存安全边界，落后时明确 overflow 并要求重连，不能静默丢失持久事实或无界增长。
 - **否决的方案及原因：** 把每客户端 ACK 或游标放进 SessionStore，会把展示与传输状态变成核心业务状态，并带来客户端身份、租期和无界清理问题。
-- **对接口、存储、Gateway 和实现的影响：** Gateway 提供 Snapshot 查询和后续事件流；客户端发现 revision 缺口时重新拉 Snapshot。具体传输适配器或外部消息系统可以自行实现可靠投递，但不新增标准 ACK Slot。
+- **对接口、存储、Gateway 和实现的影响：** Gateway 提供 Snapshot 查询和后续事件流；Subscribe 只接受刚取得的当前 revision，两步之间发生提交则返回 conflict 并重新拉 Snapshot。订阅断开或 overflow 不取消 Run。具体传输适配器或外部消息系统可以自行实现可靠投递，但不新增标准 ACK Slot。
 - **状态：** 已确定。
 
 ## 5. Session 的三个业务视图
@@ -494,8 +494,9 @@ RuntimeCoordinator 只操作注册表，不拥有它。
 - **必须满足的不变量：** InteractionCommand 不解析 `/name`、HTTP 或其他 wire 文本，不渲染具体 UI；它只能调用 Gateway 提供的受控后端能力，不能直接访问 SessionStore、取得 RuntimeAccess、改变 Runtime 状态机或实现模型循环。可移植描述只使用有限、稳定的字段和交互词汇；产品专属复杂界面可以扩展前端，但最终操作仍必须提交给 Gateway。重复 key 在 Build 阶段失败。
 - **否决的方案及原因：** `slash.command` 会把某一种 UI 语法提升为领域架构；让 Entrypoint 直接消费 InteractionCommand 会复制目录、权限、确认和执行规则；宣称任意命令都能自动生成任意 UI 会形成不可维护的万能 Schema。
 - **对接口、存储、Gateway 和实现的影响：** `model` 命令可依赖 ModelCatalog 产生候选项，读取 SessionModelConfig，并在用户确认后通过 Gateway 调用 `UpdateModelConfig`。框架可以提供默认实现，但不把它硬编码进 AgentRuntime；Agent 项目可安装、替换或省略。Entrypoint 只负责把 Gateway 描述映射到具体 UI 或传输。
-- **状态：** 已确定；`interaction.command` 已进入 Contracted，默认 `model` 命令和首个
-  具体 UI/Entrypoint 仍在交互批次实现。
+- **状态：** 已确定；`interaction.command` 已进入 Contracted。框架已提供显式安装的
+  `model` 命令和函数式进程内 Entrypoint，验证 Slash、菜单和结构化调用共享同一个
+  Gateway 后端；具体 Web/TUI 和跨进程协议仍由后续适配器实现。
 
 ### A-048 模型兼容性处理不得改写 Session 事实
 

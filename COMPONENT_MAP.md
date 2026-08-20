@@ -303,9 +303,17 @@ UI-neutral command directory and structured invocation contract. An Entrypoint
 may render the stable key `model` as `/model`, a menu, a button, or a form, but
 does not execute a separate command implementation. InteractionCommand cannot
 access SessionStore, Runtime access, or the model/tool loop directly.
+The framework currently provides an explicitly installed built-in `model`
+command and a function-style `interaction/inprocess` Entrypoint as reference
+implementations. Importing either package installs nothing, and one reference
+implementation does not advance either ecosystem beyond Contracted maturity.
 
 AgentSlot standardizes neither transient-chunk cursors nor client ACK cursors.
-Reconnect uses a client revision and Session Snapshot. A concrete transport
+Reconnect uses a client revision and Session Snapshot, followed by a live
+subscription from that exact current revision. A disconnect never cancels the
+Run; a subscriber that exceeds the bounded in-process event buffer is closed
+explicitly and reconnects through Snapshot instead of consuming unbounded
+memory. A concrete transport
 adapter or external messaging system may keep private reliable-delivery state, but that
 state is not a standard Slot or Session fact and cannot change run completion.
 

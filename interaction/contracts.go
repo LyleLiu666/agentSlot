@@ -5,9 +5,11 @@ package interaction
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	agentslot "github.com/LyleLiu666/agentSlot"
 	agent "github.com/LyleLiu666/agentSlot/agent"
+	"github.com/LyleLiu666/agentSlot/model"
 	"github.com/LyleLiu666/agentSlot/session"
 )
 
@@ -37,6 +39,7 @@ type GatewayAccess interface {
 	ForkSession(context.Context, ForkSessionRequest) (SessionOpened, error)
 	StartSessionFromSummary(context.Context, SummarySessionRequest) (SessionOpened, error)
 	Send(context.Context, SendRequest) (EnqueueReceipt, error)
+	SendAndWait(context.Context, SendRequest) (RunResult, error)
 	Steer(context.Context, SteerRequest) (EnqueueReceipt, error)
 	RunPending(context.Context, RunPendingRequest) (RunReceipt, error)
 	Cancel(context.Context, CancelRequest) error
@@ -116,6 +119,18 @@ type EnqueueReceipt struct {
 	Revision  agent.Revision
 }
 
+// RunResult is the non-streaming Gateway wrapper around the same durable Run.
+// AssistantMessages contains every complete assistant message from that Run;
+// temporary chunks never appear here.
+type RunResult struct {
+	SessionID         agent.SessionID
+	RunID             agent.RunID
+	InputMessageID    agent.MessageID
+	Revision          agent.Revision
+	Outcome           session.RunFactKind
+	AssistantMessages []agent.Message
+}
+
 type RunPendingRequest struct {
 	SessionID        agent.SessionID
 	ExpectedRevision agent.Revision
@@ -187,12 +202,17 @@ type SnapshotRequest struct {
 
 type SubscribeRequest struct {
 	SessionID     agent.SessionID
+	// AfterRevision must equal the current revision returned by Snapshot.
+	// A conflict means a commit occurred between Snapshot and Subscribe and
+	// the caller must repeat that handshake.
 	AfterRevision agent.Revision
 }
 
 // EventStream is the reconnectable Gateway event boundary. Temporary chunks
 // are not durable cursors; a reconnect starts from the requested snapshot
-// revision and then receives available durable events.
+// revision and then receives live events. A slow subscriber may receive
+// ErrEventStreamOverflow and must repeat Snapshot/Subscribe; neither overflow
+// nor Close cancels the Run.
 type EventStream interface {
 	Recv(context.Context) (Event, error)
 	Close() error
@@ -201,10 +221,20 @@ type EventStream interface {
 type Event struct {
 	Kind      EventKind
 	SessionID agent.SessionID
+	RunID     agent.RunID
+	StepID    agent.StepID
+	// AttemptID identifies temporary output from one physical provider
+	// attempt. It is not a durable Session fact.
+	AttemptID string
 	Revision  agent.Revision
 	Message   *agent.Message
 	Text      string
 }
+
+var (
+	ErrEventStreamClosed   = errors.New("interaction: event stream closed")
+	ErrEventStreamOverflow = errors.New("interaction: event stream subscriber fell behind")
+)
 
 type EventKind string
 
@@ -286,6 +316,8 @@ type CommandInvocation struct {
 // CommandInvocation scope. It intentionally has no target field or
 // InvokeCommand method, preventing cross-Session or recursive dispatch.
 type CommandActions interface {
+	CurrentModelConfig(context.Context) (ModelConfigView, error)
+	AvailableModels(context.Context) ([]model.Descriptor, error)
 	Apply(context.Context, ActionRequest) (ActionResult, error)
 }
 

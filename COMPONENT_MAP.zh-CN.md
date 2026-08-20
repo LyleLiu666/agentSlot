@@ -270,9 +270,14 @@ Context，绝不能改写 History。
 调用合同。Entrypoint 可以把 `model` 渲染为 `/model`、菜单、按钮或表单，但不能执行
 另一套命令实现。InteractionCommand 不能直接访问 SessionStore、RuntimeAccess 或
 模型/工具循环。
+框架当前提供显式安装的内置 `model` 命令和函数式 `interaction/inprocess` Entrypoint
+作为参考实现；import 不会自动安装组件，单个参考实现也不足以让任一生态位超过
+“已定义契约”成熟度。
 
 AgentSlot 不标准化临时 chunk 游标或客户端 ACK 游标。重连使用客户端 revision
-与 Session Snapshot。具体传输适配器或外部消息系统可以私有保存可靠投递状态，
+与 Session Snapshot，并从该 Snapshot 的当前 revision 建立实时订阅。断线不会取消
+Run；超过有界进程内事件缓存的慢订阅者会被明确关闭并通过 Snapshot 重连，而不是
+无界占用内存。具体传输适配器或外部消息系统可以私有保存可靠投递状态，
 但它不是标准 Slot 或 Session 事实，也不能改变 Run 完成状态。
 
 ### 9. 用量与计费
