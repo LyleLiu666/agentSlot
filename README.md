@@ -10,19 +10,10 @@ Typed component slots and deterministic composition for agent systems.
 > authoritative inventory of customizable agent components, their Slot IDs,
 > cardinality, profile requirements, and implementation maturity.
 
-> **Implementation roadmap:**
-> [AgentSlot 组件接口标准化路线图（中文）](ROADMAP.zh-CN.md). It defines the
-> business outcomes, admission rules, reference-agent layers, implementation
-> order, and release gate for turning mapped responsibilities into proven
-> component ecosystems.
-
 > **Release history:** [CHANGELOG](CHANGELOG.md). Pre-1.0 validation releases
 > are intended for real-project feedback and do not promise API stability.
 
-> **Agent runtime decisions and implementation design:**
-> [Agent 设计的架构讨论](docs/agent-architecture-discussion.zh-CN.md) |
-> [Agent 框架全景架构](docs/agent-framework-architecture.zh-CN.md) |
-> [AgentRuntime 与标准 Slot 实施计划](docs/agent-runtime-standard-slots-implementation-plan.zh-CN.md).
+> **Architecture:** [Composition and runtime architecture](docs/architecture.md).
 
 > A module unifies registration and lifecycle. A slot defines the component ecosystem, interface, cardinality, and ordering rule.
 
@@ -45,12 +36,12 @@ vary.
 ## Status
 
 AgentSlot is a pre-1.0 foundation. `v0.0.2` is the first validation release of
-the complete reference Agent path: it is intended to be consumed by real Agent
-projects so the current contracts can be tested outside this repository. It is
-not a stable-production claim, and public APIs may still change based on that
-evidence. The composition core works today; the standard component map is
-normative, while its ecosystems remain at their explicitly recorded maturity.
-Every published tag is immutable; later changes receive a new semantic version.
+the complete reference Agent path and is intended to be consumed by real Agent
+projects. It is not a stable-production claim, and public APIs may still change
+based on integration feedback. The composition core works today; the standard
+component map is normative, while its ecosystems remain at their explicitly
+recorded maturity. Every published tag is immutable; later changes receive a
+new semantic version.
 
 The project's architectural result is the quality of its component map, not a
 large interface count. Each accepted ecosystem must have a clear boundary,
@@ -395,11 +386,12 @@ defaults.
 
 ```sh
 gofmt -w .
-go test -race ./...
+go build ./...
 go vet ./...
 ```
 
-Read [docs/architecture.md](docs/architecture.md) and the [Agent framework panorama](docs/agent-framework-architecture.zh-CN.md) before changing the public composition model.
+Read [docs/architecture.md](docs/architecture.md) before changing the public
+composition model.
 
 ## License
 

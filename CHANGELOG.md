@@ -24,7 +24,7 @@ or ecosystem-maturity claim.
 - Reference in-memory and crash-safe file Session stores, deterministic and
   OpenAI-compatible executors, CLI and in-process channels, Bash/file/HTTP tools,
   tail compaction, policy/approval implementations, and JSON Lines observation.
-- An end-to-end reference Agent test covering the path from Gateway channel to
+- An end-to-end reference Agent demonstrating the path from Gateway channel to
   Runtime, Provider, tool execution, persistent Session, resume, View, and
   History pagination.
 

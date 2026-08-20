@@ -2,8 +2,8 @@
 
 [English](COMPONENT_MAP.md) | [简体中文](COMPONENT_MAP.zh-CN.md)
 
-For complete object ownership, the Gateway spine, and package dependency
-direction, read the [Agent framework panorama](docs/agent-framework-architecture.zh-CN.md).
+For object ownership, the Gateway spine, and package dependency direction, read
+the public [architecture](docs/architecture.md).
 
 This document is the authoritative map of the customization seams in a
 composable LLM agent. It is a primary AgentSlot asset, not a list of whatever

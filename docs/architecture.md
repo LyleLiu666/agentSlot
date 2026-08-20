@@ -11,10 +11,8 @@ boundaries only as their portability is proven.
 
 The authoritative inventory of boundaries, Slot IDs, cardinality, profile
 requirements, and maturity is the [Standard Component Map](../COMPONENT_MAP.md).
-The complete standard-Agent topology is documented in the [Agent framework
-panorama](agent-framework-architecture.zh-CN.md). This document focuses on the
-generic composition core; it must not be read as a second, partial definition
-of Gateway or AgentRuntime ownership.
+This document defines the public ownership model, composition core, fixed
+Gateway and AgentRuntime boundary, and package dependency direction.
 
 The central distinction is:
 

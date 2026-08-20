@@ -2,7 +2,7 @@
 
 [English](COMPONENT_MAP.md) | [简体中文](COMPONENT_MAP.zh-CN.md)
 
-完整对象所有权、Gateway 主链路和包依赖请先阅读[Agent 框架全景架构](docs/agent-framework-architecture.zh-CN.md)。
+对象所有权、Gateway 主链路和包依赖请先阅读公开的[架构说明](docs/architecture.md)。
 
 本文档是可组合 LLM Agent 定制边界的权威地图。它是 AgentSlot 的核心资产，
 不是对某一个实现中已有接口的简单罗列。
