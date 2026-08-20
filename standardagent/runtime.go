@@ -520,6 +520,11 @@ func newRuntimeInstance(s session.Session, components *runtimeComponents) (*runt
 		Kind: observe.TraceRuntimeOpened, At: time.Now().UTC(),
 		Identity: observe.Identity{SessionID: runtime.id(), Actor: serviceObservationActor("agent-runtime")},
 	})
+	if err := runtime.restorePreparedRun(); err != nil {
+		runtime.commitObserver.stop()
+		runtime.events.close()
+		return nil, err
+	}
 	return runtime, nil
 }
 

@@ -402,8 +402,8 @@ func validateFileDocument(id agent.SessionID, document fileStoreDocument) error 
 		if err := entry.Validate(id); err != nil {
 			return err
 		}
-		if entry.Status == JournalPending && (snapshot.RunState != RunRunning || entry.RunID != snapshot.ActiveRunID) {
-			return errors.New("pending journal does not belong to the active run")
+		if unfinishedJournal(entry.Status) && (snapshot.RunState != RunRunning || entry.RunID != snapshot.ActiveRunID) {
+			return errors.New("unfinished journal does not belong to the active run")
 		}
 	}
 	if err := validateContext(snapshot.Context, id); err != nil {

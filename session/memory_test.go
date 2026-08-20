@@ -298,6 +298,40 @@ func TestMemoryStoreRecoveryPairsUnknownOutcomeAndEndsRunOnce(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreRecoveryPreservesPreparedToolCallForSafeResume(t *testing.T) {
+	store := session.NewMemoryStore()
+	assistant := message("assistant-prepared", "prepared-session", agent.RoleAssistant, "calling")
+	assistant.RunID, assistant.StepID = "run-prepared", "step-prepared"
+	call := agent.ToolCall{
+		ID: "call-prepared", MessageID: assistant.ID, SessionID: assistant.SessionID,
+		RunID: assistant.RunID, StepID: assistant.StepID, Name: "effect", Arguments: []byte(`{}`),
+	}
+	started := session.RunFact{
+		SessionID: assistant.SessionID, RunID: call.RunID, Kind: session.RunStarted,
+		ModelConfig: defaultConfig(), ConfigRevision: 1,
+	}
+	prepared := session.JournalEntry{RunID: call.RunID, StepID: call.StepID, ToolCall: &call, Status: session.JournalPrepared}
+	created, err := store.Create(context.Background(), session.NewSession{
+		Session:    agent.Session{ID: assistant.SessionID, AgentID: "agent-1", WorkspaceID: "workspace-1"},
+		History:    []session.HistoryFact{{Run: &started}, {Message: &assistant}, {ToolCall: &call}},
+		RunJournal: []session.JournalEntry{prepared}, ModelConfig: defaultConfig(),
+		RunState: session.RunRunning, ActiveRunID: call.RunID,
+	})
+	if err != nil {
+		t.Fatalf("create prepared aggregate: %v", err)
+	}
+	recovered, err := store.Recover(context.Background(), session.SessionRef{SessionID: created.Session.ID})
+	if err != nil {
+		t.Fatalf("recover: %v", err)
+	}
+	if recovered.Revision != created.Revision || recovered.RunState != session.RunRunning || recovered.ActiveRunID != call.RunID {
+		t.Fatalf("recovered state = revision %d, %q/%q", recovered.Revision, recovered.RunState, recovered.ActiveRunID)
+	}
+	if len(recovered.History) != 3 || recovered.RunJournal[0].Status != session.JournalPrepared {
+		t.Fatalf("prepared call was rewritten during recovery: %#v %#v", recovered.History, recovered.RunJournal)
+	}
+}
+
 func TestMemoryStoreRecoveryAppendsInterruptedRunFactWithFrozenConfig(t *testing.T) {
 	store, snapshot := newStoredSession(t, "interrupted-run-session")
 	run := session.RunFact{

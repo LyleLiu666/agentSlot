@@ -46,6 +46,73 @@ func (r *activeRun) signalPrepared(revision agent.Revision) {
 	})
 }
 
+// restorePreparedRun reconstructs only the safe, pre-execution portion of an
+// interrupted Run. SessionStore recovery has already converted every call
+// that may have crossed the execution boundary to outcome_unknown.
+func (r *runtimeInstance) restorePreparedRun() error {
+	snapshot, err := r.session.View(context.Background())
+	if err != nil {
+		return err
+	}
+	if snapshot.RunState != session.RunRunning {
+		return nil
+	}
+	calls := make([]agent.ToolCall, 0)
+	var step agent.StepID
+	for _, entry := range snapshot.RunJournal {
+		if entry.Status != session.JournalPrepared || entry.RunID != snapshot.ActiveRunID || entry.ToolCall == nil {
+			continue
+		}
+		if step.Valid() && step != entry.StepID {
+			return agent.NewError(agent.ErrorInternal, "standardagent.restore", "prepared ToolCalls span multiple steps", nil)
+		}
+		step = entry.StepID
+		calls = append(calls, *entry.ToolCall)
+	}
+	if len(calls) == 0 || !step.Valid() {
+		return agent.NewError(agent.ErrorInternal, "standardagent.restore", "running Session has no resumable prepared ToolCall", nil)
+	}
+	var started *session.RunFact
+	var usedTokens int64
+	for _, fact := range snapshot.History {
+		if fact.Run != nil && fact.Run.RunID == snapshot.ActiveRunID && fact.Run.Kind == session.RunStarted {
+			copy := *fact.Run
+			started = &copy
+		}
+		if fact.ModelAttempt != nil && fact.ModelAttempt.RunID == snapshot.ActiveRunID && fact.ModelAttempt.Kind != session.AttemptStarted {
+			usedTokens += fact.ModelAttempt.Usage.TotalTokens
+		}
+	}
+	if started == nil {
+		return agent.NewError(agent.ErrorInternal, "standardagent.restore", "prepared Run has no RunStarted fact", nil)
+	}
+	runContext, cancel := context.WithCancel(context.Background())
+	run := &activeRun{
+		id: snapshot.ActiveRunID, config: cloneRuntimeConfig(started.ModelConfig), configRevision: started.ConfigRevision,
+		ctx: runContext, cancel: cancel, done: make(chan struct{}), prepared: make(chan struct{}), usedTokens: usedTokens,
+	}
+	r.activateLocked(run)
+	run.signalPrepared(snapshot.Revision)
+	go r.resumePreparedCalls(run, calls)
+	return nil
+}
+
+func (r *runtimeInstance) resumePreparedCalls(run *activeRun, calls []agent.ToolCall) {
+	results := r.components.dispatcher.dispatchPrepared(run.ctx, calls, func(call agent.ToolCall) error {
+		return r.markToolExecuting(run, call)
+	})
+	next, canceled, err := r.commitToolResults(run, calls, results)
+	if err != nil {
+		r.finishRun(run, stepFailed)
+		return
+	}
+	if canceled {
+		r.finishRun(run, stepCanceled)
+		return
+	}
+	r.runLoop(run, next)
+}
+
 type stepOutcome uint8
 
 const (
@@ -150,7 +217,9 @@ func (r *runtimeInstance) executeStep(run *activeRun, step agent.StepID) (stepOu
 				return stepFailed, ""
 			}
 			if len(calls) > 0 {
-				results := r.components.dispatcher.dispatch(run.ctx, calls)
+				results := r.components.dispatcher.dispatchPrepared(run.ctx, calls, func(call agent.ToolCall) error {
+					return r.markToolExecuting(run, call)
+				})
 				next, canceled, err := r.commitToolResults(run, calls, results)
 				if err != nil {
 					return stepFailed, ""
@@ -173,6 +242,27 @@ func (r *runtimeInstance) executeStep(run *activeRun, step agent.StepID) (stepOu
 			return stepNatural, ""
 		}
 	}
+}
+
+// markToolExecuting is the durable point of no automatic return. Before this
+// commit a published ToolCall may be authorized again after recovery; after
+// it, recovery must report outcome_unknown instead of risking a duplicate
+// side effect.
+func (r *runtimeInstance) markToolExecuting(run *activeRun, call agent.ToolCall) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active != run || run.cancelRequested || r.closing {
+		return context.Canceled
+	}
+	snapshot, err := r.viewLocked(context.Background())
+	if err != nil {
+		return err
+	}
+	pending := session.JournalEntry{
+		RunID: call.RunID, StepID: call.StepID, ToolCall: &call, Status: session.JournalPending,
+	}
+	_, err = r.commitLocked(context.Background(), snapshot.Revision, "tool-executing", []session.Change{{Kind: session.UpdateRunJournal, Journal: &pending}})
+	return err
 }
 
 type runtimeAttemptRecorder struct {
@@ -323,10 +413,10 @@ func (r *runtimeInstance) commitCompletion(run *activeRun, step agent.StepID, ou
 			RunID: run.id, StepID: step, CorrelationID: requested.CorrelationID,
 			Name: requested.Name, Arguments: append([]byte(nil), requested.Arguments...),
 		}
-		pending := session.JournalEntry{RunID: run.id, StepID: step, ToolCall: &call, Status: session.JournalPending}
+		prepared := session.JournalEntry{RunID: run.id, StepID: step, ToolCall: &call, Status: session.JournalPrepared}
 		changes = append(changes,
 			session.Change{Kind: session.AppendToolCall, ToolCall: &call},
-			session.Change{Kind: session.UpdateRunJournal, Journal: &pending},
+			session.Change{Kind: session.UpdateRunJournal, Journal: &prepared},
 		)
 		calls = append(calls, call)
 	}

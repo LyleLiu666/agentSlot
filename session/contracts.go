@@ -487,6 +487,12 @@ type RunStateChange struct {
 type JournalStatus string
 
 const (
+	// JournalPrepared means the ToolCall is durable but the execution boundary
+	// has not been crossed. Policy and approval may be evaluated in this state,
+	// so recovery can safely resume the original call.
+	JournalPrepared JournalStatus = "prepared"
+	// JournalPending means execution may have started. Recovery must never
+	// invoke this call again and resolves it as outcome_unknown instead.
 	JournalPending        JournalStatus = "pending"
 	JournalSucceeded      JournalStatus = "succeeded"
 	JournalFailed         JournalStatus = "failed"
@@ -496,7 +502,7 @@ const (
 // Valid reports whether a journal entry has one standard terminal or pending
 // status.
 func (s JournalStatus) Valid() bool {
-	return s == JournalPending || s == JournalSucceeded || s == JournalFailed || s == JournalOutcomeUnknown
+	return s == JournalPrepared || s == JournalPending || s == JournalSucceeded || s == JournalFailed || s == JournalOutcomeUnknown
 }
 
 // JournalEntry identifies a recoverable run or tool operation.
@@ -518,9 +524,9 @@ func (e JournalEntry) Validate(sessionID agent.SessionID) error {
 	if !e.ToolCall.Valid() || e.ToolCall.SessionID != sessionID || e.ToolCall.RunID != e.RunID || e.ToolCall.StepID != e.StepID {
 		return fmt.Errorf("session: journal tool call containment is invalid")
 	}
-	if e.Status == JournalPending {
+	if e.Status == JournalPrepared || e.Status == JournalPending {
 		if e.ToolResult != nil {
-			return fmt.Errorf("session: pending journal cannot carry a result")
+			return fmt.Errorf("session: unfinished journal cannot carry a result")
 		}
 		return nil
 	}

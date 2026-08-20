@@ -12,6 +12,7 @@ import (
 	agent "github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/interaction"
 	"github.com/LyleLiu666/agentSlot/model"
+	"github.com/LyleLiu666/agentSlot/policy"
 	"github.com/LyleLiu666/agentSlot/session"
 	"github.com/LyleLiu666/agentSlot/tool"
 )
@@ -55,6 +56,84 @@ func TestRuntimeSendCommitsOnlyCompleteModelOutput(t *testing.T) {
 	requests := fake.Requests()
 	if len(requests) != 1 || requests[0].Inputs[0].Message.ID != receipt.MessageID || requests[0].Inputs[0].Message.Parts[0].Text != "hello" {
 		t.Fatalf("model requests = %#v", requests)
+	}
+}
+
+func TestRuntimeResumesPreparedToolCallAfterRecoveryWithoutReplacingItsIdentity(t *testing.T) {
+	store := session.NewMemoryStore()
+	config := model.Config{ModelID: "default", Reasoning: model.ReasoningDefault}
+	assistant := agent.Message{
+		ID: "message-approval", SessionID: "session-approval", RunID: "run-approval", StepID: "step-approval",
+		Role: agent.RoleAssistant,
+	}
+	call := agent.ToolCall{
+		ID: "call-approval", MessageID: assistant.ID, SessionID: assistant.SessionID,
+		RunID: assistant.RunID, StepID: assistant.StepID, Name: "effect", Arguments: []byte(`{"value":"original"}`),
+	}
+	started := session.RunFact{
+		SessionID: assistant.SessionID, RunID: call.RunID, Kind: session.RunStarted,
+		ModelConfig: config, ConfigRevision: 1,
+	}
+	prepared := session.JournalEntry{
+		RunID: call.RunID, StepID: call.StepID, ToolCall: &call, Status: session.JournalPrepared,
+	}
+	if _, err := store.Create(context.Background(), session.NewSession{
+		Session:    agent.Session{ID: assistant.SessionID, AgentID: "agent", WorkspaceID: "workspace"},
+		History:    []session.HistoryFact{{Run: &started}, {Message: &assistant}, {ToolCall: &call}},
+		RunJournal: []session.JournalEntry{prepared}, ModelConfig: config,
+		RunState: session.RunRunning, ActiveRunID: call.RunID,
+	}); err != nil {
+		t.Fatalf("seed prepared call: %v", err)
+	}
+
+	effect := &journalCheckingTool{
+		definition: testToolDefinition(t, "effect"), store: store, sessionID: assistant.SessionID, t: t,
+	}
+	var approvalCalls atomic.Int64
+	guard := policy.GuardFunc(func(context.Context, policy.Action) (policy.Decision, error) {
+		return policy.Decision{Effect: policy.RequireApproval, Reason: "external effect"}, nil
+	})
+	approval := policy.ApprovalFunc(func(_ context.Context, request policy.ApprovalRequest) (policy.ApprovalDecision, error) {
+		approvalCalls.Add(1)
+		if request.Action.Tool.Call.ID != call.ID {
+			t.Errorf("approval CallID = %q, want %q", request.Action.Tool.Call.ID, call.ID)
+		}
+		return policy.ApprovalDecision{Approved: true}, nil
+	})
+	executor := model.NewFakeModelExecutor(model.FakeExecution{Events: []model.ModelEvent{complete("continued")}})
+	entry := &captureChannel{}
+	application := NewApplication(ApplicationSpec{
+		Name: "approval-recovery", DefaultModelConfig: config,
+		RuntimeConfig: AgentRuntimeConfig{ToolKeys: []string{"effect"}},
+		Modules: []agentslot.Module{
+			componentsModule{store: store, executor: executor},
+			toolModule{key: "effect", value: effect},
+			policyModule{guard: guard, approval: approval},
+			NewGatewayChannelModule("entrypoint.approval-recovery", "test", entry),
+		},
+	})
+	running, err := application.Start(context.Background())
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer func() { _ = running.Stop(context.Background()) }()
+	if _, err := entry.Access().ResumeSession(context.Background(), interaction.ResumeSessionRequest{SessionID: assistant.SessionID}); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := entry.Access().WhenIdle(ctx, interaction.WhenIdleRequest{SessionID: assistant.SessionID}); err != nil {
+		t.Fatalf("wait for resumed call: %v", err)
+	}
+	snapshot, err := store.Load(context.Background(), session.SessionRef{SessionID: assistant.SessionID})
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if approvalCalls.Load() != 1 || effect.calls.Load() != 1 {
+		t.Fatalf("approval/tool calls = %d/%d, want one each", approvalCalls.Load(), effect.calls.Load())
+	}
+	if len(snapshot.RunJournal) != 1 || snapshot.RunJournal[0].ToolCall.ID != call.ID || snapshot.RunJournal[0].Status != session.JournalSucceeded {
+		t.Fatalf("resumed journal = %#v", snapshot.RunJournal)
 	}
 }
 
@@ -455,6 +534,27 @@ func (m toolModule) Register(reg agentslot.Registrar) error {
 type countingTool struct {
 	definition tool.Definition
 	calls      atomic.Int64
+}
+
+type journalCheckingTool struct {
+	definition tool.Definition
+	store      session.SessionStore
+	sessionID  agent.SessionID
+	t          *testing.T
+	calls      atomic.Int64
+}
+
+func (t *journalCheckingTool) Definition() tool.Definition       { return t.definition }
+func (*journalCheckingTool) ParallelSafety() tool.ParallelSafety { return tool.Serial }
+func (t *journalCheckingTool) Invoke(ctx context.Context, invocation tool.ToolInvocation) tool.ToolResult {
+	t.calls.Add(1)
+	snapshot, err := t.store.Load(ctx, session.SessionRef{SessionID: t.sessionID})
+	if err != nil {
+		t.t.Errorf("load journal at invocation: %v", err)
+	} else if len(snapshot.RunJournal) != 1 || snapshot.RunJournal[0].Status != session.JournalPending {
+		t.t.Errorf("journal at invocation = %#v, want pending", snapshot.RunJournal)
+	}
+	return tool.ToolResult{CallID: invocation.Call.ID, Status: tool.ResultSucceeded}
 }
 
 func (t *countingTool) Definition() tool.Definition       { return t.definition }

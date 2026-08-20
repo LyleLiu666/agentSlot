@@ -166,6 +166,8 @@ SessionStore 原子持久化五类状态：
 
 History 记录真实发生顺序；Context 才负责生成合法模型协议。未配对 ToolCall 暂不进入下一模型请求，但不会从 History 消失。SystemPrompt、Tool definitions 和临时 chunk 不伪装成 Message；完整逻辑请求按 ContextRetentionMode 保存。
 
+工具调用在 RunJournal 中先进入 `prepared`：调用事实已经发布，但 Tool 尚未执行，Policy 或 Approval 可以等待。通过授权后，固定 Runtime 在调用 Tool 前持久化为 `pending`。恢复时只有 `prepared` 可以继续原 ToolCall；`pending` 一律视为副作用可能已经发生并收敛为 `outcome_unknown`，绝不自动重跑。
+
 ## 8. 固定 AgentRuntime
 
 AgentRuntime 状态只有 `idle`、`running`、`closed`：

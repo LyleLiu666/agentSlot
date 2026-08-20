@@ -411,22 +411,22 @@ Run/Step。sub-agent 是独立执行参与者，必须拥有独立 Session，并
 - **对接口、存储、Gateway 和实现的影响：** History 支持逐事实 append；Context 投影负责筛除未配对 call，直到对应终态结果存在。
 - **状态：** 已确定。
 
-### A-039 pending 工具意图进入 RunJournal
+### A-039 工具调用先记录，再跨越执行边界
 
 - **问题 / 背景：** 工具有外部副作用，执行前不留证据会在崩溃后无法判断是否已发生。
-- **最终决定：** 工具执行前，在同一 Session 事务中把完整 call 追加到 History，并在 RunJournal 建立 pending 执行记录；事务成功后才允许执行工具。
-- **必须满足的不变量：** Journal 记录 ToolCallID、Run/Step、执行状态和必要恢复证据，但不重复承载完整对话事实；pending 记录写入成功后才允许执行。
+- **最终决定：** 模型产出工具调用后，在同一 Session 事务中把完整 call 追加到 History，并在 RunJournal 建立 `prepared` 记录。Policy 与 Approval 通过后、真正调用 Tool 前，再把它推进为 `pending`。
+- **必须满足的不变量：** `prepared` 表示副作用尚未开始，进程恢复后可以继续原 ToolCall；`pending` 表示执行可能已经开始，只能收敛为真实结果或 `outcome_unknown`，不得自动重跑。两次状态推进都必须先持久化成功。
 - **否决的方案及原因：** 完全不记录会诱发盲目重跑；只写 Journal 而不写 History 会隐去已经真实产生的模型调用事实。
-- **对接口、存储、Gateway 和实现的影响：** SessionStore 的事务同时覆盖 History append 和 Journal pending；敏感执行证据按安全策略存储。
+- **对接口、存储、Gateway 和实现的影响：** SessionStore 的首个事务同时覆盖 History append 和 Journal `prepared`；固定 Runtime 独占 `prepared -> pending` 的执行边界。Policy 和 Approval 仍只做决定，不获得 Store 或 Tool 执行权。
 - **状态：** 已确定。
 
 ### A-040 崩溃恢复使用 `outcome_unknown`
 
 - **问题 / 背景：** 进程可能在工具产生副作用后、结果提交前崩溃。
-- **最终决定：** 恢复时不自动重跑未知调用；为已经存在于 History 的 call 追加唯一的结构化 `outcome_unknown` 结果，再允许后续模型执行。
-- **必须满足的不变量：** 已确认完成的调用使用真实结果；未知调用不得伪装成功或失败；恢复事务结束当前 Run 并把 Session 置为 `idle`，不得自动消费旧 Queue。
+- **最终决定：** 恢复时，`pending` 调用不自动重跑，而是追加唯一的结构化 `outcome_unknown`；`prepared` 调用仍未越过执行边界，因此恢复原 Run，并继续处理同一个 ToolCallID。
+- **必须满足的不变量：** 已确认完成的调用使用真实结果；未知调用不得伪装成功或失败；只有存在 `prepared` 调用时才保留原 Run，其他中断 Run 仍收敛到 `idle`，不得自动消费旧 Queue。
 - **否决的方案及原因：** 自动重跑可能重复付款、写文件或执行命令；丢弃调用会隐瞒真实风险。
-- **对接口、存储、Gateway 和实现的影响：** `SessionStore.Recover` 在 Resume 边界扫描 RunJournal，原子追加 unknown 结果、结束旧 Run 并把遗留 Steer 转为 held；普通 `Load` 必须只读，不能把仍在正常运行的 Session 误判为崩溃。用户可用新 Send 或 RunPending 决定下一步。
+- **对接口、存储、Gateway 和实现的影响：** `SessionStore.Recover` 在 Resume 边界扫描 RunJournal：把 `pending` 原子收敛为 unknown；若仍有 `prepared`，固定 Runtime 从持久事实重建原 Run 并重新进入 Policy/Approval，否则结束旧 Run并把遗留 Steer 转为 held。普通 `Load` 必须只读。
 - **状态：** 已确定。
 
 ### A-041 Tool 只声明两种调度模式
