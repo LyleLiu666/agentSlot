@@ -138,9 +138,10 @@ Nine foundational domain rows are now **Contracted**: each has a public domain
 interface, typed Slot, and contract tests. `session.manager` and `session.store`
 also have one reference in-memory implementation with focused behavior tests,
 and `model.executor` has one deterministic Fake implementation consumed by the
-fixed Runtime. None has a reusable conformance suite or independent second
-implementation; they therefore remain Contracted rather than Conformant or
-Proven. Every other domain row remains **Mapped**.
+fixed Runtime. The `tool` contract has one built-in Bash implementation consumed
+through the fixed dispatcher. None has a reusable conformance suite or an
+independent second implementation; they therefore remain Contracted rather than
+Conformant or Proven. Every other domain row remains **Mapped**.
 
 The score is measured by proven component ecosystems, not by the number of
 modules, packages, or interface methods. One module may contribute to several

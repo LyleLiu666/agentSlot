@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -78,8 +79,39 @@ type ModelRequest struct {
 	// ConfigRevision identifies the durable Session revision from which Config
 	// was frozen when the Run started.
 	ConfigRevision agent.Revision
-	Messages       []agent.Message
+	Inputs         []Input
 	Tools          []tool.Definition
+}
+
+// Input is one ordered model-facing projection item. It preserves canonical
+// message/call/result semantics without exposing a Provider wire format.
+type Input struct {
+	Message    *agent.Message
+	ToolCall   *agent.ToolCall
+	ToolResult *tool.ToolResult
+}
+
+func (i Input) Valid() bool {
+	count := 0
+	if i.Message != nil {
+		count++
+	}
+	if i.ToolCall != nil {
+		count++
+	}
+	if i.ToolResult != nil {
+		count++
+	}
+	if count != 1 {
+		return false
+	}
+	if i.Message != nil {
+		return i.Message.Valid()
+	}
+	if i.ToolCall != nil {
+		return i.ToolCall.Valid()
+	}
+	return i.ToolResult.Validate() == nil
 }
 
 // Executor performs one logical model call and owns provider retry or
@@ -119,12 +151,38 @@ type ModelEvent struct {
 // not an Executor or Provider adapter, allocates durable Message containment.
 // Tool-call requests extend this value in the ToolDispatcher round.
 type Completion struct {
-	Parts []agent.MessagePart
+	Parts     []agent.MessagePart
+	ToolCalls []ToolCallRequest
 }
 
 // Valid reports whether the completed content can become a durable message.
 func (c Completion) Valid() bool {
-	return agent.MessageInput{Parts: c.Parts}.Valid()
+	if len(c.Parts) == 0 && len(c.ToolCalls) == 0 {
+		return false
+	}
+	for _, part := range c.Parts {
+		if !part.Valid() {
+			return false
+		}
+	}
+	for _, call := range c.ToolCalls {
+		if !call.Valid() {
+			return false
+		}
+	}
+	return true
+}
+
+// ToolCallRequest is an identity-free tool invocation requested by a model.
+// Runtime allocates the durable ToolCallID and containment on commit.
+type ToolCallRequest struct {
+	CorrelationID string
+	Name          string
+	Arguments     json.RawMessage
+}
+
+func (c ToolCallRequest) Valid() bool {
+	return c.Name != "" && json.Valid(c.Arguments)
 }
 
 // Validate enforces the stream invariant that only complete events carry

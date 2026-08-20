@@ -566,6 +566,21 @@ func validateToolTransactions(history []HistoryFact, changes []Change) error {
 		}
 	}
 	for _, change := range changes {
+		if change.Kind != AppendMessage || len(change.Message.Parts) != 0 {
+			continue
+		}
+		hasCall := false
+		for _, candidate := range changes {
+			if candidate.Kind == AppendToolCall && candidate.ToolCall.MessageID == change.Message.ID {
+				hasCall = true
+				break
+			}
+		}
+		if !hasCall {
+			return historyConflict("empty assistant message requires a tool call in the same transaction")
+		}
+	}
+	for _, change := range changes {
 		switch change.Kind {
 		case AppendToolCall:
 			entry := pending[change.ToolCall.ID]
@@ -805,7 +820,7 @@ func hasPendingJournal(entries []JournalEntry) bool {
 }
 
 func sameToolCall(left, right agent.ToolCall) bool {
-	return left.ID == right.ID && left.MessageID == right.MessageID && left.SessionID == right.SessionID &&
+	return left.ID == right.ID && left.CorrelationID == right.CorrelationID && left.MessageID == right.MessageID && left.SessionID == right.SessionID &&
 		left.RunID == right.RunID && left.StepID == right.StepID && left.Name == right.Name && bytes.Equal(left.Arguments, right.Arguments)
 }
 

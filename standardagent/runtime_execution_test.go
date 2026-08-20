@@ -2,7 +2,9 @@ package standardagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/LyleLiu666/agentSlot/interaction"
 	"github.com/LyleLiu666/agentSlot/model"
 	"github.com/LyleLiu666/agentSlot/session"
+	"github.com/LyleLiu666/agentSlot/tool"
 )
 
 func TestRuntimeSendCommitsOnlyCompleteModelOutput(t *testing.T) {
@@ -50,7 +53,7 @@ func TestRuntimeSendCommitsOnlyCompleteModelOutput(t *testing.T) {
 		t.Fatalf("run facts = %#v", runs)
 	}
 	requests := fake.Requests()
-	if len(requests) != 1 || requests[0].Messages[0].ID != receipt.MessageID || requests[0].Messages[0].Parts[0].Text != "hello" {
+	if len(requests) != 1 || requests[0].Inputs[0].Message.ID != receipt.MessageID || requests[0].Inputs[0].Message.Parts[0].Text != "hello" {
 		t.Fatalf("model requests = %#v", requests)
 	}
 }
@@ -160,8 +163,55 @@ func TestRuntimeSteerContinuesSameRunWithFrozenModelConfig(t *testing.T) {
 	if len(requests) != 2 || requests[0].RunID != requests[1].RunID || requests[0].Config != requests[1].Config || requests[0].ConfigRevision != requests[1].ConfigRevision {
 		t.Fatalf("run/config changed across steer: %#v", requests)
 	}
-	if requests[1].Messages[len(requests[1].Messages)-1].ID != steer.MessageID {
-		t.Fatalf("steer was not included in next step: %#v", requests[1].Messages)
+	if requests[1].Inputs[len(requests[1].Inputs)-1].Message.ID != steer.MessageID {
+		t.Fatalf("steer was not included in next step: %#v", requests[1].Inputs)
+	}
+}
+
+func TestRuntimeCommitsToolCallAndResultThenContinuesModel(t *testing.T) {
+	installed := &countingTool{definition: testToolDefinition(t, "echo")}
+	fake := model.NewFakeModelExecutor(
+		model.FakeExecution{Events: []model.ModelEvent{{Kind: model.EventComplete, Output: &model.Completion{
+			ToolCalls: []model.ToolCallRequest{{CorrelationID: "provider-call-1", Name: "echo", Arguments: []byte(`{"value":"hello"}`)}},
+		}}}},
+		model.FakeExecution{Events: []model.ModelEvent{complete("after tool")}},
+	)
+	access, stop := startRuntimeTestApplication(t, fake, toolModule{key: "echo", value: installed})
+	defer stop()
+	opened := createRuntimeTestSession(t, access)
+	if _, err := access.Send(context.Background(), interaction.SendRequest{SessionID: opened.SessionID, ExpectedRevision: opened.Revision, Input: textInput("use tool")}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := access.WhenIdle(ctx, interaction.WhenIdleRequest{SessionID: opened.SessionID}); err != nil {
+		t.Fatal(err)
+	}
+	if installed.calls.Load() != 1 {
+		t.Fatalf("tool calls = %d", installed.calls.Load())
+	}
+	requests := fake.Requests()
+	if len(requests) != 2 || requests[0].RunID != requests[1].RunID || len(requests[0].Tools) != 1 {
+		t.Fatalf("model requests = %#v", requests)
+	}
+	if len(requests[1].Inputs) < 4 || requests[1].Inputs[len(requests[1].Inputs)-2].ToolCall == nil || requests[1].Inputs[len(requests[1].Inputs)-2].ToolCall.CorrelationID != "provider-call-1" || requests[1].Inputs[len(requests[1].Inputs)-1].ToolResult == nil {
+		t.Fatalf("second request lacks tool exchange: %#v", requests[1].Inputs)
+	}
+	snapshot, err := access.Snapshot(ctx, interaction.SnapshotRequest{SessionID: opened.SessionID})
+	if err != nil || len(snapshot.History) < 6 {
+		t.Fatalf("snapshot = %#v, %v", snapshot, err)
+	}
+	var callCount, resultCount int
+	for _, fact := range snapshot.History {
+		if fact.ToolCall != nil {
+			callCount++
+		}
+		if fact.ToolResult != nil {
+			resultCount++
+		}
+	}
+	if callCount != 1 || resultCount != 1 {
+		t.Fatalf("tool facts = calls %d results %d", callCount, resultCount)
 	}
 }
 
@@ -348,16 +398,17 @@ func (recoveryFailStore) Recover(context.Context, session.SessionRef) (session.S
 	return session.Snapshot{}, errors.New("recovery failed")
 }
 
-func startRuntimeTestApplication(t *testing.T, executor model.ModelExecutor) (interaction.GatewayAccess, func()) {
+func startRuntimeTestApplication(t *testing.T, executor model.ModelExecutor, extra ...agentslot.Module) (interaction.GatewayAccess, func()) {
 	t.Helper()
 	memory, err := session.NewMemoryModule(model.Config{ModelID: "default", Reasoning: model.ReasoningDefault})
 	if err != nil {
 		t.Fatal(err)
 	}
 	entry := &captureEntrypoint{}
-	application := NewApplication(ApplicationSpec{Name: "runtime-test", Modules: []agentslot.Module{
-		memory, executorModule{executor: executor}, NewEntrypointModule("entrypoint.runtime-test", "test", entry),
-	}})
+	modules := []agentslot.Module{memory, executorModule{executor: executor}}
+	modules = append(modules, extra...)
+	modules = append(modules, NewEntrypointModule("entrypoint.runtime-test", "test", entry))
+	application := NewApplication(ApplicationSpec{Name: "runtime-test", Modules: modules})
 	running, err := application.Start(context.Background())
 	if err != nil {
 		t.Fatalf("start: %v", err)
@@ -376,6 +427,37 @@ type executorModule struct{ executor model.ModelExecutor }
 func (executorModule) ID() string { return "test.executor" }
 func (m executorModule) Register(reg agentslot.Registrar) error {
 	return reg.Contribute(agentslot.Set(model.ExecutorSlot, m.executor))
+}
+
+type toolModule struct {
+	key   string
+	value tool.Tool
+}
+
+func (m toolModule) ID() string { return "test.tool." + m.key }
+func (m toolModule) Register(reg agentslot.Registrar) error {
+	return reg.Contribute(agentslot.Add(tool.ToolSlot, m.key, m.value))
+}
+
+type countingTool struct {
+	definition tool.Definition
+	calls      atomic.Int64
+}
+
+func (t *countingTool) Definition() tool.Definition       { return t.definition }
+func (*countingTool) ParallelSafety() tool.ParallelSafety { return tool.ParallelSafe }
+func (t *countingTool) Invoke(_ context.Context, invocation tool.ToolInvocation) tool.ToolResult {
+	t.calls.Add(1)
+	return tool.ToolResult{CallID: invocation.Call.ID, Status: tool.ResultSucceeded, Output: json.RawMessage(`{"echo":"hello"}`)}
+}
+
+func testToolDefinition(t *testing.T, name string) tool.Definition {
+	t.Helper()
+	schema, err := tool.ParseInputSchema([]byte(`{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tool.Definition{Name: name, Description: "test tool", InputSchema: schema}
 }
 
 func createRuntimeTestSession(t *testing.T, access interaction.GatewayAccess) interaction.SessionOpened {

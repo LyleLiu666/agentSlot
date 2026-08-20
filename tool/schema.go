@@ -113,6 +113,17 @@ type Definition struct {
 	InputSchema InputSchema
 }
 
+// Validate checks whether a definition can be advertised to a model.
+func (d Definition) Validate() error {
+	if d.Name == "" {
+		return fmt.Errorf("tool: definition name is required")
+	}
+	if d.InputSchema.compiled == nil {
+		return fmt.Errorf("tool: definition %q requires an input schema", d.Name)
+	}
+	return nil
+}
+
 // Call is one model-requested tool invocation. Arguments are JSON instance
 // values that must conform to the Definition's InputSchema; they are not a
 // schema document.

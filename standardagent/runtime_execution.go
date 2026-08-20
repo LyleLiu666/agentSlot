@@ -9,6 +9,7 @@ import (
 	agent "github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/model"
 	"github.com/LyleLiu666/agentSlot/session"
+	"github.com/LyleLiu666/agentSlot/tool"
 )
 
 type runtimeLifecycle string
@@ -68,7 +69,8 @@ func (r *runtimeInstance) executeStep(run *activeRun, step agent.StepID) (stepOu
 	request := model.ModelRequest{
 		SessionID: r.id(), RunID: run.id, StepID: step, Config: cloneRuntimeConfig(run.config),
 		ConfigRevision: run.configRevision,
-		Messages:       historyMessages(snapshot.History),
+		Inputs:         historyInputs(snapshot.History),
+		Tools:          r.components.dispatcher.definitions(),
 	}
 	stream, err := r.components.executor.Execute(run.ctx, request)
 	if err != nil {
@@ -99,12 +101,23 @@ func (r *runtimeInstance) executeStep(run *activeRun, step agent.StepID) (stepOu
 		case model.EventFailed:
 			return stepFailed, ""
 		case model.EventComplete:
-			next, continued, canceled, err := r.commitCompletion(run, step, *event.Output)
+			next, continued, calls, canceled, err := r.commitCompletion(run, step, *event.Output)
 			if canceled {
 				return stepCanceled, ""
 			}
 			if err != nil {
 				return stepFailed, ""
+			}
+			if len(calls) > 0 {
+				results := r.components.dispatcher.dispatch(run.ctx, calls)
+				next, canceled, err = r.commitToolResults(run, calls, results)
+				if err != nil {
+					return stepFailed, ""
+				}
+				if canceled {
+					return stepCanceled, ""
+				}
+				return stepContinue, next
 			}
 			if continued {
 				return stepContinue, next
@@ -114,24 +127,38 @@ func (r *runtimeInstance) executeStep(run *activeRun, step agent.StepID) (stepOu
 	}
 }
 
-func (r *runtimeInstance) commitCompletion(run *activeRun, step agent.StepID, output model.Completion) (agent.StepID, bool, bool, error) {
+func (r *runtimeInstance) commitCompletion(run *activeRun, step agent.StepID, output model.Completion) (agent.StepID, bool, []agent.ToolCall, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.active != run || run.cancelRequested || r.closing {
-		return "", false, true, nil
+		return "", false, nil, true, nil
 	}
 	snapshot, err := r.viewLocked(context.Background())
 	if err != nil {
-		return "", false, false, err
+		return "", false, nil, false, err
 	}
 	assistant := agent.Message{
 		ID: agent.MessageID(r.nextID("message")), SessionID: r.id(), RunID: run.id, StepID: step,
 		Role: agent.RoleAssistant, Parts: cloneRuntimeParts(output.Parts), CreatedAt: time.Now().UTC(),
 	}
 	changes := []session.Change{{Kind: session.AppendMessage, Message: &assistant}}
+	calls := make([]agent.ToolCall, 0, len(output.ToolCalls))
+	for _, requested := range output.ToolCalls {
+		call := agent.ToolCall{
+			ID: agent.ToolCallID(r.nextID("call")), MessageID: assistant.ID, SessionID: r.id(),
+			RunID: run.id, StepID: step, CorrelationID: requested.CorrelationID,
+			Name: requested.Name, Arguments: append([]byte(nil), requested.Arguments...),
+		}
+		pending := session.JournalEntry{RunID: run.id, StepID: step, ToolCall: &call, Status: session.JournalPending}
+		changes = append(changes,
+			session.Change{Kind: session.AppendToolCall, ToolCall: &call},
+			session.Change{Kind: session.UpdateRunJournal, Journal: &pending},
+		)
+		calls = append(calls, call)
+	}
 	steers := pendingByDelivery(snapshot.Queue, session.DeliverySteer)
 	var nextStep agent.StepID
-	if len(steers) > 0 {
+	if len(calls) == 0 && len(steers) > 0 {
 		nextStep = agent.StepID(r.nextID("step"))
 		for _, item := range steers {
 			claim := session.QueueClaim{MessageID: item.Message.ID, RunID: run.id}
@@ -147,7 +174,51 @@ func (r *runtimeInstance) commitCompletion(run *activeRun, step agent.StepID, ou
 		}
 	}
 	_, err = r.commitLocked(context.Background(), snapshot.Revision, "model-complete", changes)
-	return nextStep, len(steers) > 0, false, err
+	return nextStep, len(calls) == 0 && len(steers) > 0, calls, false, err
+}
+
+func (r *runtimeInstance) commitToolResults(run *activeRun, calls []agent.ToolCall, results []tool.ToolResult) (agent.StepID, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active != run {
+		return "", true, nil
+	}
+	snapshot, err := r.viewLocked(context.Background())
+	if err != nil {
+		return "", false, err
+	}
+	changes := make([]session.Change, 0, len(results)*2+8)
+	for index, result := range results {
+		resultCopy := cloneRuntimeToolResult(result)
+		status := session.JournalFailed
+		switch result.Status {
+		case tool.ResultSucceeded:
+			status = session.JournalSucceeded
+		case tool.ResultUnknown:
+			status = session.JournalOutcomeUnknown
+		}
+		call := calls[index]
+		journal := session.JournalEntry{RunID: call.RunID, StepID: call.StepID, ToolCall: &call, ToolResult: &resultCopy, Status: status}
+		changes = append(changes,
+			session.Change{Kind: session.AppendToolResult, ToolResult: &resultCopy},
+			session.Change{Kind: session.UpdateRunJournal, Journal: &journal},
+		)
+	}
+	nextStep := agent.StepID(r.nextID("step"))
+	for _, item := range pendingByDelivery(snapshot.Queue, session.DeliverySteer) {
+		claim := session.QueueClaim{MessageID: item.Message.ID, RunID: run.id}
+		consume := session.QueueConsume{MessageID: item.Message.ID, RunID: run.id}
+		message := item.Message
+		message.RunID = run.id
+		message.StepID = nextStep
+		changes = append(changes,
+			session.Change{Kind: session.ClaimQueue, QueueClaim: &claim},
+			session.Change{Kind: session.ConsumeQueue, QueueConsume: &consume},
+			session.Change{Kind: session.AppendMessage, Message: &message},
+		)
+	}
+	_, err = r.commitLocked(context.Background(), snapshot.Revision, "tool-results", changes)
+	return nextStep, run.cancelRequested || r.closing, err
 }
 
 func (r *runtimeInstance) finishRun(run *activeRun, outcome stepOutcome) (*activeRun, agent.StepID) {
@@ -335,17 +406,28 @@ func queueByID(queue []session.QueueItem, id agent.MessageID) (session.QueueItem
 	return session.QueueItem{}, false
 }
 
-func historyMessages(history []session.HistoryFact) []agent.Message {
-	messages := make([]agent.Message, 0, len(history))
+func historyInputs(history []session.HistoryFact) []model.Input {
+	inputs := make([]model.Input, 0, len(history))
 	for _, fact := range history {
-		if fact.Message == nil {
+		input := model.Input{}
+		switch {
+		case fact.Message != nil:
+			message := *fact.Message
+			message.Parts = cloneRuntimeParts(message.Parts)
+			input.Message = &message
+		case fact.ToolCall != nil:
+			call := *fact.ToolCall
+			call.Arguments = append([]byte(nil), fact.ToolCall.Arguments...)
+			input.ToolCall = &call
+		case fact.ToolResult != nil:
+			result := cloneRuntimeToolResult(*fact.ToolResult)
+			input.ToolResult = &result
+		default:
 			continue
 		}
-		message := *fact.Message
-		message.Parts = cloneRuntimeParts(message.Parts)
-		messages = append(messages, message)
+		inputs = append(inputs, input)
 	}
-	return messages
+	return inputs
 }
 
 func cloneRuntimeParts(source []agent.MessagePart) []agent.MessagePart {
@@ -361,6 +443,16 @@ func cloneRuntimeConfig(source model.Config) model.Config {
 	if source.Parameters.MaxTokens != nil {
 		value := *source.Parameters.MaxTokens
 		copy.Parameters.MaxTokens = &value
+	}
+	return copy
+}
+
+func cloneRuntimeToolResult(source tool.ToolResult) tool.ToolResult {
+	copy := source
+	copy.Output = append([]byte(nil), source.Output...)
+	if source.Error != nil {
+		errorCopy := *source.Error
+		copy.Error = &errorCopy
 	}
 	return copy
 }

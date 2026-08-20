@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 
 	agent "github.com/LyleLiu666/agentSlot/agent"
@@ -143,6 +144,11 @@ func cloneModelEvent(source ModelEvent) ModelEvent {
 	copy := source
 	if source.Output != nil {
 		output := Completion{Parts: append([]agent.MessagePart(nil), source.Output.Parts...)}
+		output.ToolCalls = make([]ToolCallRequest, len(source.Output.ToolCalls))
+		for index, call := range source.Output.ToolCalls {
+			output.ToolCalls[index] = call
+			output.ToolCalls[index].Arguments = append(json.RawMessage(nil), call.Arguments...)
+		}
 		copy.Output = &output
 	}
 	return copy
@@ -150,11 +156,34 @@ func cloneModelEvent(source ModelEvent) ModelEvent {
 
 func cloneModelRequest(source ModelRequest) ModelRequest {
 	copy := source
-	copy.Messages = make([]agent.Message, len(source.Messages))
-	for index, message := range source.Messages {
-		copy.Messages[index] = message
-		copy.Messages[index].Parts = append([]agent.MessagePart(nil), message.Parts...)
+	copy.Inputs = make([]Input, len(source.Inputs))
+	for index, input := range source.Inputs {
+		copy.Inputs[index] = cloneInput(input)
 	}
 	copy.Tools = append([]tool.Definition(nil), source.Tools...)
+	return copy
+}
+
+func cloneInput(source Input) Input {
+	copy := source
+	if source.Message != nil {
+		message := *source.Message
+		message.Parts = append([]agent.MessagePart(nil), source.Message.Parts...)
+		copy.Message = &message
+	}
+	if source.ToolCall != nil {
+		call := *source.ToolCall
+		call.Arguments = append([]byte(nil), source.ToolCall.Arguments...)
+		copy.ToolCall = &call
+	}
+	if source.ToolResult != nil {
+		result := *source.ToolResult
+		result.Output = append([]byte(nil), source.ToolResult.Output...)
+		if source.ToolResult.Error != nil {
+			errorCopy := *source.ToolResult.Error
+			result.Error = &errorCopy
+		}
+		copy.ToolResult = &result
+	}
 	return copy
 }

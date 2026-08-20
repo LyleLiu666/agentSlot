@@ -10,9 +10,11 @@ import (
 	"github.com/LyleLiu666/agentSlot/tool"
 )
 
-type fakeTool struct{}
+type fakeTool struct{ schema tool.InputSchema }
 
-func (fakeTool) Definition() tool.Definition         { return tool.Definition{Name: "example"} }
+func (f fakeTool) Definition() tool.Definition {
+	return tool.Definition{Name: "example", InputSchema: f.schema}
+}
 func (fakeTool) ParallelSafety() tool.ParallelSafety { return tool.ParallelSafe }
 func (fakeTool) Invoke(context.Context, tool.ToolInvocation) tool.ToolResult {
 	return tool.ToolResult{CallID: "call-1", Status: tool.ResultSucceeded}
@@ -33,14 +35,22 @@ type secondModule struct{}
 
 func (secondModule) ID() string { return "tool.contracts.second" }
 func (secondModule) Register(reg agentslot.Registrar) error {
-	return reg.Contribute(agentslot.Add(tool.ToolSlot, "example", tool.Tool(fakeTool{})))
+	return reg.Contribute(agentslot.Add(tool.ToolSlot, "example", tool.Tool(fakeTool{schema: emptySchema()})))
 }
 
 type module struct{}
 
 func (module) ID() string { return "tool.contracts" }
 func (module) Register(reg agentslot.Registrar) error {
-	return reg.Contribute(agentslot.Add(tool.ToolSlot, "example", tool.Tool(fakeTool{})))
+	return reg.Contribute(agentslot.Add(tool.ToolSlot, "example", tool.Tool(fakeTool{schema: emptySchema()})))
+}
+
+func emptySchema() tool.InputSchema {
+	schema, err := tool.ParseInputSchema([]byte(`{"type":"object","additionalProperties":false}`))
+	if err != nil {
+		panic(err)
+	}
+	return schema
 }
 
 func TestToolIsKeyedManySlot(t *testing.T) {

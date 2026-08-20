@@ -87,6 +87,10 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 			if err != nil {
 				return nil, err
 			}
+			dispatcher, err := newToolDispatcher(tools)
+			if err != nil {
+				return nil, err
+			}
 			sources, err := agentslot.ResolveChain(resolver, agentcontext.SourceSlot)
 			if err != nil {
 				return nil, err
@@ -102,7 +106,7 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 			state := newApplicationRuntime(runtimeDependencies{
 				manager: manager, store: store, executor: executor,
 				commands: commands, commandDescriptors: commandDescriptors,
-				tools: tools, sources: sources,
+				tools: tools, dispatcher: dispatcher, sources: sources,
 				compactor: compactor, hooks: hooks,
 			})
 			m.state = state
@@ -137,6 +141,7 @@ type runtimeDependencies struct {
 	commands           []agentslot.Named[interaction.InteractionCommand]
 	commandDescriptors []interaction.CommandDescriptor
 	tools              []agentslot.Named[tool.Tool]
+	dispatcher         *toolDispatcher
 	sources            []agentcontext.ContextSource
 	compactor          agentcontext.ContextCompactor
 	hooks              []hook.AgentHook
@@ -146,21 +151,23 @@ type runtimeDependencies struct {
 // by every Session Runtime. Runtime instances retain component references;
 // they do not copy tools, stores, executors, or clients per Session.
 type runtimeComponents struct {
-	store     session.SessionStore
-	executor  model.ModelExecutor
-	tools     []agentslot.Named[tool.Tool]
-	sources   []agentcontext.ContextSource
-	compactor agentcontext.ContextCompactor
-	hooks     []hook.AgentHook
+	store      session.SessionStore
+	executor   model.ModelExecutor
+	tools      []agentslot.Named[tool.Tool]
+	sources    []agentcontext.ContextSource
+	compactor  agentcontext.ContextCompactor
+	hooks      []hook.AgentHook
+	dispatcher *toolDispatcher
 }
 
 func (d runtimeDependencies) runtimeComponents() *runtimeComponents {
 	return &runtimeComponents{
-		store:     d.store,
-		executor:  d.executor,
-		tools:     append([]agentslot.Named[tool.Tool](nil), d.tools...),
-		sources:   append([]agentcontext.ContextSource(nil), d.sources...),
-		compactor: d.compactor,
-		hooks:     append([]hook.AgentHook(nil), d.hooks...),
+		store:      d.store,
+		executor:   d.executor,
+		tools:      append([]agentslot.Named[tool.Tool](nil), d.tools...),
+		sources:    append([]agentcontext.ContextSource(nil), d.sources...),
+		compactor:  d.compactor,
+		hooks:      append([]hook.AgentHook(nil), d.hooks...),
+		dispatcher: d.dispatcher,
 	}
 }

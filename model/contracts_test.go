@@ -72,6 +72,19 @@ func TestModelEventsSeparateTemporaryAndTerminalFacts(t *testing.T) {
 	}
 }
 
+func TestCompletionAllowsIdentityFreeToolOnlyResult(t *testing.T) {
+	completion := model.Completion{ToolCalls: []model.ToolCallRequest{{Name: "lookup", Arguments: []byte(`{"q":"x"}`)}}}
+	if !completion.Valid() {
+		t.Fatal("tool-only completion rejected")
+	}
+	if (&agent.Message{ID: "message-1", SessionID: "session-1", RunID: "run-1", StepID: "step-1", Role: agent.RoleAssistant}).Valid() != true {
+		t.Fatal("tool-call parent assistant message cannot be content-empty")
+	}
+	if (model.Completion{ToolCalls: []model.ToolCallRequest{{Name: "lookup", Arguments: []byte(`not-json`)}}}).Valid() {
+		t.Fatal("tool request with invalid JSON accepted")
+	}
+}
+
 func TestFakeModelExecutorScriptsAndDetachesRequests(t *testing.T) {
 	output := &model.Completion{Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "done"}}}
 	fake := model.NewFakeModelExecutor(model.FakeExecution{Events: []model.ModelEvent{
@@ -80,8 +93,8 @@ func TestFakeModelExecutorScriptsAndDetachesRequests(t *testing.T) {
 	}})
 	request := model.ModelRequest{
 		SessionID: "session-1", RunID: "run-1", StepID: "step-1",
-		Config:   model.Config{ModelID: "model-1", Reasoning: model.ReasoningDefault},
-		Messages: []agent.Message{{ID: "message-1", SessionID: "session-1", Role: agent.RoleUser, Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "hello"}}}},
+		Config: model.Config{ModelID: "model-1", Reasoning: model.ReasoningDefault},
+		Inputs: []model.Input{{Message: &agent.Message{ID: "message-1", SessionID: "session-1", Role: agent.RoleUser, Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "hello"}}}}},
 	}
 	stream, err := fake.Execute(context.Background(), request)
 	if err != nil {
@@ -96,9 +109,9 @@ func TestFakeModelExecutorScriptsAndDetachesRequests(t *testing.T) {
 	if _, err := stream.Recv(context.Background()); !errors.Is(err, model.ErrStreamClosed) {
 		t.Fatalf("terminal Recv error = %v, want ErrStreamClosed", err)
 	}
-	request.Messages[0].Parts[0].Text = "mutated"
+	request.Inputs[0].Message.Parts[0].Text = "mutated"
 	requests := fake.Requests()
-	if requests[0].Messages[0].Parts[0].Text != "hello" {
+	if requests[0].Inputs[0].Message.Parts[0].Text != "hello" {
 		t.Fatalf("captured request was aliased: %#v", requests[0])
 	}
 }

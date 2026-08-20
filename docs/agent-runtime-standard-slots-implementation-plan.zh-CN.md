@@ -735,10 +735,14 @@ History。
 - 两种不同 Provider 协议验证重试/continuation 差异不泄漏到 Runtime。
 - 测试 AttemptID 进入运维/用量事件但不进入 History。
 
-### 阶段 6：工具循环与崩溃恢复
+### 阶段 6：工具循环与崩溃恢复（固定 Dispatcher 与 Bash 已完成）
 
-- 测试 Serial/ParallelSafe 分组、Schema 校验、安全错误和结果后继续模型。
-- 在每个事务断点注入崩溃，验证 call/pending 顺序、唯一终态和 outcome_unknown。
+- 已测试 Serial/ParallelSafe 分组、Schema 校验、安全错误和结果后继续模型；模型只提出
+  无持久身份的 ToolCallRequest，Runtime 分配 ToolCallID 和包含关系。
+- 已验证 call/pending 与 result/terminal 各自原子提交、唯一终态和 outcome_unknown 恢复；
+  Tool 不能主动伪造 outcome_unknown。
+- 已提供显式安装的内置 Bash Tool：固定绝对工作目录、显式环境、超时进程组取消、
+  stdout/stderr 独立限制，以及非零退出码结构化返回；省略该 Module 即为禁用。
 - 验证跨 Session 文件写入使用版本哈希和精确内容校验，不依赖 Workspace 全局写锁。
 
 ### 阶段 7：Context、Hook 与 History 查询

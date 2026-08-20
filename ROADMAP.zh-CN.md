@@ -345,12 +345,15 @@ AgentSlot 参考这些行为，不复制 pi 的类型、聚合 Session 或产品
 
 ### 阶段 4：完成第一批可扩展能力
 
-- 完成 Tool、Events、History、Context、Policy 和 Approval；
+- 已完成固定 ToolDispatcher、工具事实事务、Serial/ParallelSafe 调度和首个显式安装的
+  Bash Tool；Events、Context、Policy 和 Approval 继续按各自批次完成；
 - 完成持久化 Queue、RunJournal、Context 版本与完整 History 查询；
 - 验证固定 Runtime 更换 ModelExecutor、Provider、Tool、SessionManager、SessionStore、
   Context、Hook 和 Policy
   时没有具体类型分支；
 - 验证工具 call 事实与 Journal pending 同事务、result 后续唯一终结、未知副作用恢复和跨 Session 文件版本冲突；
+- Bash 已验证固定工作目录、显式环境、进程组超时取消、stdout/stderr 分离限制和非零
+  退出码结构化返回；标准 Application 不自动安装 Bash；
 - 验证 ModelExecutor 管理 Provider-specific 物理尝试和 AttemptID，Runtime 不包含供应商恢复分支；
 - 验证替换 ContextCompactor 不受默认“最近三条”算法限制，但仍满足协议和 Token 硬上限；
 - 加入工具 Agent 和编程 Agent 示例包。

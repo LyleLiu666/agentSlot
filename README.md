@@ -285,10 +285,16 @@ commands now execute through the Gateway. Model calls consume temporary
 delta/reset events without persisting them and commit only complete assistant
 output; Run start/terminal facts retain the frozen model configuration. The
 `model` package includes an explicitly installed deterministic
-`FakeModelExecutor` for development and contract tests. Tool dispatch, Context
-assembly, Hook execution, and reconnectable Gateway event streaming remain in
-their dedicated implementation rounds. Importing any package still has no
-registration or startup side effect.
+`FakeModelExecutor` for development and contract tests. The fixed Runtime also
+owns ToolDispatcher semantics: call/pending and result/terminal commits,
+Serial/ParallelSafe batches, safe structured failures, and mandatory model
+continuation. [`tool/bash`](tool/bash) is the first explicitly installed
+built-in Tool; it fixes working directory, explicit environment, timeout,
+process-group cancellation, and separate output limits. It is never installed
+by import or by `standardagent.NewApplication`. Context assembly, Hook
+execution, and reconnectable Gateway event streaming remain in their dedicated
+implementation rounds. Importing any package still has no registration or
+startup side effect.
 
 ## Relationship to previous-generation SDKs
 

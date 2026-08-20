@@ -71,11 +71,15 @@ type Message struct {
 	CreatedAt time.Time
 }
 
-// Valid reports whether a durable message has stable identity, a known role,
-// and at least one valid provider-neutral content part.
+// Valid reports whether a durable message has stable identity and a known
+// role. A contained assistant message may be content-empty only so it can own
+// tool calls; SessionStore must require those calls in the same transaction.
 func (m Message) Valid() bool {
-	if !m.ID.Valid() || !m.SessionID.Valid() || !m.Role.Valid() || len(m.Parts) == 0 {
+	if !m.ID.Valid() || !m.SessionID.Valid() || !m.Role.Valid() {
 		return false
+	}
+	if len(m.Parts) == 0 {
+		return m.Role == RoleAssistant && m.RunID.Valid() && m.StepID.Valid()
 	}
 	for _, part := range m.Parts {
 		if !part.Valid() {
@@ -141,13 +145,16 @@ func (m MessageInput) Valid() bool {
 // ToolCall is the durable identity, arguments, and containment record for one
 // model-requested tool invocation.
 type ToolCall struct {
-	ID        ToolCallID
-	MessageID MessageID
-	SessionID SessionID
-	RunID     RunID
-	StepID    StepID
-	Name      string
-	Arguments json.RawMessage
+	ID ToolCallID
+	// CorrelationID is the model protocol's call/result correlation token. It
+	// is content supplied by ModelExecutor, not the durable ToolCall identity.
+	CorrelationID string
+	MessageID     MessageID
+	SessionID     SessionID
+	RunID         RunID
+	StepID        StepID
+	Name          string
+	Arguments     json.RawMessage
 }
 
 // Valid reports whether a tool call has stable containment, a tool name, and
