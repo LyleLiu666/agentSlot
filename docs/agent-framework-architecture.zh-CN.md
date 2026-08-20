@@ -2,415 +2,254 @@
 
 ## 1. 文档定位
 
-本文是标准 LLM Agent 框架的权威全景说明，回答“系统最终由什么组成、谁拥有谁、
-请求怎样流动、哪里可以替换、哪里绝对不能替换”。阅读本文不需要先阅读实施阶段或
-历史讨论。
+本文是标准 LLM Agent 框架的权威全景说明，回答系统最终由什么组成、谁拥有谁、请求怎样流动，以及开发者可以替换哪些部分。
 
-- [标准组件地图](../COMPONENT_MAP.zh-CN.md) 是所有公共 Slot、基数和成熟度的权威清单。
-- [Agent 设计的架构讨论](agent-architecture-discussion.zh-CN.md) 保存决策理由和被否决方案。
-- [AgentRuntime 与标准 Slot 实施计划](agent-runtime-standard-slots-implementation-plan.zh-CN.md)
-  只规定实现顺序和验收，不缩小本文的目标架构。
+- [标准组件地图](../COMPONENT_MAP.zh-CN.md)是公共 Slot、基数和成熟度的权威清单；
+- [Agent 设计的架构讨论](agent-architecture-discussion.zh-CN.md)保存决策及理由；
+- [AgentRuntime 与标准 Slot 实施计划](agent-runtime-standard-slots-implementation-plan.zh-CN.md)规定迁移轮次和验收边界。
 
-本文描述的是长期架构，不是“第一版临时方案”。代码可以分阶段完成，但任何阶段都
-必须朝同一张完整架构图收敛，不能另造一套简化运行模型。
+本文描述长期架构，不是“第一版妥协”。代码分轮迁移不改变最终边界。迁移完成前，组件地图描述当前已实现合同；本文件描述迁移目标，两者的差距必须在实施计划中显式跟踪，不能把尚未实现的 Slot 提前标记为 Contracted。
 
 ## 2. 一句话架构
 
-AgentSlot 用通用装配核心选择并启动可替换组件；标准 Agent 层自动安装固定
-`AgentRuntime` 和固定 Gateway；每个显式创建或恢复的 Session 对应一个进程内
-`AgentRuntime`，所有用户操作只能经过应用级 Gateway，模型、工具、Session、Context
-和运维能力通过小而明确的 Slot 替换。
+AgentSlot 用通用装配核心选择并启动三个标准扩展面；标准 Agent 层固定实现 SessionManager、AgentRuntime 和 Gateway。每个显式创建或恢复的 Session 对应一个进程内 AgentRuntime；所有用户操作只能经 Gateway 进入；持久化、模型调用和用户接入分别由 `session.store`、`model.executor` 和 `gateway.channel` 替换。
 
-## 3. 系统全景
+## 3. 全景与所有权
 
 ```mermaid
 flowchart TB
-    subgraph P["Agent 产品"]
-        DEF["名称、Agent 配置、Module、额外 Profile 要求"]
-        UI["TUI / Web / Desktop / CLI / Function"]
+    subgraph Product["Agent 产品"]
+        SPEC["ApplicationSpec\n默认模型 / Prompt / ToolKeys / Context / Budget"]
+        UI["TUI / Web / Desktop / CLI / Function / IM"]
     end
-
-    subgraph C["AgentSlot 通用装配核心"]
+    subgraph Core["AgentSlot 通用装配核心"]
         APP["Application\nBuild / Start / Run"]
-        ASM["Assembly\n已验证的不可变装配结果"]
+        ASM["Assembly\n不可变装配结果"]
+        SLOT["typed Slots"]
         MOD["Module 生命周期"]
-        SLOT["One / Many / Chain typed Slots"]
     end
-
-    subgraph S["标准 Agent 固定层"]
-        ARUN["应用级 Runtime"]
-        G["固定 Gateway\n唯一用户交互后端"]
+    subgraph Fixed["标准 Agent 固定层"]
+        AR["应用级 Runtime"]
         REG["RuntimeRegistry\nSessionID → AgentRuntime"]
-        RC["RuntimeCoordinator"]
-        RT["固定 AgentRuntime\n每个已 create/resume Session 一个"]
+        SM["固定 SessionManager"]
+        GW["固定 Gateway"]
+        RT["固定 AgentRuntime"]
     end
-
-    subgraph D["Session 持久聚合"]
-        SES["Session"]
-        HIST["History\n事实账本"]
-        CTX["Context\n模型合法投影"]
-        QUE["Queue\n未消费输入"]
-        JR["RunJournal\n执行恢复证据"]
-        MC["SessionModelConfig"]
+    subgraph Replaceable["标准扩展面"]
+        SS["session.store : One"]
+        ME["model.executor : One"]
+        CH["gateway.channel : Many\n至少一个"]
+        OPTIONAL["Tool / ContextSource / Compactor / Hook\nCommitObserver / Provider / 运维组件"]
     end
-
-    subgraph X["可替换标准组件"]
-        SM["SessionManager / SessionStore"]
-        ME["ModelExecutor / ModelProvider"]
-        TOOLS["Tools"]
-        CC["ContextSource / Compactor"]
-        HK["AgentHooks"]
-        EP["Entrypoints / InteractionCommands"]
-        CROSS["Policy / Memory / Workflow / Gateway adapters / Operations"]
+    subgraph Session["Session 持久聚合"]
+        HIST["完整 Session History"]
+        CTX["Context Versions"]
+        QUEUE["Queue"]
+        JOURNAL["RunJournal"]
+        MODEL["SessionModelConfig"]
     end
-
-    DEF --> APP
-    APP --> ASM
-    MOD --> ASM
+    SPEC --> APP --> ASM --> AR
     SLOT --> ASM
-    ASM --> ARUN
-    ARUN --> G
-    ARUN --> REG
-    ARUN --> RC
-    UI --> EP --> G
-    G --> RC --> REG --> RT
-    RT --> SES
-    SES --> HIST
-    SES --> CTX
-    SES --> QUE
-    SES --> JR
-    SES --> MC
-    ASM --> X
-    SM --> SES
-    ME --> RT
-    TOOLS --> RT
-    CC --> RT
-    HK --> RT
+    MOD --> ASM
+    AR --> REG
+    AR --> SM
+    AR --> GW
+    SM --> SS
+    REG --> RT
+    RT --> Session
+    RT --> ME
+    RT --> OPTIONAL
+    UI --> CH --> GW
+    GW --> REG
 ```
 
-这张图包含两个不同层次：
+所有权规则：
 
-1. **通用装配核心**只知道 Module、Slot、Assembly 和生命周期，不知道 LLM、Session
-   或 Gateway。
-2. **标准 Agent 固定层**使用通用核心装配组件，但固定用户交互主链和执行循环，不允许
-   Agent 项目替换整个 Runtime 或 Gateway。
+- `Application.Build` 只验证和冻结装配结果，不创建 Session Runtime；
+- `Application.Start` 创建并持有应用级 Runtime、Registry、固定 Manager 和固定 Gateway；
+- 固定 Manager 只通过 SessionStore 创建、恢复或派生 Session，不保存第二份真相；
+- `CreateSession` 或 `ResumeSession` 成功时，Registry 中已有唯一的 AgentRuntime；
+- Gateway 通过 Registry 定位 Runtime，但不持有 Session 真相，也不直接写 Store；
+- Channel 只获得 `GatewayAccess`，不能获得 Runtime、Store、Executor 或内部锁；
+- 应用停止时先停止 Channel 接收新命令，再收束 Runtime，最后逆序停止共享组件。
 
-## 4. 统一的 Agent 应用入口
+## 4. 统一构建与启动
 
-### 4.1 显式启用标准 Agent
-
-标准 Agent 不能靠“发现某几个 Slot 已安装”进行隐式猜测。目标公共入口固定为独立的
-`standardagent` 包：
-
-- 通用程序使用 `agentslot.NewApplication`，不会自动获得 AgentRuntime 或 Gateway；
-- 标准 LLM Agent 使用 `standardagent.NewApplication`；
-- `standardagent.NewApplication` 返回同一个通用 `*agentslot.Application`，自动加入
-  框架内部 Runtime/Gateway Module 和标准 Agent Profile；
-- 标准 Profile 强制要求一个 `session.manager`、一个 `session.store`、一个
-  `model.executor` 和至少一个 `interaction.entrypoint`；
-- 产品仍显式提供名称、Agent 配置、组件 Module 和额外 Profile 要求；导入包本身不会
-  注册任何东西。
-
-所有标准 Agent 项目因此使用同一条控制链：
+标准 Agent 显式使用 `standardagent.NewApplication`。它仍返回通用 `*agentslot.Application`，自动安装固定标准层和标准 Profile；产品不需要自己组装 Registry、Manager、Gateway 或 Agent loop。
 
 ```text
-standardagent.NewApplication → Application.Build → Application.Start/Run → Runtime.Stop
+standardagent.NewApplication
+    → Application.Build
+    → Application.Start / Run
+    → Runtime.Stop
 ```
 
-不同项目只改变声明内容，不改变 Build、Start、Run、Stop 的语义，也不需要手写
-Runtime 注册表、Gateway 或循环装配。框架不新增 `AgentHost`、`RunningApplication`、
-公开 `RuntimeFactory` 或第二套启动容器。
+目标标准 Profile 只要求：
 
-### 4.2 Build 产物
+| Slot | 基数 | 作用 |
+| --- | --- | --- |
+| `session.store` | `One` | 原子持久化完整 Session 聚合 |
+| `model.executor` | `One` | 完成一次逻辑模型调用及其物理 Attempt |
+| `gateway.channel` | `Many`，至少一个 | 把具体用户接入方式绑定到固定 Gateway |
 
-`Build` 完成以下工作后产生不可变 `Assembly`：
+固定 SessionManager、AgentRuntime 和 Gateway 都不是 Slot。框架不新增 AgentHost、RunningApplication、公开 RuntimeFactory 或第二套启动容器。
 
-1. 安装开发者声明的 Module 和标准 Agent 内部 Module；
-2. 校验 Slot 基数、标准 Profile、Module 的 Slot 依赖和依赖环；
-3. 按依赖顺序构造组件，并冻结 Runtime 所需的依赖集合；
-4. 生成可检查、不可泄密的 `AssemblyDescription`。
+## 5. 对象生命周期
 
-当前代码使用 `Assembly`、`AssemblyDescription` 和 `agentslot.assembly/v0`，不保留
-旧 `Plan` 名称的长期兼容别名。
-
-### 4.3 Start 与 Stop
-
-`Application.Start` 按以下顺序启动：
-
-1. 启动共享组件；
-2. 创建应用级 Runtime、`RuntimeRegistry` 和 `RuntimeCoordinator`；
-3. 创建并绑定固定 Gateway；
-4. 启动 Entrypoint，允许其通过同一个 `GatewayAccess` 接收用户操作。
-
-停止顺序相反：先拒绝新的用户命令，再取消并收束全部 AgentRuntime，清空 Registry，
-关闭 Gateway 和 Entrypoint，最后逆序停止共享组件。任一启动失败都只回滚已经成功
-启动的部分。
-
-## 5. 对象所有权与生命周期
-
-| 对象 | 谁创建并持有 | 生命周期 | 是否持久化 | 是否是 Slot |
+| 对象 | 所有者 | 生命周期 | 持久化 | Slot |
 | --- | --- | --- | --- | --- |
-| Application | Agent 产品 | 进程配置期到关闭 | 否 | 否 |
-| Assembly | `Application.Build` | Application 生命周期 | 可导出安全描述 | 否 |
-| 应用级 Runtime | `Application.Start` | 一次 Start 到 Stop | 否 | 否 |
-| Gateway | 应用级 Runtime | 与应用级 Runtime 相同 | 否 | 否 |
-| RuntimeRegistry | 应用级 Runtime | 与应用级 Runtime 相同 | 否 | 否 |
-| RuntimeCoordinator | 应用级 Runtime | 与应用级 Runtime 相同 | 否 | 否 |
-| Session | SessionManager/Store | 跨进程重启 | 是 | Session 实现可替换 |
-| AgentRuntime | RuntimeCoordinator | Create/Resume 到 Close/Stop | 否 | 否 |
-| Run | AgentRuntime | 一次执行 | Journal 与事实持久化 | 否 |
-| 共享组件 | Assembly 中的 Module | Start 到 Stop | 由各实现决定 | 是 |
+| Application | Agent 产品 | 配置期到关闭 | 否 | 否 |
+| Assembly | Application | Build 后到关闭 | 仅可导出安全描述 | 否 |
+| 应用级 Runtime | `Application.Start` | Start 到 Stop | 否 | 否 |
+| RuntimeRegistry | 应用级 Runtime | Start 到 Stop | 否 | 否 |
+| 固定 Gateway | 应用级 Runtime | Start 到 Stop | 否 | 否 |
+| 固定 SessionManager | 应用级 Runtime | Start 到 Stop | 否 | 否 |
+| Session | SessionStore | 跨进程重启 | 是 | 否 |
+| AgentRuntime | Registry | Create/Resume 到 Close/Stop | 否 | 否 |
+| Run | AgentRuntime | 一次执行 | 事实和恢复证据持久化 | 否 |
+| 可替换组件 | 对应 Module | Start 到 Stop | 由合同决定 | 是 |
 
-固定所有权规则：
+一个启动后的应用级 Runtime 是明确的单进程边界：其中所有活跃 AgentRuntime 都在同一进程。同一 SessionID 最多对应一个 AgentRuntime；并发 Resume 汇合到同一实例。只读浏览不会创建 Runtime。跨进程 Session 租约、迁移或 active-active 不属于当前架构，未来需要独立设计。
 
-- 一个启动后的应用级 Runtime 是一个**单进程执行边界**；Registry 中的所有
-  AgentRuntime 都在该进程内运行。
-- 浏览 Session 列表或只读查看不会创建 AgentRuntime。
-- `CreateSession` 或 `ResumeSession` 成功时 Runtime 已完成初始化并登记。
-- 同一进程、同一 SessionID 最多一个 AgentRuntime；并发 Resume 汇合到同一实例。
-- AgentRuntime 在 idle 时保持轻量常驻，只在 `Close` 或应用停止时释放；Close 不删除
-  Session，再次 Resume 会重建 Runtime。
-- 同一 Session 同时最多一个活跃 Run；不同 Session 可以并行。
-- 多个进程不能同时拥有同一 Session 的标准 AgentRuntime。跨进程 Session 租约、迁移
-  或 active-active 不属于本架构的隐含能力，未来需要单独设计。
+## 6. 固定 Gateway 与 GatewayChannel
 
-## 6. Gateway 是用户操作的唯一后端
+Gateway 是框架内的普通 Go 对象，不监听网络，也不是转发服务。它是 Agent 与用户操作之间唯一的后端边界。
 
-Gateway 是一套框架内的静态 Go 代码和进程内对象，不等于 HTTP 转发服务，也不要求
-独立部署。它把 Agent 本体与 TUI、Web、桌面端、CLI 和嵌入式函数调用解耦。
+```go
+var ChannelSlot = agentslot.Many[GatewayChannel]("gateway.channel")
 
-```mermaid
-flowchart LR
-    TUI["TUI"] --> E1["Entrypoint"]
-    WEB["Web / Desktop"] --> NET["HTTP / WS / ACP adapter"] --> E2["Entrypoint"]
-    FN["进程内函数"] --> E3["Entrypoint"]
-    E1 --> GA["GatewayAccess"]
-    E2 --> GA
-    E3 --> GA
-    GA --> G["固定 Gateway"]
-    G --> RA["私有 RuntimeAccess"]
-    RA --> RC["RuntimeCoordinator"]
-    RC --> RT["AgentRuntime"]
+type GatewayChannel interface {
+	Bind(GatewayAccess) error
+}
 ```
 
-边界固定如下：
+Channel 的 Module 负责自身 Start/Stop。TUI、Web、飞书、Mattermost、RPC 和函数调用分别实现 Channel；需要网络时，监听、协议、远程认证授权、路由、输出和限流都属于该 Channel。Gateway 只提供与载体无关的结构化命令、查询、临时流和持久 revision 通知。
 
-- Entrypoint 只能获得 `GatewayAccess`，不能获得 RuntimeAccess、AgentRuntime、Store、
-  ModelExecutor 或内部锁。
-- Gateway 负责主体校验、目标路由、幂等/revision 基础校验、命令目录、Snapshot、事件
-  投影以及流式/聚合结果；它不直接写 SessionStore，也不执行模型或工具循环。
-- Gateway 通过私有 RuntimeAccess 调用 RuntimeCoordinator。RuntimeAccess 不进入公共
-  Slot、组件地图或产品 API。
-- Gateway 核心与承载协议无关。进程内入口直接调用 Go 接口；远程 UI 通过 HTTP、
-  WebSocket、gRPC、ACP 等适配器映射相同语义。
-- 连接断开不会取消 Run；取消必须是显式命令。重连使用 Session Snapshot、revision 和
-  后续持久事件，不持久化临时 chunk 游标或框架级客户端 ACK。
-- 当前进程内事件订阅要求从刚取得的 Snapshot revision 开始；若两步之间已有新提交则
-  返回 revision conflict 并重新取 Snapshot。慢订阅者超过固定内存安全上限时收到
-  overflow 并重连，不能让单个 UI 无界占用 Agent 进程内存。
+不存在标准 `interaction.entrypoint`、`gateway.transport`、`gateway.identity`、`gateway.route` 或 `gateway.delivery` Slot。这些职责不能被拆成能够绕过固定 Gateway 的第二套访问路径。
 
-`interaction.command` 是可选 `Many` Slot，只向 Gateway 注册 UI-neutral 的结构化命令。
-Gateway 输出命令名称、字段、选项、确认要求、结果和后续动作；不同 Entrypoint 可以把
-同一个 `model` 命令渲染成 `/model`、菜单、按钮或表单。命令不能直接访问 Store 或
-Runtime，也不能实现第二套循环。框架提供显式安装的默认 `model` 命令、函数式进程内
-Entrypoint 和行式 CLI Entrypoint；它们都是对上述边界的参考实现，不会自动安装，也不把
-具体 UI 写进框架。
+### 6.1 严格 Revision
 
-## 7. Session、AgentRuntime 与固定循环
+每个 Session 只有一个 `SessionRevision`。所有外部写命令——Send、Steer、Queue 编辑、模型切换、Cancel 和 Close——都必须携带 `ExpectedRevision`。旧 revision 返回：
 
-### 7.1 Session 的五类持久状态
+```text
+RevisionConflictError {
+    CurrentRevision
+    SnapshotRequired = true
+}
+```
 
-| 状态 | 定义 | 修改规则 |
+Gateway 不自动重试用户命令。调用方读取新的 SessionView，让用户或确定性 UI 流程基于新状态再次操作。
+
+### 6.2 流、通知与恢复
+
+- chunk/reset 是提交前的临时显示事件，允许丢失，永不持久化；
+- 持久提交后只广播 `SessionID + Revision` 变化通知；
+- UI 收到通知后读取权威 SessionView，不在客户端拼装第二份 Session 真相；
+- 缓冲满时优先丢弃 chunk；持久 revision 通知无法投递时关闭订阅；
+- 断线不取消 Run，恢复后重新读取 View；不保存 chunk 游标或框架级客户端 ACK。
+
+SessionView 返回当前状态、Queue、模型配置和最近 100 个逻辑 Step。更老 History 使用 `BeforeHistorySequence` 游标向前分页，每页默认且最多 100 个完整逻辑 Step；不使用 offset，也不能拆断工具协议。
+
+## 7. Session 与完整 Session History
+
+SessionStore 原子持久化五类状态：
+
+1. **完整 Session History**：唯一、append-only 的事实序列；
+2. **Context**：下一次模型调用的合法输入投影；
+3. **Queue**：尚未进入 Context 的 normal、steer 和 held 输入；
+4. **RunJournal**：未完成执行的恢复证据，不是第二份事实账本；
+5. **SessionModelConfig**：当前 Session 的模型选择和参数。
+
+每个 HistoryFact 具有稳定 FactID、严格递增 HistorySequence、Session/Run/Step 身份、时间、ActorIdentity 和明确类型。标准事实至少包括 Message、ToolCall、ToolResult、Run、ModelAttempt、ModelConfigChanged、ContextContribution 和 RunBudgetExceeded。
+
+`ActorIdentity` 记录事实来自 local_user、remote_user、service 或 agent；它是审计事实，不携带凭据，也不能被 Gateway 当成重新认证的依据。
+
+History 记录真实发生顺序；Context 才负责生成合法模型协议。未配对 ToolCall 暂不进入下一模型请求，但不会从 History 消失。SystemPrompt、Tool definitions 和临时 chunk 不伪装成 Message；完整逻辑请求按 ContextRetentionMode 保存。
+
+## 8. 固定 AgentRuntime
+
+AgentRuntime 状态只有 `idle`、`running`、`closed`：
+
+- 同一 Session 同时最多一个 Run，不同 Session 可并行；
+- Send 在 idle 时启动新 Run；running 时持久化为下一 Run 的 normal 输入；
+- Steer 只作用于活跃 Run，并在下一安全 Step 消费；
+- 正常完成可以 FIFO 处理下一条 normal；取消、错误、重启或预算耗尽后不自动消费旧 Queue；
+- Close 释放内存 Runtime，不删除 Session；再次 Resume 可恢复；
+- 一个 Run 内冻结 SessionModelConfig，只允许在 Run 之间切换模型。
+
+固定循环顺序是：认领输入、建立 Run、贡献新 Step Context、装配模型请求、执行逻辑模型调用、提交完整结果、执行工具、继续模型，直到自然完成、取消、错误或 Token Budget 终止。Hook、Tool、Executor 和 Channel 都不能成为第二个状态控制者。
+
+## 9. Context 与 Token Budget
+
+`ContextSource` 是可替换扩展面，但只能为**新 Step**提出追加内容。Runtime 必须先把提议持久化为 `ContextContributionFact`，再装配 Context。Source 不得替换、删除或插入旧 Step 内容。
+
+Agent 启动配置提供：
+
+- `LatestOnly`：默认，只保存最新完整 Context；
+- `RetainAll`：调试模式，保存每个 Step 的完整逻辑模型请求。
+
+完整 Context 包含当时的 SystemPrompt、模型输入、Tool definitions、ModelConfig 和附件投影，但不保存凭据或网络 Header。Compactor 可以替换；Runtime 固定验证协议完整性和硬 Token 上限。
+
+只提供 `MaxTokensPerRun`，默认 `0` 表示无限。预算统计成功与失败 Attempt；达到预算且任务未完成时追加 `RunBudgetExceeded`，结束当前 Run 并回到 idle。用户显式发送“继续”会创建新 Run。框架不定义 MaxStep、MaxToolCall、MaxRunDuration 或 Queue 数量限制。
+
+## 10. ModelExecutor 与物理 Attempt
+
+AgentRuntime 发起一次逻辑模型调用；ModelExecutor 可以在内部执行多个物理 Provider Attempt，并自行决定重试、原生续传或终止。Runtime 不猜测 Provider 恢复方式。
+
+Executor 获得受限 `AttemptRecorder`：
+
+- `Started` 必须在真实 Provider 请求前完成持久提交；
+- `Finished` 必须在下一次重试或返回终态前完成持久提交；
+- 每个 Attempt 使用 started/terminal 两条 append-only `ModelAttempt` 事实；
+- 崩溃恢复为未配对 started 追加 `outcome_unknown`；
+- 失败 Attempt 不进入模型 Context，但必须保留用量与安全错误。
+
+TokenUsage 分开记录 input、output、cached-input、cache-write、reasoning 和 total。cached-input 与 reasoning 是子集，不能再次累加到 total。Provider 未返回失败 Attempt usage 时，由适配器的本地 tokenizer 估算并标记估算来源。
+
+## 11. Tool、Hook 与提交观察
+
+ToolKeys 是严格白名单。nil、空列表和未配置都表示不暴露工具；未知、空字符串或重复 key 必须在 Build 阶段失败。Tool 只声明 `Serial` 或 `ParallelSafe`；工具结构化错误进入模型 Context，工具结果后 Runtime 必须继续调用模型。
+
+`agent.hook` 只保留 `BeforeRunComplete`。Hook 只能提出后续输入 proposal；Runtime 校验、持久化并决定是否继续。Hook 不能改写 Store 或控制 Runtime 状态。
+
+`session.commit.observer` 是有序异步观察链，只接收 SessionID、Revision 和本次提交的 FactSequence 范围。失败或 panic 被隔离，不能回滚提交。Trace、Metric、Audit、Usage 继续使用专用 Slot；不存在宽泛的 `runtime.observer`。
+
+## 12. Fork
+
+固定 Manager 支持完整历史 Fork 和从历史检查点 Fork。检查点必须是合法 HistorySequence/已完成 Step，不能位于未配对 ToolCall 中间。
+
+- 子 Session 保存父 Session、截止 Sequence 和来源 Fact 身份；
+- Queue、RunJournal 和活跃 Run 不继承；
+- 默认继承来源 Session 当前 ModelConfig，创建命令可以显式覆盖；
+- 历史事实保留来源关系，但子 Session 的 usage 不重复计费；
+- 摘要启动是另一种显式操作，不能伪装成 Fork。
+
+## 13. 框架固定边界与可定制边界
+
+| 层级 | 开发者能否替换 | 内容 |
 | --- | --- | --- |
-| History | 真实发生事实的唯一时间序列 | 严格 append-only |
-| Context | 下一次模型调用的合法协议投影 | 创建版本，不能改写 History |
-| Queue | 尚未进入 Context 的 normal、steer、held 输入 | 认领前可用 expected revision/CAS 修改 |
-| RunJournal | 活跃 Run、Step、工具 pending 和恢复证据 | 随执行事务推进，不复制对话事实 |
-| SessionModelConfig | 当前 Provider、Model、Reasoning 和参数 | 仅 Runtime idle 时 CAS 更新 |
+| 通用装配核心 | 否 | Application、Module、Slot、Assembly、Build/Start/Run、生命周期回滚 |
+| 标准固定层 | 否 | SessionManager、AgentRuntime、Gateway、Registry 和事务/状态不变量 |
+| 标准 Profile 必需 Slot | 是 | SessionStore、ModelExecutor、GatewayChannel |
+| 可选 Slot | 是 | Provider、Tool、ContextSource、Compactor、Hook、CommitObserver、策略与运维组件 |
+| 产品配置 | 可配置 | Prompt、默认模型、ToolKeys、ContextRetentionMode、MaxTokensPerRun、Provider 地址引用 |
+| 内部端口 | 否 | ID 生成、Clock、锁、协调器；测试注入不使其成为公共 Slot |
 
-SystemPrompt、Tool 定义和 Runtime 的 Context 配置属于 `AgentRuntimeConfig`，不反复写入
-History。临时模型 chunk、Provider Attempt 和客户端展示状态也不进入 History。
+开发者若需要完全不同的循环，可以直接使用通用 AgentSlot 核心定义项目本地 Profile，但不能把它称为标准 AgentRuntime 的替换实现。
 
-完整 fork 复制指定 revision 的可审计 History 并重写子 Session 的事实身份；Context
-按子 Session 最终模型重新派生，来源 Session 尚未完成的 Queue 和 RunJournal 不复制。
-摘要启动只把显式摘要作为新会话输入。两种派生都建立独立执行状态，并默认继承来源
-Session 当前模型配置。
+## 14. 当前代码与目标架构的差距
 
-### 7.2 Runtime 状态
+截至本轮文档基线，现有代码仍实现旧合同。后续迁移必须消除以下差距：
 
-AgentRuntime 只有 `idle`、`running`、`closed`：
+- `session.manager` 仍是公共 Slot，而不是固定 Manager；
+- `interaction.entrypoint` 及若干 Gateway 子 Slot 尚未收敛为 `gateway.channel`；
+- HistoryFact、Attempt、TokenUsage、Context retention 和历史分页字段尚不完整；
+- 外部写命令尚未全部执行统一严格 ExpectedRevision；
+- Hook/Observer 和 ToolKeys 仍是旧语义；
+- FileStore 仍是旧格式；组件地图仍反映当前代码成熟度。
 
-```mermaid
-stateDiagram-v2
-    [*] --> idle: Create / Resume 完成
-    idle --> running: Send / RunPending 成功认领
-    running --> running: Steer / model step / tool batch
-    running --> idle: 正常完成 / Cancel / 最终错误 / 恢复终止
-    idle --> closed: Close
-    running --> closed: Close 先取消并收束
-```
+这些是迁移任务，不是未决架构。最终验收时目标组件地图为 37 个标准生态位，其中 16 个 Contracted；达到该数字前不得通过改文档虚报完成。
 
-- `Send` 持久化 normal 输入；idle 时原子创建 Run，running 时排队。
-- `Steer` 只针对当前 Run，在下一个安全 step 边界优先批量消费；idle 返回
-  `no_active_run`。
-- `RunPending` 在没有新消息时显式继续异常停止后遗留工作，不等同于 ResumeSession。
-- 正常完成可以 FIFO 自动认领下一条 normal；取消、错误或重启后回到 idle，但不自动
-  消费旧 Queue。
-- `Cancel` 只取消当前 Run，`WhenIdle` 等待收束，`Close` 拒绝新命令并释放内存对象。
+## 15. 明确不作为开发门禁的事项
 
-### 7.3 固定 Agent loop
-
-一次 Run 的标准循环只有一个控制者：AgentRuntime。
-
-1. 从 Queue 原子认领输入，冻结本 Run 的 SessionModelConfig，并追加携带配置与来源
-   revision 的 `RunStarted` History 事实；RunJournal 只在产生待执行工具调用时建立；
-2. 从 History、已认领输入、固定 Prompt、Tool 定义和 Context 组件装配合法模型请求；
-3. 调用 ModelExecutor 完成一次逻辑模型调用；
-4. 临时 chunk 只发事件，完整 assistant 结果才提交 History；
-5. 若结果包含 tool call，先把完整 call 事实与 RunJournal pending 原子提交，再按 Tool 的
-   `Serial`/`ParallelSafe` 声明执行；
-6. 把每个工具的成功、结构化错误或 `outcome_unknown` 结果提交 History，并继续调用模型；
-7. 模型自然结束后运行 `BeforeRunComplete` Hook。Hook 只能提出后续输入 proposal，
-   AgentRuntime 决定是否持久化和继续；
-8. 原子完成 Run，执行只读 `AfterCommit` 观察，并按完成原因决定是否自动消费 normal。
-
-工具返回错误时，安全的结构化错误结果交给模型判断；网络级模型恢复由 ModelExecutor
-处理。AgentRuntime 不包含 Provider-specific 重试、续传或计费分支。
-
-## 8. 模型切换
-
-模型切换是 Session 后端能力，不依赖 Slash 或 Gateway UI：
-
-- 新 Session 从 Agent 默认模型初始化 `SessionModelConfig`；Resume 恢复 Session 自己
-  保存的配置，不被新默认值覆盖。
-- SessionModelConfig 可以在 idle 时更新；running 时返回 `active_run`，不会隐式取消。
-- 需要中途切换时，调用方先显式 Cancel，再等待 WhenIdle，然后提交带 expected revision
-  的完整新配置。
-- 每个 Run 在开始时冻结配置版本，Run 内所有 step 使用同一 Provider、Model、Reasoning
-  和参数。
-- 未知模型、非法参数直接拒绝；可能产生模态或 Context 损失时先返回警告，明确确认后
-  才提交。
-- 切换到文本模型不会删除图片或附件。Context 只投影稳定引用或省略说明；切回视觉模型
-  时原始事实仍然存在。
-- Context 超限先调用可替换 Compactor，压缩后仍超过硬限制则在 Provider 调用前失败，
-  不能静默截断。
-
-`/model` 只是默认 InteractionCommand 的一种前端渲染，最终仍调用同一个 Gateway
-模型配置命令和同一笔 SessionStore 事务。菜单、按钮或直接结构化 Go 调用读取并提交
-同一份命令数据，不存在另一套模型切换后端。
-
-## 9. 可替换边界
-
-| 类别 | 典型内容 | 谁决定 | 能否被 Agent 项目替换 |
-| --- | --- | --- | --- |
-| 通用装配规则 | Module、Slot、Assembly、依赖、生命周期回滚 | AgentSlot | 否 |
-| 标准 Agent 主链 | Gateway、Registry、Coordinator、AgentRuntime、循环和状态机 | AgentSlot | 否 |
-| 正确性不变量 | 单 Run、append-only、CAS、工具结果后继续、异常不自动 drain | AgentSlot | 否 |
-| 必需 Slot | SessionManager、SessionStore、ModelExecutor、Entrypoint | 标准 Profile | 实现可替换，合同不可破坏 |
-| 执行扩展 Slot | Provider、Tool、ContextSource、Compactor、Hook | Agent 项目 | 可以 |
-| 交互适配 Slot | InteractionCommand、Gateway transport/identity/route/delivery | Agent 项目 | 可以，但不能替换 Gateway 核心 |
-| 平台能力 Slot | Policy、Approval、Authorization、Memory、Checkpoint、Workspace、Environment、Artifact、Credential、Workflow、Mailbox | Agent 项目/Profile | 可以 |
-| 运维与商业 Slot | Event/Observer、Usage、Price、Quota、Billing、Audit、Trace、Metric、Health | Agent 项目/Profile | 可以 |
-| 默认实现 | 默认 Compactor、标准 Tool 包、内存/文件 Store、Provider/CLI/JSON Lines adapter | AgentSlot 或生态 | 可以替换或不安装 |
-| 产品配置 | Prompt、ToolKeys、默认模型、Provider 地址、凭据引用、限额 | Agent 产品 | 可以配置 |
-| Runtime 内部端口 | Clock、ID 生成器、锁、调度器、事件泵 | 固定层内部 | 仅测试注入，不是公共 Slot |
-
-完整 Slot ID、基数和成熟度只以组件地图为准。Slot 的意义是“独立实现可替换的业务
-责任”，不能因为某段内部代码方便测试就新增 Slot。
-
-## 10. 包依赖方向
-
-目标 Go 包依赖固定为单向 DAG：
-
-```mermaid
-flowchart TD
-    PRODUCT["Agent 产品 / examples"] --> STD["standardagent\n统一入口与固定层"]
-    PRODUCT --> IMPL["组件实现 / Provider 与存储适配器"]
-    STD --> CONTRACTS["session / model / tool / context / interaction / policy ...\n标准合同包"]
-    IMPL --> CONTRACTS
-    CONTRACTS --> TYPES["agent\n稳定身份、Message、事件和错误语义"]
-    CONTRACTS --> CORE["agentslot\n通用装配核心"]
-    STD --> CORE
-```
-
-规则如下：
-
-- 根包 `agentslot` 只实现通用装配，不导入任何 Agent 领域包。
-- `agent` 叶包保存跨组件共享的稳定值类型，不依赖 Provider、存储、UI 或固定 Runtime。
-- `session`、`model`、`tool`、`context`、`interaction` 等合同包可以依赖 `agent` 和根包，
-  但不能依赖 `standardagent` 或具体实现。
-- `interaction` 定义 Entrypoint、InteractionCommand、GatewayAccess 及其结构化数据；固定
-  Gateway 实现这些合同。
-- `standardagent` 依赖根包和合同包，公开统一 Application 构造入口；循环、Registry、
-  Coordinator 和 Gateway 实现放在它的 `internal` 包中，产品不能绕过公开边界调用。
-- 适配器依赖合同包和外部 SDK；合同包和通用核心永远不反向依赖适配器。
-
-这条依赖图必须在创建公共领域类型前固定，避免 Session、Gateway 和 Runtime 互相导入。
-
-## 11. 一致性、恢复与失败语义
-
-以下边界属于架构，不允许具体实现自行改写：
-
-- Queue 入队、幂等结果、MessageID 和 revision 推进原子提交。
-- idle→running 时，输入认领、RunID、配置快照和 RunJournal 原子提交。
-- tool call 事实与同 ToolCallID 的 pending 原子提交；成功后才能执行工具。
-- 每个 ToolCallID 只能有一个终态结果。崩溃后未知副作用写入
-  `outcome_unknown`，不能自动重跑。
-- ContextVersion 安装必须校验来源 History/Queue revision；Compactor 不能直接写 Store。
-- ModelExecutor 的每次真实请求有 AttemptID；临时 Gateway delta/reset 无损携带它，
-  用量与运维事件也可以记录它，但 Session History 只保存完整业务事实。
-- 半流失败可以由 Executor 重试、续传或终止；若已展示临时内容，发送 reset 撤销临时
-  投影。临时 chunk 不持久化。
-- Session 持久化是核心事务，不能交给可选 Hook。Hook 失败记录后继续其他 Hook，不得
-  回滚已经提交的事实。
-
-## 12. 部署与伸缩边界
-
-标准部署单元是一个 Agent 应用进程：
-
-- 应用级 Runtime、Gateway、Registry 和所有已打开 Session 的 AgentRuntime 在同一进程；
-- SessionStore、Provider、对象存储和消息系统可以是进程外服务；
-- 远程前端只通过 Gateway 的传输适配器进入；
-- 同一进程可以并行运行多个 Session，不为每个 Session 创建进程或 Gateway；
-- 多个独立 Agent 应用进程可以部署，但不能在没有新租约架构的情况下共同执行同一
-  Session。
-
-因此，横向扩容当前只能按 Agent、Workspace 或明确不重叠的 Session 所有权分片。跨进程
-热迁移和 active-active 不是“以后加一个锁”就能得到的能力，不能在实现中偷偷假设。
-
-## 13. 仍需选择的实施参数
-
-以下事项不会改变本文的对象、所有权、调用方向、状态机或扩展边界，因此不是架构缺口：
-
-| 事项 | 已固定架构 | 实施时选择 |
-| --- | --- | --- |
-| Gateway wire protocol | 核心 carrier-neutral，远程端经适配器 | HTTP/SSE、WebSocket、gRPC、ACP 的具体组合 |
-| Queue 容量与背压数值 | 必须有限额、typed error、CAS 和不可丢事实 | 各 Profile 的默认容量与配额值 |
-| 重试与 Run 上限数值 | ModelExecutor 管恢复，Run 必须有限终止边界 | 次数、退避、最大 Step/工具调用/时长 |
-| Provider 范围 | Provider 是可选 Many，Executor 显式依赖 | 首批用哪两个独立协议证明合同 |
-| 数据库与网络 Schema | Session 事务和 Gateway 语义固定 | 具体存储表、索引和 wire version |
-
-RunJournal 已确定属于 SessionStore 聚合，不再建立独立 Slot。Session History 查询能力
-作为受授权的标准 Tool 实现，通过 Session 只读查询端口读取事实，不建立专用 History
-Tool Slot。
-
-这些参数可以在实施和真实消费者验证中确定；它们不能成为推迟固定 Gateway、Runtime、
-Session 聚合或包依赖方向的理由。
-
-## 14. 架构完成判据
-
-本架构已经固定：
-
-- 标准 Agent 如何显式启用并自动挂载；
-- Build、Start、Run、Stop 的唯一入口；
-- Application、Assembly、应用级 Runtime、Gateway、Session 和 AgentRuntime 的所有权；
-- 单进程多 Session 并发模型；
-- 用户操作、模型调用、工具执行和持久化的完整主链；
-- Session 五类状态及原子提交边界；
-- 模型切换、断线重连、取消、失败和崩溃恢复语义；
-- 框架固定能力、可替换 Slot、默认实现和产品配置的边界；
-- Go 包依赖方向和禁止的反向依赖；
-- 分布式能力不在当前标准中的明确边界。
-
-后续 TDD 可以细化 Go 方法签名和错误封装，但不得重新发明上述架构。若真实实现证明
-某项不成立，必须先修改本文和决策账本，再改变代码。
+下列上线或生态事项不阻塞本架构的代码开发：具体远程 wire protocol、生产认证系统、分布式 Session 租约、部署拓扑、运维告警阈值、Provider 凭据平台和版本发布流程。开发期仍必须完成本地确定性测试、race、vet、文件崩溃安全和合同一致性验证。
