@@ -176,7 +176,7 @@ func TestRuntimeCommitsToolCallAndResultThenContinuesModel(t *testing.T) {
 		}}}},
 		model.FakeExecution{Events: []model.ModelEvent{complete("after tool")}},
 	)
-	access, stop := startRuntimeTestApplication(t, fake, toolModule{key: "echo", value: installed})
+	access, stop := startRuntimeTestApplicationWithConfig(t, fake, AgentRuntimeConfig{ToolKeys: []string{"echo"}}, toolModule{key: "echo", value: installed})
 	defer stop()
 	opened := createRuntimeTestSession(t, access)
 	if _, err := access.Send(context.Background(), interaction.SendRequest{SessionID: opened.SessionID, ExpectedRevision: opened.Revision, Input: textInput("use tool")}); err != nil {
@@ -411,12 +411,17 @@ func (recoveryFailStore) Recover(context.Context, session.SessionRef) (session.S
 
 func startRuntimeTestApplication(t *testing.T, executor model.ModelExecutor, extra ...agentslot.Module) (interaction.GatewayAccess, func()) {
 	t.Helper()
+	return startRuntimeTestApplicationWithConfig(t, executor, AgentRuntimeConfig{}, extra...)
+}
+
+func startRuntimeTestApplicationWithConfig(t *testing.T, executor model.ModelExecutor, config AgentRuntimeConfig, extra ...agentslot.Module) (interaction.GatewayAccess, func()) {
+	t.Helper()
 	memory := session.NewMemoryModule()
 	entry := &captureChannel{}
 	modules := []agentslot.Module{memory, executorModule{executor: executor}}
 	modules = append(modules, extra...)
 	modules = append(modules, NewGatewayChannelModule("entrypoint.runtime-test", "test", entry))
-	application := NewApplication(ApplicationSpec{Name: "runtime-test", Modules: modules, DefaultModelConfig: model.Config{ModelID: "default", Reasoning: model.ReasoningDefault}})
+	application := NewApplication(ApplicationSpec{Name: "runtime-test", Modules: modules, RuntimeConfig: config, DefaultModelConfig: model.Config{ModelID: "default", Reasoning: model.ReasoningDefault}})
 	running, err := application.Start(context.Background())
 	if err != nil {
 		t.Fatalf("start: %v", err)

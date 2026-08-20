@@ -58,6 +58,30 @@ func TestMemoryStoreAssignsStableHistoryMetadata(t *testing.T) {
 	}
 }
 
+func TestCommitReportsTheExactAppendedHistoryRange(t *testing.T) {
+	store, snapshot := newStoredSession(t, "commit-range")
+	factMessage := message("message-range", snapshot.Session.ID, agent.RoleUser, "fact")
+	commit := commitChanges(t, store, snapshot.Session.ID, snapshot.Revision, "fact-range",
+		session.Change{Kind: session.AppendMessage, Message: &factMessage},
+	)
+	if commit.FirstHistorySequence != 1 || commit.LastHistorySequence != 1 {
+		t.Fatalf("fact commit range = %d..%d", commit.FirstHistorySequence, commit.LastHistorySequence)
+	}
+	replayed := commitChanges(t, store, snapshot.Session.ID, snapshot.Revision, "fact-range",
+		session.Change{Kind: session.AppendMessage, Message: &factMessage},
+	)
+	if replayed.Applied || replayed.FirstHistorySequence != commit.FirstHistorySequence || replayed.LastHistorySequence != commit.LastHistorySequence {
+		t.Fatalf("idempotent fact range = %#v, want original range %#v", replayed, commit)
+	}
+	queued := message("message-queued", snapshot.Session.ID, agent.RoleUser, "queued")
+	queueOnly := commitChanges(t, store, snapshot.Session.ID, commit.Revision, "queue-only-range",
+		session.Change{Kind: session.EnqueueMessage, QueueItem: &session.QueueItem{Message: queued, Delivery: session.DeliveryNormal}},
+	)
+	if queueOnly.FirstHistorySequence != 0 || queueOnly.LastHistorySequence != 0 {
+		t.Fatalf("queue-only commit range = %d..%d, want zero range", queueOnly.FirstHistorySequence, queueOnly.LastHistorySequence)
+	}
+}
+
 func TestMemoryStorePersistsTypedOperationalFacts(t *testing.T) {
 	store, snapshot := newStoredSession(t, "typed-facts")
 	snapshot = startStoredRun(t, store, snapshot, "run-1")

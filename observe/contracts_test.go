@@ -7,6 +7,7 @@ import (
 	"time"
 
 	agentslot "github.com/LyleLiu666/agentSlot"
+	agent "github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/observe"
 )
 
@@ -33,24 +34,36 @@ func TestObservationComponentsAreIndependentOrderedChains(t *testing.T) {
 }
 
 func TestObservationRecordsValidatePortableFacts(t *testing.T) {
-	identity := observe.Identity{SessionID: "session-1", RunID: "run-1", StepID: "step-1", ToolCallID: "call-1"}
+	identity := observe.Identity{
+		SessionID: "session-1", RunID: "run-1", StepID: "step-1", ToolCallID: "call-1", AttemptID: "attempt-1",
+		Actor: agent.ActorIdentity{Kind: agent.ActorService, ID: "test"},
+	}
 	now := time.Now().UTC()
 	valid := []interface{ Validate() error }{
 		observe.TraceRecord{Kind: observe.TraceRunStarted, At: now, Identity: identity},
-		observe.MetricRecord{Name: observe.MetricRunTotal, Kind: observe.MetricCounter, Value: 1, At: now, Attributes: map[string]string{"outcome": "started"}},
+		observe.MetricRecord{Name: observe.MetricRunTotal, Kind: observe.MetricCounter, Value: 1, At: now, Identity: identity, Attributes: map[string]string{"outcome": "started"}},
 		observe.AuditRecord{Kind: observe.AuditToolDecision, At: now, Identity: identity, Action: "bash", Decision: "allow"},
-		observe.UsageRecord{Kind: observe.UsageModel, At: now, Identity: identity, ProviderKey: "provider", ModelID: "model", AttemptID: "attempt-1", InputTokens: 2, OutputTokens: 3, TotalTokens: 5},
+		observe.UsageRecord{Kind: observe.UsageModel, At: now, Identity: identity, ProviderKey: "provider", ModelID: "model", InputTokens: 2, OutputTokens: 3, CachedInputTokens: 1, CacheWriteTokens: 1, ReasoningTokens: 2, TotalTokens: 5},
 	}
 	for _, record := range valid {
 		if err := record.Validate(); err != nil {
 			t.Fatalf("valid record %T rejected: %v", record, err)
 		}
 	}
+	withoutProvider := observe.UsageRecord{
+		Kind: observe.UsageModel, At: now, Identity: identity, ModelID: "executor-owned-model", TotalTokens: 1,
+	}
+	if err := withoutProvider.Validate(); err != nil {
+		t.Fatalf("usage for an Executor-owned Provider was rejected: %v", err)
+	}
 	if err := (observe.MetricRecord{Name: observe.MetricRunTotal, Kind: observe.MetricCounter, Value: math.NaN(), At: now}).Validate(); err == nil {
 		t.Fatal("NaN metric accepted")
 	}
-	if err := (observe.UsageRecord{Kind: observe.UsageModel, At: now, Identity: identity, ProviderKey: "p", ModelID: "m", AttemptID: "a", InputTokens: 2, OutputTokens: 3, TotalTokens: 4}).Validate(); err == nil {
+	if err := (observe.UsageRecord{Kind: observe.UsageModel, At: now, Identity: identity, ProviderKey: "p", ModelID: "m", InputTokens: 2, OutputTokens: 3, TotalTokens: 4}).Validate(); err == nil {
 		t.Fatal("inconsistent token total accepted")
+	}
+	if err := (observe.UsageRecord{Kind: observe.UsageModel, At: now, Identity: identity, ProviderKey: "p", ModelID: "m", InputTokens: 2, CachedInputTokens: 3, TotalTokens: 2}).Validate(); err == nil {
+		t.Fatal("cached input larger than input was accepted")
 	}
 }
 
@@ -58,7 +71,7 @@ func TestObservationRecordsRequireIdentityForTheirSpecificFactKind(t *testing.T)
 	now := time.Now().UTC()
 	invalid := []interface{ Validate() error }{
 		observe.TraceRecord{Kind: observe.TraceRunStarted, At: now, Identity: observe.Identity{SessionID: "session-1"}},
-		observe.TraceRecord{Kind: observe.TraceModelAttemptStarted, At: now, AttemptID: "attempt-1", Identity: observe.Identity{SessionID: "session-1", RunID: "run-1"}},
+		observe.TraceRecord{Kind: observe.TraceModelAttemptStarted, At: now, Identity: observe.Identity{SessionID: "session-1", RunID: "run-1", AttemptID: "attempt-1"}},
 		observe.TraceRecord{Kind: observe.TraceToolStarted, At: now, Identity: observe.Identity{SessionID: "session-1", RunID: "run-1", StepID: "step-1"}},
 		observe.AuditRecord{Kind: observe.AuditToolDecision, At: now, Identity: observe.Identity{SessionID: "session-1"}, Action: "bash", Decision: "allow"},
 	}

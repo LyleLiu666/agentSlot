@@ -232,6 +232,10 @@ Standard applications install each Channel with
 contribution that would bypass GatewayAccess binding or lifecycle ordering.
 Tools, ModelProviders, Context components, and AgentHooks are optional globally;
 an installed ModelExecutor may explicitly require one or more ModelProviders.
+Installed Tools are not implicitly authorized: `AgentRuntimeConfig.ToolKeys` is
+a strict allowlist, and nil, empty, or omitted values expose no Tools. AgentHook
+only proposes follow-on input before Run completion; applied Session commits are
+observed separately through the asynchronous `session.commit.observer` chain.
 `interaction.command` is an optional `Many` Slot for structured commands that
 register only with the Gateway. Channels render the Gateway's UI-neutral
 command directory as slash commands, menus, buttons, forms, or command palettes.
@@ -278,7 +282,7 @@ audio; model-facing tool inputs use self-contained JSON Schema Draft 2020-12.
 Caller and Hook input uses `agent.MessageInput`, which carries content only;
 the fixed Runtime allocates MessageID, Session/Run/Step containment, role, and
 timestamp atomically when it creates a durable `agent.Message` fact.
-Fifteen standard component contracts are now available in the `session`,
+Sixteen standard component contracts are now available in the `session`,
 `model`, `tool`, `context`, `hook`, `interaction`, `policy`, and `observe`
 packages. They are Contracted, but no domain ecosystem is yet Conformant or
 Proven.
@@ -289,7 +293,7 @@ standard profile, and the fixed Session AgentRuntime state machine. Send,
 SendAndWait, Steer, RunPending, Cancel, WhenIdle, Close, Queue mutation, and
 model-config commands now execute through the Gateway. `Subscribe` publishes
 live chunk/reset events with Run, Step, and physical Attempt identity; temporary
-output and client cursors are not persisted. Every successful persistence emits
+output and client cursors are not persisted. Every newly applied commit emits
 only a `SessionID + Revision` notification, after which the client reads the
 authoritative SessionView. SessionView contains Queue, model configuration,
 state, and at most the latest 100 complete logical Steps; older History uses an

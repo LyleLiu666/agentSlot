@@ -355,10 +355,10 @@ sequenceDiagram
 
 ### 第 5 轮：Hook、Observer 与 Tool 白名单
 
-- 先写 Hook 权限、Observer 顺序/错误/panic 隔离、ToolKeys 构建失败测试；
-- AgentHook 只留 BeforeRunComplete；新增 session.commit.observer；
-- 删除 runtime.observer；更新 Trace/Metric/Audit/Usage；
-- 收紧 ToolKeys 默认语义。
+- [x] 先写 Hook 权限、Observer 顺序/错误/panic 隔离、ToolKeys 构建失败测试；
+- [x] AgentHook 只留 BeforeRunComplete；新增 session.commit.observer；
+- [x] 删除 runtime.observer；更新 Trace/Metric/Audit/Usage；
+- [x] 收紧 ToolKeys 默认语义。
 
 ### 第 6 轮：参考 Agent、全链路审查与文档收口
 

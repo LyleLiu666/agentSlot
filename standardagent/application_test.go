@@ -179,6 +179,34 @@ func TestGatewayChannelBindingSurvivesARetryableBuildFailure(t *testing.T) {
 	}
 }
 
+func TestStandardApplicationRejectsInvalidToolWhitelistAtBuild(t *testing.T) {
+	tests := []struct {
+		name string
+		keys []string
+	}{
+		{name: "empty key", keys: []string{""}},
+		{name: "duplicate key", keys: []string{"echo", "echo"}},
+		{name: "unknown key", keys: []string{"missing"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			installed := &countingTool{definition: testToolDefinition(t, "echo")}
+			application := NewApplication(ApplicationSpec{
+				Name: "invalid-tools-" + test.name, DefaultModelConfig: testDefaultModel(),
+				RuntimeConfig: AgentRuntimeConfig{ToolKeys: test.keys},
+				Modules: []agentslot.Module{
+					componentsModule{store: newSeededStore()},
+					toolModule{key: "echo", value: installed},
+					NewGatewayChannelModule("channel.invalid-tools", "test", &captureChannel{}),
+				},
+			})
+			if _, err := application.Build(); err == nil {
+				t.Fatalf("Build accepted ToolKeys %#v", test.keys)
+			}
+		})
+	}
+}
+
 func TestConcurrentResumeCreatesOneRuntimePerSession(t *testing.T) {
 	store := newSeededStore()
 	entry := &captureChannel{}

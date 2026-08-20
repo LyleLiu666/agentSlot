@@ -53,7 +53,8 @@ func TestFileStorePersistsSnapshotAndIdempotencyAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("idempotent replay: %v", err)
 	}
-	if replayed.Applied || replayed.Revision != committed.Revision {
+	if replayed.Applied || replayed.Revision != committed.Revision ||
+		replayed.FirstHistorySequence != committed.FirstHistorySequence || replayed.LastHistorySequence != committed.LastHistorySequence {
 		t.Fatalf("idempotent replay = %#v", replayed)
 	}
 }

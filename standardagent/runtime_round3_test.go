@@ -90,7 +90,7 @@ func TestContextRetentionStoresCompleteLogicalRequestsAndSourceFacts(t *testing.
 				model.FakeExecution{Events: []model.ModelEvent{{Kind: model.EventComplete, Output: &model.Completion{Parts: textInput("done").Parts}}}},
 			)
 			access, store, stop := startRound7Application(t, executor, AgentRuntimeConfig{
-				SystemPrompt: "fixed prompt", ContextRetentionMode: test.mode,
+				SystemPrompt: "fixed prompt", ContextRetentionMode: test.mode, ToolKeys: []string{"lookup"},
 			}, toolModule{key: "lookup", value: installed}, contextSourceModule{source: fixedContextSource("source", "contribution")})
 			defer stop()
 			opened := createRuntimeTestSession(t, access)
@@ -134,7 +134,7 @@ func TestRunTokenBudgetStopsBeforeAnotherModelStepAndNextInputStartsNewRun(t *te
 			Events: []model.ModelEvent{{Kind: model.EventComplete, Output: &model.Completion{Parts: textInput("continued").Parts}}},
 		},
 	)
-	access, store, stop := startRound7Application(t, executor, AgentRuntimeConfig{MaxTokensPerRun: 5}, toolModule{key: "lookup", value: installed})
+	access, store, stop := startRound7Application(t, executor, AgentRuntimeConfig{MaxTokensPerRun: 5, ToolKeys: []string{"lookup"}}, toolModule{key: "lookup", value: installed})
 	defer stop()
 	opened := createRuntimeTestSession(t, access)
 	if _, err := access.Send(context.Background(), interaction.SendRequest{SessionID: opened.SessionID, ExpectedRevision: opened.Revision, Input: textInput("use tool")}); err != nil {

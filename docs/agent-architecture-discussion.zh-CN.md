@@ -495,7 +495,7 @@ Run/Step。sub-agent 是独立执行参与者，必须拥有独立 Session，并
 - **必须满足的不变量：** GatewayChannel 只能获得 GatewayAccess，并自行负责协议、远程认证授权、路由、输出和限流。InteractionCommand 不解析 wire 文本、不渲染 UI，也不能直接访问 Store 或 Runtime。重复命令 key 在 Build 阶段失败。
 - **否决的方案及原因：** `slash.command` 会把某一种 UI 语法提升为领域架构；让 Entrypoint 直接消费 InteractionCommand 会复制目录、权限、确认和执行规则；宣称任意命令都能自动生成任意 UI 会形成不可维护的万能 Schema。
 - **对接口、存储、Gateway 和实现的影响：** 新增 `gateway.channel: Many` 且标准 Profile 至少一个，替代 `interaction.entrypoint`。`model` 命令仍通过 Gateway 调用 `UpdateModelConfig`；Slash 只是 Channel 的显式协议呈现。
-- **状态：** 架构已确定；代码和成熟度在第 4 轮迁移，迁移前不得标记新 Slot 为 Contracted。
+- **状态：** 已确定并已实现；`gateway.channel` 和 `interaction.command` 已进入 Contracted，仍未达到 Conformant 或 Proven。
 
 ### A-048 模型兼容性处理不得改写 Session 事实
 

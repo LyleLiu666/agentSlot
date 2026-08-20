@@ -7,6 +7,7 @@ import (
 	"time"
 
 	agentslot "github.com/LyleLiu666/agentSlot"
+	agent "github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/interaction"
 	"github.com/LyleLiu666/agentSlot/model"
 	"github.com/LyleLiu666/agentSlot/observe"
@@ -16,13 +17,16 @@ import (
 
 func TestRuntimePublishesPassiveTraceMetricAuditAndUsageFacts(t *testing.T) {
 	records := &observationRecords{changed: make(chan struct{}, 64)}
-	fake := model.NewFakeModelExecutor(model.FakeExecution{Usage: model.TokenUsage{InputTokens: 4, OutputTokens: 2, TotalTokens: 6}, Events: []model.ModelEvent{
+	fake := model.NewFakeModelExecutor(model.FakeExecution{Usage: model.TokenUsage{
+		InputTokens: 4, OutputTokens: 2, CachedInputTokens: 3, CacheWriteTokens: 1, ReasoningTokens: 1, TotalTokens: 6,
+	}, Events: []model.ModelEvent{
 		{Kind: model.EventComplete, AttemptID: "attempt-1", Output: &model.Completion{Parts: textInput("done").Parts}},
 	}})
-	access, stop := startObservedApplication(t, fake, records)
+	access, stop := startObservedApplication(t, fake, records, AgentRuntimeConfig{})
 	opened := createRuntimeTestSession(t, access)
+	user := agent.ActorIdentity{Kind: agent.ActorLocalUser, ID: "user-1"}
 	if _, err := access.Send(context.Background(), interaction.SendRequest{
-		SessionID: opened.SessionID, ExpectedRevision: opened.Revision, Input: textInput("hello"),
+		SessionID: opened.SessionID, ExpectedRevision: opened.Revision, Actor: user, Input: textInput("hello"),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -32,13 +36,13 @@ func TestRuntimePublishesPassiveTraceMetricAuditAndUsageFacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	updated, err := access.UpdateModelConfig(context.Background(), interaction.UpdateModelConfigRequest{
-		SessionID: opened.SessionID, ExpectedRevision: snapshot.Revision,
+		SessionID: opened.SessionID, ExpectedRevision: snapshot.Revision, Actor: user,
 		Config: model.Config{ProviderKey: "provider", ModelID: "second", Reasoning: model.ReasoningDefault},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := access.CloseSession(context.Background(), interaction.CloseSessionRequest{SessionID: opened.SessionID, ExpectedRevision: updated.Revision}); err != nil {
+	if err := access.CloseSession(context.Background(), interaction.CloseSessionRequest{SessionID: opened.SessionID, ExpectedRevision: updated.Revision, Actor: user}); err != nil {
 		t.Fatal(err)
 	}
 	stop()
@@ -52,11 +56,13 @@ func TestRuntimePublishesPassiveTraceMetricAuditAndUsageFacts(t *testing.T) {
 		t.Fatalf("metric records = %#v", records.metricsCopy())
 	}
 	usage := records.usageCopy()
-	if len(usage) != 1 || usage[0].AttemptID != "attempt-1" || usage[0].InputTokens != 4 || usage[0].OutputTokens != 2 || usage[0].ProviderKey != "provider" {
+	if len(usage) != 1 || usage[0].Identity.AttemptID != "attempt-1" || !usage[0].Identity.Actor.Valid() ||
+		usage[0].InputTokens != 4 || usage[0].OutputTokens != 2 || usage[0].CachedInputTokens != 3 ||
+		usage[0].CacheWriteTokens != 1 || usage[0].ReasoningTokens != 1 || usage[0].ProviderKey != "provider" {
 		t.Fatalf("usage records = %#v", usage)
 	}
 	audits := records.auditsCopy()
-	if len(audits) != 1 || audits[0].Kind != observe.AuditModelConfigChanged || audits[0].Action != "provider/second" || audits[0].Decision != "committed" {
+	if len(audits) != 1 || audits[0].Kind != observe.AuditModelConfigChanged || audits[0].Action != "provider/second" || audits[0].Decision != "committed" || audits[0].Identity.Actor != user {
 		t.Fatalf("audit records = %#v", audits)
 	}
 }
@@ -76,12 +82,13 @@ func TestToolPolicyAndExecutionPublishAuditTraceAndMetricWithoutGivingSinksContr
 	approval := policy.ApprovalFunc(func(context.Context, policy.ApprovalRequest) (policy.ApprovalDecision, error) {
 		return policy.ApprovalDecision{Approved: true}, nil
 	})
-	access, stop := startObservedApplication(t, fake, records,
+	access, stop := startObservedApplication(t, fake, records, AgentRuntimeConfig{ToolKeys: []string{"effect"}},
 		toolModule{key: "effect", value: installed}, policyModule{guard: guard, approval: approval},
 	)
 	opened := createRuntimeTestSession(t, access)
 	if _, err := access.Send(context.Background(), interaction.SendRequest{
-		SessionID: opened.SessionID, ExpectedRevision: opened.Revision, Input: textInput("use tool"),
+		SessionID: opened.SessionID, ExpectedRevision: opened.Revision,
+		Actor: agent.ActorIdentity{Kind: agent.ActorLocalUser, ID: "user-1"}, Input: textInput("use tool"),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +112,7 @@ func TestToolPolicyAndExecutionPublishAuditTraceAndMetricWithoutGivingSinksContr
 	}
 }
 
-func startObservedApplication(t *testing.T, executor model.ModelExecutor, records *observationRecords, extras ...agentslot.Module) (interaction.GatewayAccess, func()) {
+func startObservedApplication(t *testing.T, executor model.ModelExecutor, records *observationRecords, runtimeConfig AgentRuntimeConfig, extras ...agentslot.Module) (interaction.GatewayAccess, func()) {
 	t.Helper()
 	defaultModel := model.Config{ProviderKey: "provider", ModelID: "first", Reasoning: model.ReasoningDefault}
 	memory := session.NewMemoryModule()
@@ -113,7 +120,7 @@ func startObservedApplication(t *testing.T, executor model.ModelExecutor, record
 	modules := []agentslot.Module{memory, executorModule{executor: executor}, observationModule{records: records}}
 	modules = append(modules, extras...)
 	modules = append(modules, NewGatewayChannelModule("entrypoint.observation-test", "test", entry))
-	application := NewApplication(ApplicationSpec{Name: "observation-test", Modules: modules, DefaultModelConfig: defaultModel})
+	application := NewApplication(ApplicationSpec{Name: "observation-test", Modules: modules, RuntimeConfig: runtimeConfig, DefaultModelConfig: defaultModel})
 	running, err := application.Start(context.Background())
 	if err != nil {
 		t.Fatal(err)

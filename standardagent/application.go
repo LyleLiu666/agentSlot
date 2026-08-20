@@ -25,8 +25,8 @@ type ApplicationSpec struct {
 	DefaultModelConfig model.Config
 }
 
-// AgentRuntimeConfig is copied into every Session Runtime. Nil ToolKeys selects
-// all explicitly installed Tools; a non-nil empty slice selects none.
+// AgentRuntimeConfig is copied into every Session Runtime. ToolKeys is a strict
+// allowlist: nil, empty, and omitted configurations expose no Tools.
 type AgentRuntimeConfig struct {
 	SystemPrompt         string
 	ToolKeys             []string

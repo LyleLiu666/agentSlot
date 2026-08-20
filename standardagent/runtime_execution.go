@@ -131,7 +131,7 @@ func (r *runtimeInstance) executeStep(run *activeRun, step agent.StepID) (stepOu
 		case model.EventDelta:
 			r.events.publish(interaction.Event{Kind: interaction.EventChunk, SessionID: r.id(), RunID: run.id, StepID: step, AttemptID: event.AttemptID, Text: event.Text})
 		case model.EventReset:
-			r.observeModelAttempt(observe.TraceModelAttemptReset, run, step, event.AttemptID)
+			r.observeModelAttempt(observe.TraceModelAttemptReset, run, step, agent.AttemptID(event.AttemptID))
 			r.events.publish(interaction.Event{Kind: interaction.EventReset, SessionID: r.id(), RunID: run.id, StepID: step, AttemptID: event.AttemptID})
 		case model.EventFailed:
 			if errors.Is(event.Err, model.ErrTokenBudgetExceeded) {
@@ -206,9 +206,13 @@ func (a *runtimeAttemptRecorder) Started(_ context.Context, started model.Attemp
 		return err
 	}
 	a.run.signalPrepared(r.revision())
-	r.observeModelAttempt(observe.TraceModelAttemptStarted, a.run, a.step, string(started.AttemptID))
+	r.observeModelAttempt(observe.TraceModelAttemptStarted, a.run, a.step, started.AttemptID)
 	r.components.observations.publishMetric(observe.MetricRecord{
 		Name: observe.MetricModelAttemptTotal, Kind: observe.MetricCounter, Value: 1, At: time.Now().UTC(),
+		Identity: observe.Identity{
+			SessionID: r.id(), RunID: a.run.id, StepID: a.step, AttemptID: started.AttemptID,
+			Actor: serviceObservationActor("model-executor"),
+		},
 		Attributes: map[string]string{"provider": a.run.config.ProviderKey, "model": a.run.config.ModelID},
 	})
 	return nil
@@ -245,12 +249,18 @@ func (a *runtimeAttemptRecorder) Finished(_ context.Context, finished model.Atte
 		return err
 	}
 	a.run.usedTokens += finished.Usage.TotalTokens
-	r.observeModelAttempt(trace, a.run, a.step, string(finished.AttemptID))
+	r.observeModelAttempt(trace, a.run, a.step, finished.AttemptID)
 	r.components.observations.publishUsage(observe.UsageRecord{
 		Kind: observe.UsageModel, At: time.Now().UTC(),
-		Identity:    observe.Identity{SessionID: r.id(), RunID: a.run.id, StepID: a.step},
-		ProviderKey: a.run.config.ProviderKey, ModelID: a.run.config.ModelID, AttemptID: string(finished.AttemptID),
-		InputTokens: int(finished.Usage.InputTokens), OutputTokens: int(finished.Usage.OutputTokens), TotalTokens: int(finished.Usage.TotalTokens),
+		Identity: observe.Identity{
+			SessionID: r.id(), RunID: a.run.id, StepID: a.step, AttemptID: finished.AttemptID,
+			Actor: serviceObservationActor("model-executor"),
+		},
+		ProviderKey: a.run.config.ProviderKey, ModelID: a.run.config.ModelID,
+		InputTokens: finished.Usage.InputTokens, OutputTokens: finished.Usage.OutputTokens,
+		CachedInputTokens: finished.Usage.CachedInputTokens, CacheWriteTokens: finished.Usage.CacheWriteTokens,
+		ReasoningTokens: finished.Usage.ReasoningTokens, TotalTokens: finished.Usage.TotalTokens,
+		Estimated: finished.Usage.Estimated, EstimateSource: finished.Usage.EstimateSource,
 	})
 	return nil
 }
@@ -281,10 +291,13 @@ func (r *runtimeInstance) recordBudgetExceeded(run *activeRun) error {
 	return err
 }
 
-func (r *runtimeInstance) observeModelAttempt(kind observe.TraceKind, run *activeRun, step agent.StepID, attemptID string) {
+func (r *runtimeInstance) observeModelAttempt(kind observe.TraceKind, run *activeRun, step agent.StepID, attemptID agent.AttemptID) {
 	r.components.observations.publishTrace(observe.TraceRecord{
-		Kind: kind, At: time.Now().UTC(), AttemptID: attemptID,
-		Identity: observe.Identity{SessionID: r.id(), RunID: run.id, StepID: step},
+		Kind: kind, At: time.Now().UTC(),
+		Identity: observe.Identity{
+			SessionID: r.id(), RunID: run.id, StepID: step, AttemptID: attemptID,
+			Actor: serviceObservationActor("model-executor"),
+		},
 	})
 }
 
@@ -513,10 +526,11 @@ func (r *runtimeInstance) recoverAfterRunFailureLocked(run *activeRun) {
 		// an explicit Close/Resume obtains a fresh recovery attempt.
 		r.state = runtimeClosed
 		r.closing = true
-		r.observer.stop()
+		r.commitObserver.stop()
 		r.events.close()
 		r.components.observations.publishTrace(observe.TraceRecord{
-			Kind: observe.TraceRuntimeClosed, At: time.Now().UTC(), Identity: observe.Identity{SessionID: r.id()},
+			Kind: observe.TraceRuntimeClosed, At: time.Now().UTC(),
+			Identity: observe.Identity{SessionID: r.id(), Actor: serviceObservationActor("agent-runtime")},
 		})
 		close(r.closeDone)
 		return
@@ -603,14 +617,20 @@ func (r *runtimeInstance) commitLockedAs(ctx context.Context, expected agent.Rev
 		return session.Commit{}, err
 	}
 	r.revisionValue.Store(uint64(commit.Revision))
-	r.observer.publish(hook.CommitView{SessionID: r.id(), RunID: runIDForCommit(changes), Revision: commit.Revision})
-	r.publishCommitEvent(commit.Revision)
-	r.publishCommitObservations(changes)
+	if commit.Applied {
+		r.commitObserver.publish(session.CommitNotice{
+			SessionID: r.id(), Revision: commit.Revision,
+			FirstHistorySequence: commit.FirstHistorySequence, LastHistorySequence: commit.LastHistorySequence,
+		})
+		r.publishCommitEvent(commit.Revision)
+		r.publishCommitObservations(changes, actor)
+	}
 	return commit, nil
 }
 
-func (r *runtimeInstance) publishCommitObservations(changes []session.Change) {
+func (r *runtimeInstance) publishCommitObservations(changes []session.Change, actor agent.ActorIdentity) {
 	now := time.Now().UTC()
+	actor = normalizedObservationActor(actor)
 	for _, change := range changes {
 		if change.RunFact != nil {
 			kind := observe.TraceRunStarted
@@ -623,11 +643,12 @@ func (r *runtimeInstance) publishCommitObservations(changes []session.Change) {
 			case session.RunFailed, session.RunInterrupted:
 				kind, outcome = observe.TraceRunFailed, string(change.RunFact.Kind)
 			}
-			identity := observe.Identity{SessionID: r.id(), RunID: change.RunFact.RunID}
+			identity := observe.Identity{SessionID: r.id(), RunID: change.RunFact.RunID, Actor: actor}
 			r.components.observations.publishTrace(observe.TraceRecord{Kind: kind, At: now, Identity: identity})
 			if change.RunFact.Kind != session.RunStarted {
 				r.components.observations.publishMetric(observe.MetricRecord{
 					Name: observe.MetricRunTotal, Kind: observe.MetricCounter, Value: 1, At: now,
+					Identity:   identity,
 					Attributes: map[string]string{"outcome": outcome},
 				})
 			}
@@ -635,8 +656,9 @@ func (r *runtimeInstance) publishCommitObservations(changes []session.Change) {
 		if change.SessionEvent != nil && change.SessionEvent.Kind == session.EventModelConfigChanged {
 			current := change.SessionEvent.ModelConfigChanged.Current
 			r.components.observations.publishAudit(observe.AuditRecord{
-				Kind: observe.AuditModelConfigChanged, At: now, Identity: observe.Identity{SessionID: r.id()},
-				Action: current.ProviderKey + "/" + current.ModelID, Decision: "committed",
+				Kind: observe.AuditModelConfigChanged, At: now,
+				Identity: observe.Identity{SessionID: r.id(), Actor: actor},
+				Action:   current.ProviderKey + "/" + current.ModelID, Decision: "committed",
 			})
 		}
 	}

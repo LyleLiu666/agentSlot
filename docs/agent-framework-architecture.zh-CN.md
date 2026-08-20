@@ -239,15 +239,13 @@ ToolKeys 是严格白名单。nil、空列表和未配置都表示不暴露工�
 
 ## 14. 当前代码与目标架构的差距
 
-截至第 4 轮迁移完成，History/SessionStore v1、固定 Manager、历史 Fork、Model Attempt、
-Context/Token Budget、GatewayChannel、严格 ExpectedRevision、SessionView 和 History
-游标分页已经落地。后续迁移仍须消除以下差距：
+截至第 5 轮迁移完成，History/SessionStore v1、固定 Manager、历史 Fork、Model Attempt、
+Context/Token Budget、GatewayChannel、严格 ExpectedRevision、SessionView、History 游标分页、
+单一职责 Hook、异步 SessionCommitObserver 和严格 ToolKeys 白名单已经落地。组件地图当前
+为 37 个标准生态位、16 个 Contracted。
 
-- Hook/Observer 和 ToolKeys 仍是旧语义；
-- 参考 Agent 尚待按最终显式配置与全链路验收收口；
-- 组件地图当前为 37 个标准生态位、15 个 Contracted，最终目标为 37/16。
-
-这些是迁移任务，不是未决架构。最终验收时目标组件地图为 37 个标准生态位，其中 16 个 Contracted；达到该数字前不得通过改文档虚报完成。
+剩余差距只有参考 Agent 的最终显式配置、完整真实链路验收和文档交接清理。这是迁移
+任务，不是未决架构，也不能用上线前运维条件阻塞开发验证。
 
 ## 15. 明确不作为开发门禁的事项
 

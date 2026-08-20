@@ -10,6 +10,7 @@ import (
 	"time"
 
 	agentslot "github.com/LyleLiu666/agentSlot"
+	agent "github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/observe"
 	"github.com/LyleLiu666/agentSlot/observe/jsonlines"
 )
@@ -42,19 +43,22 @@ func TestRecorderWritesConcurrentRecordsAsCompleteJSONLines(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	identity := observe.Identity{SessionID: "session-1", RunID: "run-1", StepID: "step-1", ToolCallID: "call-1"}
+	identity := observe.Identity{
+		SessionID: "session-1", RunID: "run-1", StepID: "step-1", ToolCallID: "call-1", AttemptID: "a",
+		Actor: agent.ActorIdentity{Kind: agent.ActorService, ID: "test"},
+	}
 	operations := []func() error{
 		func() error {
 			return recorder.RecordTrace(context.Background(), observe.TraceRecord{Kind: observe.TraceRunStarted, At: now, Identity: identity})
 		},
 		func() error {
-			return recorder.RecordMetric(context.Background(), observe.MetricRecord{Name: observe.MetricRunTotal, Kind: observe.MetricCounter, Value: 1, At: now})
+			return recorder.RecordMetric(context.Background(), observe.MetricRecord{Name: observe.MetricRunTotal, Kind: observe.MetricCounter, Value: 1, At: now, Identity: identity})
 		},
 		func() error {
 			return recorder.RecordAudit(context.Background(), observe.AuditRecord{Kind: observe.AuditToolDecision, At: now, Identity: identity, Action: "bash", Decision: "allow"})
 		},
 		func() error {
-			return recorder.RecordUsage(context.Background(), observe.UsageRecord{Kind: observe.UsageModel, At: now, Identity: identity, ProviderKey: "p", ModelID: "m", AttemptID: "a", TotalTokens: 1})
+			return recorder.RecordUsage(context.Background(), observe.UsageRecord{Kind: observe.UsageModel, At: now, Identity: identity, ProviderKey: "p", ModelID: "m", TotalTokens: 1})
 		},
 	}
 	var wait sync.WaitGroup

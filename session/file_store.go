@@ -220,12 +220,17 @@ func (s *FileStore) Commit(ctx context.Context, request CommitRequest) (Commit, 
 		return Commit{}, agent.NewCodedError(agent.ErrorConflict, agent.CodeRevisionConflict, "session.file_store.commit", "expected revision does not match", nil)
 	}
 	working := cloneSnapshot(document.Snapshot)
+	previousHistoryLength := len(working.History)
 	if err := applyChanges(&working, request); err != nil {
 		return Commit{}, err
 	}
 	working.Revision++
 	working.Session.Revision = working.Revision
-	result := Commit{SessionID: request.SessionID, Revision: working.Revision, Applied: true}
+	first, last := appendedHistoryRange(previousHistoryLength, len(working.History))
+	result := Commit{
+		SessionID: request.SessionID, Revision: working.Revision,
+		FirstHistorySequence: first, LastHistorySequence: last, Applied: true,
+	}
 	document.Snapshot = working
 	if document.Idempotency == nil {
 		document.Idempotency = make(map[string]fileStoreCommit)

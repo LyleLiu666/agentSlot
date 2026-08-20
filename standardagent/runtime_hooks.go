@@ -5,48 +5,50 @@ import (
 	"sync"
 
 	agent "github.com/LyleLiu666/agentSlot/agent"
-	"github.com/LyleLiu666/agentSlot/hook"
 	"github.com/LyleLiu666/agentSlot/session"
 )
 
-// hookObserver serializes AfterCommit observations without executing product
-// code while Runtime holds its state mutex. Errors are deliberately isolated:
-// a committed Session fact cannot be rolled back by an observer.
-type hookObserver struct {
-	hooks  []hook.AgentHook
-	ctx    context.Context
-	cancel context.CancelFunc
+// sessionCommitObserver serializes post-commit notices for one Session without
+// executing product code while Runtime holds its state mutex. Each Runtime has
+// its own worker, so different Sessions remain independent and may be observed
+// concurrently. Errors and panics cannot roll back an already committed fact.
+type sessionCommitObserver struct {
+	observers []session.SessionCommitObserver
+	ctx       context.Context
+	cancel    context.CancelFunc
 
 	mu      sync.Mutex
 	changed *sync.Cond
-	queue   []hook.CommitView
+	queue   []session.CommitNotice
 	stopped bool
 }
 
-func newHookObserver(hooks []hook.AgentHook) *hookObserver {
-	if len(hooks) == 0 {
+func newSessionCommitObserver(observers []session.SessionCommitObserver) *sessionCommitObserver {
+	if len(observers) == 0 {
 		return nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	observer := &hookObserver{hooks: append([]hook.AgentHook(nil), hooks...), ctx: ctx, cancel: cancel}
+	observer := &sessionCommitObserver{
+		observers: append([]session.SessionCommitObserver(nil), observers...), ctx: ctx, cancel: cancel,
+	}
 	observer.changed = sync.NewCond(&observer.mu)
 	go observer.run()
 	return observer
 }
 
-func (o *hookObserver) publish(view hook.CommitView) {
+func (o *sessionCommitObserver) publish(notice session.CommitNotice) {
 	if o == nil {
 		return
 	}
 	o.mu.Lock()
-	if !o.stopped {
-		o.queue = append(o.queue, view)
+	if !o.stopped && notice.Validate() == nil {
+		o.queue = append(o.queue, notice)
 		o.changed.Signal()
 	}
 	o.mu.Unlock()
 }
 
-func (o *hookObserver) stop() {
+func (o *sessionCommitObserver) stop() {
 	if o == nil {
 		return
 	}
@@ -60,7 +62,7 @@ func (o *hookObserver) stop() {
 	o.mu.Unlock()
 }
 
-func (o *hookObserver) run() {
+func (o *sessionCommitObserver) run() {
 	for {
 		o.mu.Lock()
 		for len(o.queue) == 0 && !o.stopped {
@@ -70,33 +72,19 @@ func (o *hookObserver) run() {
 			o.mu.Unlock()
 			return
 		}
-		view := o.queue[0]
+		notice := o.queue[0]
+		o.queue[0] = session.CommitNotice{}
 		o.queue = o.queue[1:]
 		o.mu.Unlock()
-		for _, candidate := range o.hooks {
-			_ = candidate.AfterCommit(o.ctx, view)
+		for _, candidate := range o.observers {
+			callSessionCommitObserver(o.ctx, candidate, notice)
 		}
 	}
 }
 
-func runIDForCommit(changes []session.Change) agent.RunID {
-	for _, change := range changes {
-		switch {
-		case change.RunFact != nil:
-			return change.RunFact.RunID
-		case change.Message != nil && change.Message.RunID.Valid():
-			return change.Message.RunID
-		case change.ToolCall != nil:
-			return change.ToolCall.RunID
-		case change.Journal != nil:
-			return change.Journal.RunID
-		case change.RunState != nil:
-			return change.RunState.RunID
-		case change.QueueClaim != nil:
-			return change.QueueClaim.RunID
-		}
-	}
-	return ""
+func callSessionCommitObserver(ctx context.Context, observer session.SessionCommitObserver, notice session.CommitNotice) {
+	defer func() { _ = recover() }()
+	_ = observer.ObserveSessionCommit(ctx, notice)
 }
 
 func cloneHookMessages(history []session.HistoryFact) []agent.Message {

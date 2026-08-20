@@ -56,6 +56,7 @@ func (m *runtimeModule) RequiredSlots() []agentslot.Requirement {
 		agentslot.OptionalChain(agentcontext.SourceSlot),
 		agentslot.OptionalOne(agentcontext.CompactorSlot),
 		agentslot.OptionalChain(hook.HookSlot),
+		agentslot.OptionalChain(session.CommitObserverSlot),
 		agentslot.OptionalChain(policy.GuardSlot),
 		agentslot.OptionalOne(policy.ApprovalSlot),
 		agentslot.OptionalChain(observe.TraceSlot),
@@ -146,6 +147,10 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 			if err != nil {
 				return nil, err
 			}
+			commitObservers, err := agentslot.ResolveChain(resolver, session.CommitObserverSlot)
+			if err != nil {
+				return nil, err
+			}
 			traces, err := agentslot.ResolveChain(resolver, observe.TraceSlot)
 			if err != nil {
 				return nil, err
@@ -166,7 +171,7 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 				manager: manager, store: store, executor: executor,
 				commands: commands, commandDescriptors: commandDescriptors,
 				tools: selectedTools, dispatcher: dispatcher, catalogs: catalogs, config: cloneAgentRuntimeConfig(m.config), sources: sources,
-				compactor: compactor, hooks: hooks,
+				compactor: compactor, hooks: hooks, commitObservers: commitObservers,
 				traces: traces, metrics: metrics, audits: audits, usages: usages,
 			})
 			m.state = state
@@ -207,6 +212,7 @@ type runtimeDependencies struct {
 	sources            []agentcontext.ContextSource
 	compactor          agentcontext.ContextCompactor
 	hooks              []hook.AgentHook
+	commitObservers    []session.SessionCommitObserver
 	traces             []observe.TraceSink
 	metrics            []observe.MetricSink
 	audits             []observe.AuditSink
@@ -217,37 +223,39 @@ type runtimeDependencies struct {
 // by every Session Runtime. Runtime instances retain component references;
 // they do not copy tools, stores, executors, or clients per Session.
 type runtimeComponents struct {
-	store        session.SessionStore
-	executor     model.ModelExecutor
-	tools        []agentslot.Named[tool.Tool]
-	sources      []agentcontext.ContextSource
-	compactor    agentcontext.ContextCompactor
-	hooks        []hook.AgentHook
-	dispatcher   *toolDispatcher
-	catalogs     []agentslot.Named[model.ModelCatalog]
-	config       AgentRuntimeConfig
-	observations *observationHub
+	store           session.SessionStore
+	executor        model.ModelExecutor
+	tools           []agentslot.Named[tool.Tool]
+	sources         []agentcontext.ContextSource
+	compactor       agentcontext.ContextCompactor
+	hooks           []hook.AgentHook
+	commitObservers []session.SessionCommitObserver
+	dispatcher      *toolDispatcher
+	catalogs        []agentslot.Named[model.ModelCatalog]
+	config          AgentRuntimeConfig
+	observations    *observationHub
 }
 
 func (d runtimeDependencies) runtimeComponents(observations *observationHub) *runtimeComponents {
 	dispatcher := d.dispatcher.withObservations(observations)
 	return &runtimeComponents{
-		store:        d.store,
-		executor:     d.executor,
-		tools:        append([]agentslot.Named[tool.Tool](nil), d.tools...),
-		sources:      append([]agentcontext.ContextSource(nil), d.sources...),
-		compactor:    d.compactor,
-		hooks:        append([]hook.AgentHook(nil), d.hooks...),
-		dispatcher:   dispatcher,
-		catalogs:     append([]agentslot.Named[model.ModelCatalog](nil), d.catalogs...),
-		config:       cloneAgentRuntimeConfig(d.config),
-		observations: observations,
+		store:           d.store,
+		executor:        d.executor,
+		tools:           append([]agentslot.Named[tool.Tool](nil), d.tools...),
+		sources:         append([]agentcontext.ContextSource(nil), d.sources...),
+		compactor:       d.compactor,
+		hooks:           append([]hook.AgentHook(nil), d.hooks...),
+		commitObservers: append([]session.SessionCommitObserver(nil), d.commitObservers...),
+		dispatcher:      dispatcher,
+		catalogs:        append([]agentslot.Named[model.ModelCatalog](nil), d.catalogs...),
+		config:          cloneAgentRuntimeConfig(d.config),
+		observations:    observations,
 	}
 }
 
 func selectRuntimeTools(installed []agentslot.Named[tool.Tool], keys []string) ([]agentslot.Named[tool.Tool], error) {
-	if keys == nil {
-		return append([]agentslot.Named[tool.Tool](nil), installed...), nil
+	if len(keys) == 0 {
+		return nil, nil
 	}
 	byKey := make(map[string]agentslot.Named[tool.Tool], len(installed))
 	for _, named := range installed {

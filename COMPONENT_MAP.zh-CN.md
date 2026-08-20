@@ -24,14 +24,14 @@
 | --- | ---: |
 | 已映射的标准组件生态位 | 37 |
 | 已标准化的领域词汇 | 4 |
-| 已定义契约的 AgentSlot 自有领域接口 | 15 |
+| 已定义契约的 AgentSlot 自有领域接口 | 16 |
 | 通过一致性验证的组件生态位 | 0 |
 | 已由独立实现证明的组件生态位 | 0 |
 | 已进入标准装配的组件生态位 | 0 |
 
 独立的组装协议目前导出了五个 Go 接口：`Module`、`SlotRequirer`、
 `Registrar`、`Contribution` 和 `Lifecycle`。它们是框架机制，不能代替
-地图中 37 个 Agent 领域组件生态位；其中 15 个已经具备公开合同。
+地图中 37 个 Agent 领域组件生态位；其中 16 个已经具备公开合同。
 
 ## 可运行标准 Profile
 
@@ -99,6 +99,7 @@ flowchart LR
     R -. "可选" .-> T["工具与技能"]
     R -. "可选" .-> C["Context 组件"]
     R -. "可选" .-> H["AgentHooks"]
+    R -. "提交" .-> SCO["SessionCommitObservers"]
     R -. "事件" .-> G
     R -. "事件" .-> O["观察与运维"]
 ```
@@ -116,7 +117,7 @@ flowchart LR
 | **已证明（Proven）** | 至少两个语义上独立的实现通过一致性测试；同一实现的不同包装只能算一个。 |
 | **已装配（Assembled）** | 参考应用能够通过 Slot 替换已证明的实现，不包含具体类型分支。 |
 
-当前已有 15 个基础领域生态位进入**已定义契约（Contracted）**：它们拥有公开
+当前已有 16 个基础领域生态位进入**已定义契约（Contracted）**：它们拥有公开
 领域接口、typed Slot 和合同测试。仓库已经包含相互独立的内存/崩溃安全文件
 SessionStore、确定性 Fake/OpenAI Chat Compatible Executor、Bash/文件/HTTP 工具、
 进程内/CLI GatewayChannel、确定性的工具策略与审批组件，以及 JSON Lines 观察模块；固定
@@ -136,8 +137,8 @@ Runtime 不按具体类型分支即可消费它们。由于尚未建立可复用
 | --- | --- | --- | --- | --- | --- |
 | `gateway.channel` | `GatewayChannel` | `Many` | 全局至少 1 个 | 把调用方协议、函数 API 或 UI 绑定到固定 Gateway，并且只能取得 `GatewayAccess`。 | 已定义契约 |
 | `interaction.command` | `InteractionCommand` | `Many` | 可选 | 向固定 Gateway 注册具名、UI-neutral 的结构化命令；Channel 把共享描述渲染为 Slash、菜单、按钮、表单或命令面板。 | 已定义契约 |
-| `agent.hook` | `AgentHook` | `Chain` | 可选 | 有序执行受控 Hook：在 Run 完成前提出后续输入，或观察已提交事实，但不能直接修改 Session 或 Runtime 状态。 | 已定义契约 |
-| `runtime.observer` | `RuntimeObserver` | `Chain` | 可选 | 被动观察 Agent、Run、消息、工具、重试和生命周期事件，但不控制 Runtime。 | 已映射 |
+| `agent.hook` | `AgentHook` | `Chain` | 可选 | 在 Run 完成前提出受控的后续输入；不能修改 Session 状态，也不能成为第二个 Runtime 控制者。 | 已定义契约 |
+| `session.commit.observer` | `SessionCommitObserver` | `Chain` | 可选 | 异步观察已经生效的 Session revision 及其新增 History sequence 范围；错误和 panic 不能回滚提交。 | 已定义契约 |
 
 固定 AgentRuntime 和 Gateway 有意不出现在表中：组件地图只记录定制边界，不罗列
 全部框架对象。确实需要完全不同循环或交互后端的产品可以在通用装配核心上定义项目

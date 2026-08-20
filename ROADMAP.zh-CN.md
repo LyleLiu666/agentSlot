@@ -131,8 +131,9 @@ Tool 不作为所有 Agent 的强制要求：
   Session 聚合持久化和原子事务的可替换 Slot；
 - `model.executor` 是标准必需 `One` Slot，`model.provider` 是由具体 Executor
   选择性依赖的可选 `Many` Slot；
-- `agent.hook` 是可选 `Chain` Slot；目标语义只保留受控的 Run 完成前 proposal，
-  提交后观察将在下一迁移轮拆到专用 Slot；
+- `agent.hook` 是可选 `Chain` Slot，只保留受控的 Run 完成前 proposal；提交后观察
+  已拆为 `session.commit.observer: Chain`，它只异步接收已提交 revision 和 History
+  sequence 范围，不能参与或回滚事务；
 - `interaction.command` 是可选 `Many` Slot，只注册到固定 Gateway；Gateway 公开
   UI-neutral 命令目录，Channel 再把稳定 key 渲染成 Slash、菜单、按钮、表单或
   命令面板；
@@ -253,8 +254,9 @@ AgentSlot 禁止反射扫描、`init()` 自动注册和隐藏的全局组件容�
 当前 Runtime 会安装版本化 Context、执行可替换 Source/Compactor、校验模型协议和硬
 Token 上限，并通过 Gateway 在 idle 状态完成带兼容性确认的模型切换。`ModelCatalog`
 曾是第 10 个进入 Contracted 的生态位；PolicyGuard、ApprovalService、TraceSink、
-MetricSink、AuditSink 和 UsageRecorder 使第 4 轮完成后的总数达到 15；下一轮
-`session.commit.observer` 合同完成后才会达到 16。框架现已提供显式安装的
+MetricSink、AuditSink 和 UsageRecorder 使第 4 轮完成后的总数达到 15；第 5 轮完成
+`session.commit.observer` 合同后已经达到 16。AgentHook 现在只有 proposal 权限，
+ToolKeys 的 nil、空列表和未配置统一表示不暴露工具。框架现已提供显式安装的
 `model` 命令、函数式进程内 GatewayChannel、行式 CLI Channel、Gateway live event、非流式同 Run
 聚合、SessionView/revision 重连、OpenAI Chat Compatible Executor、FileSessionStore、
 JSON Lines 观察模块和无具体 Runtime 分支的参考 Agent。所有这些仍是开发与合同证据：

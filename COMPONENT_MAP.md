@@ -26,13 +26,13 @@ Current repository reality:
 | --- | ---: |
 | Mapped standard component ecosystems | 37 |
 | Standardized domain vocabularies | 4 |
-| Contracted AgentSlot-owned domain interfaces | 15 |
+| Contracted AgentSlot-owned domain interfaces | 16 |
 | Conformant component ecosystems | 0 |
 | Proven component ecosystems | 0 |
 | Assembled standard component ecosystems | 0 |
 
 The generic composition protocol exports five Go interfaces: `Module`,
-`SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. Fifteen domain
+`SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. Sixteen domain
 contracts are now defined in the `session`, `model`, `tool`, `context`, `hook`,
 `interaction`, `policy`, and `observe` packages; they are Contracted but not
 yet Conformant or Proven.
@@ -115,6 +115,7 @@ flowchart LR
     R -. "optional" .-> T["Tools and skills"]
     R -. "optional" .-> C["Context components"]
     R -. "optional" .-> H["AgentHooks"]
+    R -. "commits" .-> SCO["SessionCommitObservers"]
     R -. "events" .-> G
     R -. "events" .-> O["Observers and operations"]
 ```
@@ -133,7 +134,7 @@ method-level contract is an engineering result.
 | **Proven** | At least two semantically independent implementations pass the conformance suite. Wrappers over the same implementation count once. |
 | **Assembled** | A reference application exchanges proven implementations through the Slot without concrete-type branches. |
 
-Fifteen foundational domain rows are now **Contracted**: each has a public
+Sixteen foundational domain rows are now **Contracted**: each has a public
 domain interface, typed Slot, and contract tests. The repository now contains
 independent memory and crash-safe file Session stores, deterministic Fake and
 OpenAI Chat Compatible executors, Bash/file/HTTP tools, in-process and CLI
@@ -155,8 +156,8 @@ Slots, and several modules may contribute to one `Many` or `Chain` Slot.
 | --- | --- | --- | --- | --- | --- |
 | `gateway.channel` | `GatewayChannel` | `Many` | globally requires at least 1 | Binds one caller-facing protocol, function API, or UI to the fixed Gateway and receives only `GatewayAccess`. | Contracted |
 | `interaction.command` | `InteractionCommand` | `Many` | optional | Registers a keyed UI-neutral command with the fixed Gateway; Channels render the shared descriptor as slash commands, menus, buttons, forms, or command palettes. | Contracted |
-| `agent.hook` | `AgentHook` | `Chain` | optional | Runs ordered, controlled hooks: proposes follow-on input before run completion or observes committed facts, without mutating Session or Runtime state directly. | Contracted |
-| `runtime.observer` | `RuntimeObserver` | `Chain` | optional | Passively observes typed agent, run, message, tool, retry, and lifecycle events without controlling the Runtime. | Mapped |
+| `agent.hook` | `AgentHook` | `Chain` | optional | Proposes controlled follow-on input before run completion; it cannot mutate Session state or become a second Runtime controller. | Contracted |
+| `session.commit.observer` | `SessionCommitObserver` | `Chain` | optional | Asynchronously observes applied Session revisions and their appended History sequence ranges; failures and panics cannot roll back a commit. | Contracted |
 
 The fixed AgentRuntime and Gateway are deliberately absent from this table: the
 map records customization seams, not every framework object. A product that

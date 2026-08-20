@@ -22,10 +22,12 @@ var (
 // Identity correlates a fact without carrying message content, tool arguments,
 // credentials, or component configuration.
 type Identity struct {
-	SessionID  agent.SessionID  `json:"session_id,omitempty"`
-	RunID      agent.RunID      `json:"run_id,omitempty"`
-	StepID     agent.StepID     `json:"step_id,omitempty"`
-	ToolCallID agent.ToolCallID `json:"tool_call_id,omitempty"`
+	SessionID  agent.SessionID     `json:"session_id,omitempty"`
+	RunID      agent.RunID         `json:"run_id,omitempty"`
+	StepID     agent.StepID        `json:"step_id,omitempty"`
+	ToolCallID agent.ToolCallID    `json:"tool_call_id,omitempty"`
+	AttemptID  agent.AttemptID     `json:"attempt_id,omitempty"`
+	Actor      agent.ActorIdentity `json:"actor"`
 }
 
 type TraceKind string
@@ -57,14 +59,13 @@ func (k TraceKind) valid() bool {
 }
 
 type TraceRecord struct {
-	Kind      TraceKind `json:"kind"`
-	At        time.Time `json:"at"`
-	Identity  Identity  `json:"identity"`
-	AttemptID string    `json:"attempt_id,omitempty"`
+	Kind     TraceKind `json:"kind"`
+	At       time.Time `json:"at"`
+	Identity Identity  `json:"identity"`
 }
 
 func (r TraceRecord) Validate() error {
-	if !r.Kind.valid() || r.At.IsZero() || !r.Identity.SessionID.Valid() {
+	if !r.Kind.valid() || r.At.IsZero() || !r.Identity.SessionID.Valid() || !r.Identity.Actor.Valid() {
 		return errors.New("observe: invalid trace record")
 	}
 	switch r.Kind {
@@ -75,7 +76,7 @@ func (r TraceRecord) Validate() error {
 			return errors.New("observe: run trace requires a RunID")
 		}
 	case TraceModelAttemptStarted, TraceModelAttemptReset, TraceModelAttemptDone, TraceModelAttemptFailed:
-		if !r.Identity.RunID.Valid() || !r.Identity.StepID.Valid() || r.AttemptID == "" {
+		if !r.Identity.RunID.Valid() || !r.Identity.StepID.Valid() || !r.Identity.AttemptID.Valid() {
 			return errors.New("observe: model trace requires Run, Step, and Attempt identity")
 		}
 	case TraceToolStarted, TraceToolCompleted:
@@ -114,6 +115,7 @@ type MetricRecord struct {
 	Kind       MetricKind        `json:"kind"`
 	Value      float64           `json:"value"`
 	At         time.Time         `json:"at"`
+	Identity   Identity          `json:"identity,omitempty"`
 	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
@@ -124,6 +126,20 @@ func (r MetricRecord) Validate() error {
 	for key := range r.Attributes {
 		if key == "" {
 			return errors.New("observe: metric attribute keys must be non-empty")
+		}
+	}
+	switch r.Name {
+	case MetricRunTotal:
+		if !r.Identity.SessionID.Valid() || !r.Identity.RunID.Valid() || !r.Identity.Actor.Valid() {
+			return errors.New("observe: run metric requires Session, Run, and Actor identity")
+		}
+	case MetricModelAttemptTotal:
+		if !r.Identity.SessionID.Valid() || !r.Identity.RunID.Valid() || !r.Identity.StepID.Valid() || !r.Identity.AttemptID.Valid() || !r.Identity.Actor.Valid() {
+			return errors.New("observe: model metric requires Session, Run, Step, Attempt, and Actor identity")
+		}
+	case MetricToolCallTotal:
+		if !r.Identity.SessionID.Valid() || !r.Identity.RunID.Valid() || !r.Identity.StepID.Valid() || !r.Identity.ToolCallID.Valid() || !r.Identity.Actor.Valid() {
+			return errors.New("observe: tool metric requires Session, Run, Step, ToolCall, and Actor identity")
 		}
 	}
 	return nil
@@ -158,7 +174,7 @@ type AuditRecord struct {
 }
 
 func (r AuditRecord) Validate() error {
-	if (r.Kind != AuditToolDecision && r.Kind != AuditModelConfigChanged) || r.At.IsZero() || !r.Identity.SessionID.Valid() || r.Action == "" || r.Decision == "" {
+	if (r.Kind != AuditToolDecision && r.Kind != AuditModelConfigChanged) || r.At.IsZero() || !r.Identity.SessionID.Valid() || !r.Identity.Actor.Valid() || r.Action == "" || r.Decision == "" {
 		return errors.New("observe: invalid audit record")
 	}
 	if r.Kind == AuditToolDecision && (!r.Identity.RunID.Valid() || !r.Identity.StepID.Valid() || !r.Identity.ToolCallID.Valid()) {
@@ -185,20 +201,27 @@ type UsageKind string
 const UsageModel UsageKind = "model"
 
 type UsageRecord struct {
-	Kind         UsageKind `json:"kind"`
-	At           time.Time `json:"at"`
-	Identity     Identity  `json:"identity"`
-	ProviderKey  string    `json:"provider_key"`
-	ModelID      string    `json:"model_id"`
-	AttemptID    string    `json:"attempt_id"`
-	InputTokens  int       `json:"input_tokens"`
-	OutputTokens int       `json:"output_tokens"`
-	TotalTokens  int       `json:"total_tokens"`
+	Kind              UsageKind `json:"kind"`
+	At                time.Time `json:"at"`
+	Identity          Identity  `json:"identity"`
+	ProviderKey       string    `json:"provider_key"`
+	ModelID           string    `json:"model_id"`
+	InputTokens       int64     `json:"input_tokens"`
+	OutputTokens      int64     `json:"output_tokens"`
+	CachedInputTokens int64     `json:"cached_input_tokens"`
+	CacheWriteTokens  int64     `json:"cache_write_tokens"`
+	ReasoningTokens   int64     `json:"reasoning_tokens"`
+	TotalTokens       int64     `json:"total_tokens"`
+	Estimated         bool      `json:"estimated"`
+	EstimateSource    string    `json:"estimate_source,omitempty"`
 }
 
 func (r UsageRecord) Validate() error {
 	if r.Kind != UsageModel || r.At.IsZero() || !r.Identity.SessionID.Valid() || !r.Identity.RunID.Valid() || !r.Identity.StepID.Valid() ||
-		r.ProviderKey == "" || r.ModelID == "" || r.AttemptID == "" || r.InputTokens < 0 || r.OutputTokens < 0 || r.TotalTokens < r.InputTokens+r.OutputTokens {
+		!r.Identity.Actor.Valid() || r.ModelID == "" || !r.Identity.AttemptID.Valid() ||
+		r.InputTokens < 0 || r.OutputTokens < 0 || r.CachedInputTokens < 0 || r.CacheWriteTokens < 0 || r.ReasoningTokens < 0 || r.TotalTokens < 0 ||
+		r.CachedInputTokens > r.InputTokens || r.ReasoningTokens > r.OutputTokens || r.TotalTokens < r.InputTokens+r.OutputTokens ||
+		r.Estimated != (r.EstimateSource != "") {
 		return errors.New("observe: invalid usage record")
 	}
 	return nil

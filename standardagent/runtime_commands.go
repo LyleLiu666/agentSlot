@@ -216,10 +216,11 @@ func (r *runtimeInstance) finishClose(runDone <-chan struct{}) {
 	if runDone != nil {
 		<-runDone
 	}
-	r.observer.stop()
+	r.commitObserver.stop()
 	r.events.close()
 	r.components.observations.publishTrace(observe.TraceRecord{
-		Kind: observe.TraceRuntimeClosed, At: time.Now().UTC(), Identity: observe.Identity{SessionID: r.id()},
+		Kind: observe.TraceRuntimeClosed, At: time.Now().UTC(),
+		Identity: observe.Identity{SessionID: r.id(), Actor: serviceObservationActor("agent-runtime")},
 	})
 	r.mu.Lock()
 	if r.state != runtimeClosed {

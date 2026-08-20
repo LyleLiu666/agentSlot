@@ -2,6 +2,7 @@ package hook_test
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	agentslot "github.com/LyleLiu666/agentSlot"
@@ -14,7 +15,6 @@ type testHook struct{}
 func (testHook) BeforeRunComplete(context.Context, hook.RunCompleteView) (hook.FollowOnProposal, error) {
 	return hook.FollowOnProposal{}, nil
 }
-func (testHook) AfterCommit(context.Context, hook.CommitView) error { return nil }
 
 type module struct{}
 
@@ -41,6 +41,13 @@ func TestHookProposalContainsOnlyAdditionalMessages(t *testing.T) {
 	proposal := hook.FollowOnProposal{Messages: []agent.MessageInput{{Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "continue"}}}}}
 	if len(proposal.Messages) != 1 || !proposal.Messages[0].Valid() {
 		t.Fatalf("proposal = %#v", proposal)
+	}
+}
+
+func TestAgentHookHasNoPostCommitOrRuntimeControlAuthority(t *testing.T) {
+	contract := reflect.TypeOf((*hook.AgentHook)(nil)).Elem()
+	if contract.NumMethod() != 1 || contract.Method(0).Name != "BeforeRunComplete" {
+		t.Fatalf("AgentHook methods = %v; want only BeforeRunComplete", contract)
 	}
 }
 

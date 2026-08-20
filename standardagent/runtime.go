@@ -481,17 +481,17 @@ type runtimeInstance struct {
 	session    session.Session
 	components *runtimeComponents
 
-	mu            sync.Mutex
-	state         runtimeLifecycle
-	active        *activeRun
-	idleSignal    chan struct{}
-	closing       bool
-	closeDone     chan struct{}
-	prefix        string
-	sequence      atomic.Uint64
-	revisionValue atomic.Uint64
-	observer      *hookObserver
-	events        *eventHub
+	mu             sync.Mutex
+	state          runtimeLifecycle
+	active         *activeRun
+	idleSignal     chan struct{}
+	closing        bool
+	closeDone      chan struct{}
+	prefix         string
+	sequence       atomic.Uint64
+	revisionValue  atomic.Uint64
+	commitObserver *sessionCommitObserver
+	events         *eventHub
 }
 
 func newRuntimeInstance(s session.Session, components *runtimeComponents) (*runtimeInstance, error) {
@@ -515,9 +515,10 @@ func newRuntimeInstance(s session.Session, components *runtimeComponents) (*runt
 	if !runtime.id().Valid() {
 		return nil, agent.NewError(agent.ErrorInternal, "standardagent.runtime", "framework Manager returned an invalid SessionID", nil)
 	}
-	runtime.observer = newHookObserver(components.hooks)
+	runtime.commitObserver = newSessionCommitObserver(components.commitObservers)
 	components.observations.publishTrace(observe.TraceRecord{
-		Kind: observe.TraceRuntimeOpened, At: time.Now().UTC(), Identity: observe.Identity{SessionID: runtime.id()},
+		Kind: observe.TraceRuntimeOpened, At: time.Now().UTC(),
+		Identity: observe.Identity{SessionID: runtime.id(), Actor: serviceObservationActor("agent-runtime")},
 	})
 	return runtime, nil
 }

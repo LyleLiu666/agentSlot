@@ -23,6 +23,46 @@ type SessionModelConfig = model.Config
 // StoreSlot is the standard durable Session aggregate ecosystem.
 var StoreSlot = agentslot.One[SessionStore]("session.store")
 
+// CommitObserverSlot is the ordered, optional post-commit observation chain.
+// Observers never participate in Store transactions and cannot roll them back.
+var CommitObserverSlot = agentslot.Chain[SessionCommitObserver]("session.commit.observer")
+
+// CommitNotice identifies one successfully applied Session commit. A zero
+// History range means that the commit changed only Context, Queue, Journal, or
+// another non-History part of the aggregate.
+type CommitNotice struct {
+	SessionID            agent.SessionID
+	Revision             agent.Revision
+	FirstHistorySequence HistorySequence
+	LastHistorySequence  HistorySequence
+}
+
+func (n CommitNotice) Validate() error {
+	if !n.SessionID.Valid() || n.Revision == 0 {
+		return fmt.Errorf("session: commit notice requires Session and revision identity")
+	}
+	if (n.FirstHistorySequence == 0) != (n.LastHistorySequence == 0) || n.FirstHistorySequence > n.LastHistorySequence {
+		return fmt.Errorf("session: commit notice History range is invalid")
+	}
+	return nil
+}
+
+// SessionCommitObserver asynchronously observes already committed Session
+// facts. The fixed Runtime guarantees revision order within one Session;
+// implementations must tolerate concurrent calls for different Sessions.
+type SessionCommitObserver interface {
+	ObserveSessionCommit(context.Context, CommitNotice) error
+}
+
+type CommitObserverFunc func(context.Context, CommitNotice) error
+
+func (f CommitObserverFunc) ObserveSessionCommit(ctx context.Context, notice CommitNotice) error {
+	if f == nil {
+		return fmt.Errorf("session: nil commit observer function")
+	}
+	return f(ctx, notice)
+}
+
 // CreateRequest describes the stable identity needed to create a Session.
 // Product-specific defaults are resolved by the standard Agent layer.
 type CreateRequest struct {
@@ -780,10 +820,14 @@ func (c Change) payloadCount() int {
 	return count
 }
 
-// Commit reports the new aggregate revision. Applied is false when an
-// idempotency key identifies an already committed equivalent request.
+// Commit reports the new aggregate revision and exact History range appended
+// by that transaction. A non-History commit reports a zero range. Applied is
+// false when an idempotency key identifies an already committed equivalent
+// request; such a replay preserves the original transaction's range.
 type Commit struct {
-	SessionID agent.SessionID
-	Revision  agent.Revision
-	Applied   bool
+	SessionID            agent.SessionID
+	Revision             agent.Revision
+	FirstHistorySequence HistorySequence
+	LastHistorySequence  HistorySequence
+	Applied              bool
 }

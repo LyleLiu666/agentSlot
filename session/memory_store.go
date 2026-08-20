@@ -172,15 +172,27 @@ func (s *MemoryStore) Commit(ctx context.Context, request CommitRequest) (Commit
 		return Commit{}, agent.NewCodedError(agent.ErrorConflict, agent.CodeRevisionConflict, "session.commit", "expected revision does not match", nil)
 	}
 	working := cloneSnapshot(aggregate.snapshot)
+	previousHistoryLength := len(working.History)
 	if err := applyChanges(&working, request); err != nil {
 		return Commit{}, err
 	}
 	working.Revision++
 	working.Session.Revision = working.Revision
 	aggregate.snapshot = working
-	result := Commit{SessionID: request.SessionID, Revision: working.Revision, Applied: true}
+	first, last := appendedHistoryRange(previousHistoryLength, len(working.History))
+	result := Commit{
+		SessionID: request.SessionID, Revision: working.Revision,
+		FirstHistorySequence: first, LastHistorySequence: last, Applied: true,
+	}
 	aggregate.idempotency[request.IdempotencyKey] = memoryCommit{fingerprint: fingerprint, commit: result}
 	return result, nil
+}
+
+func appendedHistoryRange(previousLength, currentLength int) (HistorySequence, HistorySequence) {
+	if currentLength <= previousLength {
+		return 0, 0
+	}
+	return HistorySequence(previousLength + 1), HistorySequence(currentLength)
 }
 
 func validateNewSession(initial NewSession) error {

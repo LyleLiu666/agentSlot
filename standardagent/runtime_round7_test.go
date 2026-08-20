@@ -142,6 +142,22 @@ func TestRuntimeCanExplicitlySelectNoTools(t *testing.T) {
 	}
 }
 
+func TestRuntimeWithUnsetToolKeysExposesNoInstalledTools(t *testing.T) {
+	executor := newRound7Executor(nil, nil, model.FakeExecution{Events: []model.ModelEvent{complete("done")}})
+	installed := &countingTool{definition: testToolDefinition(t, "echo")}
+	access, _, stop := startRound7Application(t, executor, AgentRuntimeConfig{}, toolModule{key: "echo", value: installed})
+	defer stop()
+	opened := createRuntimeTestSession(t, access)
+	if _, err := access.Send(context.Background(), interaction.SendRequest{SessionID: opened.SessionID, ExpectedRevision: opened.Revision, Input: textInput("hello")}); err != nil {
+		t.Fatal(err)
+	}
+	waitRuntimeIdle(t, access, opened.SessionID)
+	requests := executor.fake.Requests()
+	if len(requests) != 1 || requests[0].Tools != nil {
+		t.Fatalf("unset ToolKeys exposed installed Tools: %#v", requests)
+	}
+}
+
 func TestCancelIsNotBlockedByContextSource(t *testing.T) {
 	source := &cancelableContextSource{entered: make(chan struct{})}
 	executor := newRound7Executor(nil, nil, model.FakeExecution{Events: []model.ModelEvent{complete("unused")}})
@@ -180,12 +196,12 @@ func TestCancelIsNotBlockedByContextSource(t *testing.T) {
 	waitRuntimeIdle(t, access, opened.SessionID)
 }
 
-func TestBeforeRunCompleteMayOnlyProposeInputAndAfterCommitObserves(t *testing.T) {
+func TestBeforeRunCompleteMayOnlyProposeInput(t *testing.T) {
 	executor := newRound7Executor(nil, nil,
 		model.FakeExecution{Events: []model.ModelEvent{complete("first")}},
 		model.FakeExecution{Events: []model.ModelEvent{complete("second")}},
 	)
-	h := &recordingHook{proposal: textInput("hook follow-on"), observed: make(chan struct{}, 32)}
+	h := &recordingHook{proposal: textInput("hook follow-on")}
 	access, _, stop := startRound7Application(t, executor, AgentRuntimeConfig{}, hookModule{hook: h})
 	defer stop()
 	opened := createRuntimeTestSession(t, access)
@@ -200,11 +216,6 @@ func TestBeforeRunCompleteMayOnlyProposeInputAndAfterCommitObserves(t *testing.T
 	last := requests[1].Inputs[len(requests[1].Inputs)-1]
 	if last.Message == nil || last.Message.Role != agent.RoleUser || last.Message.Parts[0].Text != "hook follow-on" {
 		t.Fatalf("hook proposal was not normalized by Runtime: %#v", requests[1].Inputs)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := h.waitForCommit(ctx); err != nil {
-		t.Fatalf("AfterCommit did not observe durable commits: %v", err)
 	}
 	if h.beforeCalls() != 2 {
 		t.Fatalf("BeforeRunComplete calls = %d, want 2", h.beforeCalls())
@@ -388,8 +399,6 @@ type recordingHook struct {
 	mu       sync.Mutex
 	proposal agent.MessageInput
 	before   int
-	commits  int
-	observed chan struct{}
 }
 
 func (h *recordingHook) BeforeRunComplete(context.Context, hook.RunCompleteView) (hook.FollowOnProposal, error) {
@@ -401,25 +410,7 @@ func (h *recordingHook) BeforeRunComplete(context.Context, hook.RunCompleteView)
 	}
 	return hook.FollowOnProposal{}, nil
 }
-func (h *recordingHook) AfterCommit(context.Context, hook.CommitView) error {
-	h.mu.Lock()
-	h.commits++
-	h.mu.Unlock()
-	select {
-	case h.observed <- struct{}{}:
-	default:
-	}
-	return nil
-}
 func (h *recordingHook) beforeCalls() int { h.mu.Lock(); defer h.mu.Unlock(); return h.before }
-func (h *recordingHook) waitForCommit(ctx context.Context) error {
-	select {
-	case <-h.observed:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
 
 func waitRuntimeIdle(t *testing.T, access interaction.GatewayAccess, id agent.SessionID) {
 	t.Helper()

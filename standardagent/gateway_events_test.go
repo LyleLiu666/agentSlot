@@ -181,7 +181,7 @@ func TestGatewayNonStreamingAggregationUsesTheSameDurableRun(t *testing.T) {
 		model.FakeExecution{Events: []model.ModelEvent{complete("first")}},
 		model.FakeExecution{Events: []model.ModelEvent{complete("second")}},
 	)
-	h := &recordingHook{proposal: textInput("continue"), observed: make(chan struct{}, 8)}
+	h := &recordingHook{proposal: textInput("continue")}
 	access, _, stop := startRound7Application(t, executor, AgentRuntimeConfig{}, hookModule{hook: h})
 	defer stop()
 	opened := createRuntimeTestSession(t, access)

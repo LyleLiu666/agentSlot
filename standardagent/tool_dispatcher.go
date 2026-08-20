@@ -201,23 +201,33 @@ func (d *toolDispatcher) authorize(ctx context.Context, call agent.ToolCall) *to
 func (d *toolDispatcher) auditTool(call agent.ToolCall, decision string) {
 	d.observations.publishAudit(observe.AuditRecord{
 		Kind: observe.AuditToolDecision, At: time.Now().UTC(),
-		Identity: observe.Identity{SessionID: call.SessionID, RunID: call.RunID, StepID: call.StepID, ToolCallID: call.ID},
-		Action:   call.Name, Decision: decision,
+		Identity: observe.Identity{
+			SessionID: call.SessionID, RunID: call.RunID, StepID: call.StepID, ToolCallID: call.ID,
+			Actor: serviceObservationActor("tool-dispatcher"),
+		},
+		Action: call.Name, Decision: decision,
 	})
 }
 
 func (d *toolDispatcher) observeToolStarted(call agent.ToolCall) {
 	now := time.Now().UTC()
-	identity := observe.Identity{SessionID: call.SessionID, RunID: call.RunID, StepID: call.StepID, ToolCallID: call.ID}
+	identity := observe.Identity{
+		SessionID: call.SessionID, RunID: call.RunID, StepID: call.StepID, ToolCallID: call.ID,
+		Actor: serviceObservationActor("tool-dispatcher"),
+	}
 	d.observations.publishTrace(observe.TraceRecord{Kind: observe.TraceToolStarted, At: now, Identity: identity})
 }
 
 func (d *toolDispatcher) observeToolCompleted(call agent.ToolCall, result tool.ToolResult) {
 	now := time.Now().UTC()
-	identity := observe.Identity{SessionID: call.SessionID, RunID: call.RunID, StepID: call.StepID, ToolCallID: call.ID}
+	identity := observe.Identity{
+		SessionID: call.SessionID, RunID: call.RunID, StepID: call.StepID, ToolCallID: call.ID,
+		Actor: serviceObservationActor("tool-dispatcher"),
+	}
 	d.observations.publishTrace(observe.TraceRecord{Kind: observe.TraceToolCompleted, At: now, Identity: identity})
 	d.observations.publishMetric(observe.MetricRecord{
 		Name: observe.MetricToolCallTotal, Kind: observe.MetricCounter, Value: 1, At: now,
+		Identity:   identity,
 		Attributes: map[string]string{"tool": call.Name, "outcome": string(result.Status)},
 	})
 }

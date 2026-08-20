@@ -38,9 +38,9 @@
 - [x] AttemptRecorder、Context retention 和 MaxTokensPerRun 已落地；
 - [x] `gateway.channel` 已替代旧 Entrypoint 和重复 Gateway 子 Slot；
 - [x] 所有外部写命令均执行严格 CAS，View 与历史分页已验证；
-- [ ] Hook、CommitObserver、运维事实和 ToolKeys 已按新语义收敛；
+- [x] Hook、CommitObserver、运维事实和 ToolKeys 已按新语义收敛；
 - [ ] 参考 Agent 和端到端测试覆盖完整目标链路；
-- [ ] `COMPONENT_MAP.md` 与 `COMPONENT_MAP.zh-CN.md` 最终为 37 个生态位、16 个 Contracted；
+- [x] `COMPONENT_MAP.md` 与 `COMPONENT_MAP.zh-CN.md` 最终为 37 个生态位、16 个 Contracted；
 - [ ] README、ROADMAP 和实现状态已同步；
 - [ ] 本文及所有指向本文的链接已删除。
 

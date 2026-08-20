@@ -4,10 +4,22 @@ import (
 	"context"
 	"sync"
 
+	agent "github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/observe"
 )
 
 const observationBufferLimit = 4096
+
+func serviceObservationActor(id string) agent.ActorIdentity {
+	return agent.ActorIdentity{Kind: agent.ActorService, ID: id}
+}
+
+func normalizedObservationActor(actor agent.ActorIdentity) agent.ActorIdentity {
+	if actor.Valid() {
+		return actor
+	}
+	return serviceObservationActor("agent-runtime")
+}
 
 // observationHub is application-owned and deliberately one-way. It keeps
 // optional sinks outside Runtime locks, serializes each chain, isolates sink

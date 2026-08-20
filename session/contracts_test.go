@@ -48,6 +48,38 @@ func (module) Register(reg agentslot.Registrar) error {
 	return reg.Contribute(agentslot.Set(session.StoreSlot, session.SessionStore(store{})))
 }
 
+type commitObserver struct{}
+
+func (commitObserver) ObserveSessionCommit(context.Context, session.CommitNotice) error { return nil }
+
+type observerModule struct{}
+
+func (observerModule) ID() string { return "session.commit-observer.contracts" }
+func (observerModule) Register(reg agentslot.Registrar) error {
+	return reg.Contribute(agentslot.Append(session.CommitObserverSlot, session.SessionCommitObserver(commitObserver{})))
+}
+
+func TestSessionCommitObserverIsAnOrderedOptionalChain(t *testing.T) {
+	builder := agentslot.NewBuilder()
+	if err := builder.Install(observerModule{}); err != nil {
+		t.Fatal(err)
+	}
+	assembly, err := builder.Build(agentslot.RequireChain(session.CommitObserverSlot, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := agentslot.Ordered(assembly, session.CommitObserverSlot); len(got) != 1 {
+		t.Fatalf("observer count = %d, want 1", len(got))
+	}
+	notice := session.CommitNotice{SessionID: "session-1", Revision: 3, FirstHistorySequence: 7, LastHistorySequence: 9}
+	if err := notice.Validate(); err != nil {
+		t.Fatalf("valid notice rejected: %v", err)
+	}
+	if err := (session.CommitNotice{SessionID: "session-1", Revision: 3, FirstHistorySequence: 9, LastHistorySequence: 7}).Validate(); err == nil {
+		t.Fatal("reversed History range was accepted")
+	}
+}
+
 func TestSessionContractsExposeTypedSlots(t *testing.T) {
 	builder := agentslot.NewBuilder()
 	if err := builder.Install(module{}); err != nil {
