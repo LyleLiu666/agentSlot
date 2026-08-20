@@ -113,16 +113,35 @@ func historyPage(history []HistoryFact, request HistoryPageRequest) (HistoryPage
 		return HistoryPage{}, nil
 	}
 	start := end
-	groups := 0
-	for start > 0 && groups < limit {
-		start--
-		stepID := history[start].StepID
-		if stepID.Valid() {
-			for start > 0 && history[start-1].StepID == stepID {
-				start--
+	steps := 0
+	seen := make(map[agent.StepID]bool)
+	runs := make(map[agent.RunID]bool)
+	for index := end - 1; index >= 0; index-- {
+		stepID := history[index].StepID
+		if stepID.Valid() && !seen[stepID] {
+			if steps == limit {
+				break
 			}
+			seen[stepID] = true
+			steps++
 		}
-		groups++
+		if stepID.Valid() && history[index].RunID.Valid() {
+			runs[history[index].RunID] = true
+		}
+		start = index
+	}
+	// Run lifecycle facts immediately after an omitted Step belong to that
+	// older Run. Do not leak them into a page whose logical Steps all belong to
+	// newer Runs. Session-level facts without Run containment remain visible at
+	// the transition boundary.
+	for steps > 0 && start < end && history[start].RunID.Valid() && !runs[history[start].RunID] {
+		start++
+	}
+	// A Session can contain configuration or lifecycle facts before its first
+	// executable Step. Keep those histories pageable instead of returning an
+	// unbounded page merely because no StepID exists yet.
+	if steps == 0 && end > limit {
+		start = end - limit
 	}
 	facts := make([]HistoryFact, end-start)
 	for index := range facts {

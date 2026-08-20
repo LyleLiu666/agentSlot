@@ -1,5 +1,5 @@
 // Package interaction defines the carrier-neutral boundary between user
-// entrypoints and the fixed Agent Gateway.
+// channels and the fixed Agent Gateway.
 package interaction
 
 import (
@@ -13,24 +13,24 @@ import (
 	"github.com/LyleLiu666/agentSlot/session"
 )
 
-// EntrypointSlot contains the caller-facing adapters that all use one
-// application Gateway. Keys identify adapters, not Sessions.
-var EntrypointSlot = agentslot.Many[Entrypoint]("interaction.entrypoint")
+// ChannelSlot contains caller-facing channels bound to one fixed application
+// Gateway. Keys identify channels, not Sessions or network routes.
+var ChannelSlot = agentslot.Many[GatewayChannel]("gateway.channel")
 
-// CommandSlot contains optional UI-neutral commands shared by every
-// Entrypoint. Duplicate command keys are rejected by Assembly Build.
+// CommandSlot contains optional UI-neutral commands shared by every Gateway
+// channel. Duplicate command keys are rejected by Assembly Build.
 var CommandSlot = agentslot.Many[InteractionCommand]("interaction.command")
 
-// Entrypoint is an adapter binding operation. The supplied GatewayAccess is
+// GatewayChannel is an adapter binding operation. The supplied GatewayAccess is
 // the only Agent capability it may retain; it never receives Runtime or Store
-// objects. Attach retains the capability but must not open listeners or start
+// objects. Bind retains the capability but must not open listeners or start
 // goroutines; listener lifecycle remains the owning Module's responsibility.
-type Entrypoint interface {
-	Attach(GatewayAccess) error
+type GatewayChannel interface {
+	Bind(GatewayAccess) error
 }
 
 // GatewayAccess is the fixed, transport-neutral backend boundary. Every
-// method returns IDs, revisions, snapshots, receipts, or events—never an
+// method returns IDs, revisions, views, receipts, or events—never an
 // AgentRuntime pointer or a storage implementation.
 type GatewayAccess interface {
 	ListSessions(context.Context, ListSessionsRequest) (SessionList, error)
@@ -49,7 +49,8 @@ type GatewayAccess interface {
 	ReclassifyQueued(context.Context, ReclassifyQueuedRequest) (CommitReceipt, error)
 	ModelConfig(context.Context, ModelConfigRequest) (ModelConfigView, error)
 	UpdateModelConfig(context.Context, UpdateModelConfigRequest) (CommitReceipt, error)
-	Snapshot(context.Context, SnapshotRequest) (SessionSnapshot, error)
+	View(context.Context, SessionViewRequest) (SessionView, error)
+	History(context.Context, HistoryRequest) (HistoryPage, error)
 	Subscribe(context.Context, SubscribeRequest) (EventStream, error)
 	Commands(context.Context, CommandScope) ([]CommandDescriptor, error)
 	InvokeCommand(context.Context, CommandInvocation) (CommandResult, error)
@@ -106,12 +107,14 @@ type SessionOpened struct {
 type SendRequest struct {
 	SessionID        agent.SessionID
 	ExpectedRevision agent.Revision
+	Actor            agent.ActorIdentity
 	Input            agent.MessageInput
 }
 
 type SteerRequest struct {
 	SessionID        agent.SessionID
 	ExpectedRevision agent.Revision
+	Actor            agent.ActorIdentity
 	Input            agent.MessageInput
 }
 
@@ -135,6 +138,7 @@ type RunResult struct {
 type RunPendingRequest struct {
 	SessionID        agent.SessionID
 	ExpectedRevision agent.Revision
+	Actor            agent.ActorIdentity
 }
 
 type RunReceipt struct {
@@ -144,7 +148,9 @@ type RunReceipt struct {
 }
 
 type CancelRequest struct {
-	SessionID agent.SessionID
+	SessionID        agent.SessionID
+	ExpectedRevision agent.Revision
+	Actor            agent.ActorIdentity
 }
 
 type WhenIdleRequest struct {
@@ -155,6 +161,7 @@ type EditQueuedRequest struct {
 	SessionID        agent.SessionID
 	MessageID        agent.MessageID
 	ExpectedRevision agent.Revision
+	Actor            agent.ActorIdentity
 	Input            agent.MessageInput
 }
 
@@ -162,12 +169,14 @@ type DeleteQueuedRequest struct {
 	SessionID        agent.SessionID
 	MessageID        agent.MessageID
 	ExpectedRevision agent.Revision
+	Actor            agent.ActorIdentity
 }
 
 type ReclassifyQueuedRequest struct {
 	SessionID        agent.SessionID
 	MessageID        agent.MessageID
 	ExpectedRevision agent.Revision
+	Actor            agent.ActorIdentity
 	Delivery         session.Delivery
 }
 
@@ -184,6 +193,7 @@ type ModelConfigView struct {
 type UpdateModelConfigRequest struct {
 	SessionID               agent.SessionID
 	ExpectedRevision        agent.Revision
+	Actor                   agent.ActorIdentity
 	Config                  session.SessionModelConfig
 	AcceptCompatibilityLoss bool
 }
@@ -193,26 +203,58 @@ type CommitReceipt struct {
 	Revision  agent.Revision
 }
 
-type SnapshotRequest struct {
+// RevisionConflictError is returned when a caller writes from a stale Session
+// revision. The command is never retried implicitly; callers must refresh the
+// authoritative SessionView before deciding whether to submit a new command.
+type RevisionConflictError struct {
+	CurrentRevision  agent.Revision
+	SnapshotRequired bool
+	Cause            error
+}
+
+func (e *RevisionConflictError) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
+	return "interaction: session revision conflict"
+}
+
+func (e *RevisionConflictError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
+type SessionViewRequest struct {
 	SessionID agent.SessionID
-	// KnownRevision is the caller's last durable revision. It is reconnect
-	// metadata, not a compare-and-swap precondition: Gateway still returns the
-	// current complete snapshot when the caller is behind.
-	KnownRevision agent.Revision
+}
+
+type HistoryRequest struct {
+	SessionID             agent.SessionID
+	BeforeHistorySequence session.HistorySequence
+	StepLimit             int
+}
+
+type HistoryPage struct {
+	SessionID agent.SessionID
+	Revision  agent.Revision
+	Facts     []session.HistoryFact
+	HasMore   bool
 }
 
 type SubscribeRequest struct {
 	SessionID agent.SessionID
-	// AfterRevision must equal the current revision returned by Snapshot.
-	// A conflict means a commit occurred between Snapshot and Subscribe and
+	// AfterRevision must equal the current revision returned by SessionView.
+	// A conflict means a commit occurred between View and Subscribe and
 	// the caller must repeat that handshake.
 	AfterRevision agent.Revision
 }
 
 // EventStream is the reconnectable Gateway event boundary. Temporary chunks
-// are not durable cursors; a reconnect starts from the requested snapshot
+// are not durable cursors; a reconnect starts from the requested SessionView
 // revision and then receives live events. A slow subscriber may receive
-// ErrEventStreamOverflow and must repeat Snapshot/Subscribe; neither overflow
+// ErrEventStreamOverflow and must repeat View/Subscribe; neither overflow
 // nor Close cancels the Run.
 type EventStream interface {
 	Recv(context.Context) (Event, error)
@@ -228,7 +270,6 @@ type Event struct {
 	// attempt. It is not a durable Session fact.
 	AttemptID string
 	Revision  agent.Revision
-	Message   *agent.Message
 	Text      string
 }
 
@@ -240,26 +281,29 @@ var (
 type EventKind string
 
 const (
-	EventChunk     EventKind = "chunk"
-	EventReset     EventKind = "reset"
-	EventCommitted EventKind = "committed"
-	EventState     EventKind = "state"
+	EventChunk    EventKind = "chunk"
+	EventReset    EventKind = "reset"
+	EventRevision EventKind = "revision"
 )
 
-// SessionSnapshot is the client-facing durable projection used for reconnect.
-// It exposes History, pending Queue, and persisted execution state, but never
-// RunJournal, Store, component values, or an AgentRuntime object.
-type SessionSnapshot struct {
-	SessionID   agent.SessionID
-	Revision    agent.Revision
-	History     []session.HistoryFact
-	Queue       []session.QueueItem
-	RunState    session.RunState
-	ActiveRunID agent.RunID
+// SessionView is the current client-facing durable projection. RecentHistory
+// contains at most 100 complete logical Steps; older facts are read through
+// History using the first returned HistorySequence as an exclusive cursor.
+type SessionView struct {
+	SessionID      agent.SessionID
+	Revision       agent.Revision
+	RecentHistory  []session.HistoryFact
+	HasMoreHistory bool
+	Queue          []session.QueueItem
+	ModelConfig    session.SessionModelConfig
+	RunState       session.RunState
+	ActiveRunID    agent.RunID
 }
 
 type CloseSessionRequest struct {
-	SessionID agent.SessionID
+	SessionID        agent.SessionID
+	ExpectedRevision agent.Revision
+	Actor            agent.ActorIdentity
 }
 
 type CommandScope struct {
@@ -310,6 +354,7 @@ type CommandInvocation struct {
 	Scope            CommandScope
 	Key              string
 	ExpectedRevision agent.Revision
+	Actor            agent.ActorIdentity
 	Arguments        json.RawMessage
 }
 

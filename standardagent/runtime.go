@@ -122,7 +122,7 @@ func newRuntimeRegistry() *runtimeRegistry {
 }
 
 // getOrCreate is the application-owned single-flight boundary. A SessionID
-// has one Runtime even when multiple Entrypoints resume it concurrently.
+// has one Runtime even when multiple Gateway channels resume it concurrently.
 func (r *runtimeRegistry) getOrCreate(ctx context.Context, id agent.SessionID, create func() (runtimeAccess, error)) (runtimeAccess, error) {
 	for {
 		r.mu.Lock()
@@ -184,19 +184,15 @@ func (r *runtimeRegistry) get(id agent.SessionID) (runtimeAccess, bool) {
 	return runtime, ok
 }
 
-// remove waits for an in-progress creation of the same Session before
-// removing it. Close can therefore never report success while a concurrent
-// Resume is about to publish a Runtime behind it.
-func (r *runtimeRegistry) remove(ctx context.Context, id agent.SessionID) (runtimeAccess, bool, error) {
+func (r *runtimeRegistry) wait(ctx context.Context, id agent.SessionID) (runtimeAccess, bool, error) {
 	for {
 		r.mu.Lock()
 		if runtime, ok := r.entries[id]; ok {
-			delete(r.entries, id)
 			r.mu.Unlock()
 			return runtime, true, nil
 		}
-		flight, inflight := r.inflight[id]
-		if !inflight {
+		flight, ok := r.inflight[id]
+		if !ok {
 			r.mu.Unlock()
 			return nil, false, nil
 		}
@@ -208,6 +204,32 @@ func (r *runtimeRegistry) remove(ctx context.Context, id agent.SessionID) (runti
 			return nil, false, ctx.Err()
 		}
 	}
+}
+
+// markClosing removes a Runtime from routable entries while retaining a
+// single-flight tombstone until Close finishes. Concurrent Resume therefore
+// cannot create a second Runtime while the old one can still commit.
+func (r *runtimeRegistry) markClosing(id agent.SessionID, runtime runtimeAccess, done <-chan struct{}) error {
+	r.mu.Lock()
+	current, ok := r.entries[id]
+	if !ok || current != runtime || r.inflight[id] != nil {
+		r.mu.Unlock()
+		return agent.NewCodedError(agent.ErrorConflict, agent.CodeSessionAlreadyOpen, "runtime_registry.close", "Session Runtime changed during close", nil)
+	}
+	delete(r.entries, id)
+	flight := &runtimeFlight{done: make(chan struct{})}
+	r.inflight[id] = flight
+	r.mu.Unlock()
+	go func() {
+		<-done
+		r.mu.Lock()
+		if r.inflight[id] == flight {
+			delete(r.inflight, id)
+		}
+		close(flight.done)
+		r.mu.Unlock()
+	}()
+	return nil
 }
 
 func (r *runtimeRegistry) closeAll(ctx context.Context) error {
@@ -344,7 +366,7 @@ func (c *runtimeCoordinator) summary(ctx context.Context, request interaction.Su
 func (c *runtimeCoordinator) runtime(id agent.SessionID) (runtimeAccess, error) {
 	runtime, ok := c.registry.get(id)
 	if !ok {
-		return nil, agent.NewCodedError(agent.ErrorNotFound, agent.CodeSessionNotOpen, "gateway.route", "session is not open", nil)
+		return nil, agent.NewCodedError(agent.ErrorNotFound, agent.CodeSessionNotOpen, "gateway.runtime", "session is not open", nil)
 	}
 	return runtime, nil
 }
@@ -359,18 +381,30 @@ func (c *runtimeCoordinator) registerNew(ctx context.Context, runtime runtimeAcc
 	return nil
 }
 
-func (c *runtimeCoordinator) close(ctx context.Context, id agent.SessionID) error {
-	if !id.Valid() {
+func (c *runtimeCoordinator) close(ctx context.Context, request interaction.CloseSessionRequest) error {
+	if !request.SessionID.Valid() {
 		return invalidInput("gateway.close_session", "SessionID is required")
 	}
-	runtime, ok, err := c.registry.remove(ctx, id)
+	runtime, ok, err := c.registry.wait(ctx, request.SessionID)
 	if err != nil {
 		return err
 	}
 	if !ok {
 		return agent.NewCodedError(agent.ErrorNotFound, agent.CodeSessionNotOpen, "gateway.close", "session is not open", nil)
 	}
-	return runtime.close(ctx)
+	done, err := runtime.beginClose(ctx, request)
+	if err != nil {
+		return err
+	}
+	if err := c.registry.markClosing(request.SessionID, runtime, done); err != nil {
+		return err
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (c *runtimeCoordinator) models(ctx context.Context) ([]model.Descriptor, error) {
@@ -421,12 +455,13 @@ func opened(runtime runtimeAccess) interaction.SessionOpened {
 }
 
 // runtimeAccess is the private Gateway-to-Runtime contract. Its unexported
-// methods prevent product modules and Entrypoints from implementing or
+// methods prevent product modules and Gateway channels from implementing or
 // obtaining this capability through the public Slot map.
 type runtimeAccess interface {
 	id() agent.SessionID
 	revision() agent.Revision
-	snapshot(context.Context, interaction.SnapshotRequest) (interaction.SessionSnapshot, error)
+	view(context.Context, interaction.SessionViewRequest) (interaction.SessionView, error)
+	history(context.Context, interaction.HistoryRequest) (interaction.HistoryPage, error)
 	send(context.Context, interaction.SendRequest) (interaction.EnqueueReceipt, error)
 	steer(context.Context, interaction.SteerRequest) (interaction.EnqueueReceipt, error)
 	pending(context.Context, interaction.RunPendingRequest) (interaction.RunReceipt, error)
@@ -438,6 +473,7 @@ type runtimeAccess interface {
 	deleteQueued(context.Context, interaction.DeleteQueuedRequest) (interaction.CommitReceipt, error)
 	reclassifyQueued(context.Context, interaction.ReclassifyQueuedRequest) (interaction.CommitReceipt, error)
 	subscribe(context.Context, interaction.SubscribeRequest) (interaction.EventStream, error)
+	beginClose(context.Context, interaction.CloseSessionRequest) (<-chan struct{}, error)
 	close(context.Context) error
 }
 
@@ -503,20 +539,75 @@ func (r *runtimeInstance) revision() agent.Revision {
 	return agent.Revision(r.revisionValue.Load())
 }
 
-func (r *runtimeInstance) snapshot(ctx context.Context, request interaction.SnapshotRequest) (interaction.SessionSnapshot, error) {
-	snapshot, err := r.session.View(ctx)
+func (r *runtimeInstance) beginClose(ctx context.Context, request interaction.CloseSessionRequest) (<-chan struct{}, error) {
+	if request.SessionID != r.id() {
+		return nil, invalidInput("gateway.close_session", "SessionID is required")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.ensureOpenLocked("gateway.close_session"); err != nil {
+		return nil, err
+	}
+	snapshot, err := r.viewLocked(ctx)
 	if err != nil {
-		return interaction.SessionSnapshot{}, err
+		return nil, err
 	}
-	if request.KnownRevision > snapshot.Revision {
-		return interaction.SessionSnapshot{}, agent.NewCodedError(agent.ErrorConflict, agent.CodeRevisionConflict, "gateway.snapshot", "client revision is ahead of the persisted session", nil)
+	if request.ExpectedRevision != snapshot.Revision {
+		cause := agent.NewCodedError(agent.ErrorConflict, agent.CodeRevisionConflict, "gateway.close_session", "expected revision does not match", nil)
+		return nil, &interaction.RevisionConflictError{CurrentRevision: snapshot.Revision, SnapshotRequired: true, Cause: cause}
 	}
-	r.revisionValue.Store(uint64(snapshot.Revision))
-	return interaction.SessionSnapshot{
+	if r.active != nil && request.Actor.Valid() {
+		r.active.controlActor = request.Actor
+	}
+	r.startCloseLocked()
+	return r.closeDone, nil
+}
+
+func (r *runtimeInstance) view(ctx context.Context, request interaction.SessionViewRequest) (interaction.SessionView, error) {
+	if request.SessionID != r.id() {
+		return interaction.SessionView{}, invalidInput("gateway.view", "SessionID is required")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.ensureOpenLocked("gateway.view"); err != nil {
+		return interaction.SessionView{}, err
+	}
+	snapshot, err := r.viewLocked(ctx)
+	if err != nil {
+		return interaction.SessionView{}, err
+	}
+	page, err := r.components.store.HistoryPage(ctx, session.HistoryPageRequest{SessionID: r.id(), StepLimit: 100})
+	if err != nil {
+		return interaction.SessionView{}, err
+	}
+	return interaction.SessionView{
 		SessionID: r.id(), Revision: snapshot.Revision,
-		History: snapshot.History, Queue: snapshot.Queue,
+		RecentHistory: page.Facts, HasMoreHistory: page.HasMore,
+		Queue: snapshot.Queue, ModelConfig: cloneRuntimeConfig(snapshot.ModelConfig),
 		RunState: snapshot.RunState, ActiveRunID: snapshot.ActiveRunID,
 	}, nil
+}
+
+func (r *runtimeInstance) history(ctx context.Context, request interaction.HistoryRequest) (interaction.HistoryPage, error) {
+	if request.SessionID != r.id() {
+		return interaction.HistoryPage{}, invalidInput("gateway.history", "SessionID is required")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.ensureOpenLocked("gateway.history"); err != nil {
+		return interaction.HistoryPage{}, err
+	}
+	snapshot, err := r.viewLocked(ctx)
+	if err != nil {
+		return interaction.HistoryPage{}, err
+	}
+	page, err := r.components.store.HistoryPage(ctx, session.HistoryPageRequest{
+		SessionID: request.SessionID, BeforeHistorySequence: request.BeforeHistorySequence, StepLimit: request.StepLimit,
+	})
+	if err != nil {
+		return interaction.HistoryPage{}, err
+	}
+	return interaction.HistoryPage{SessionID: r.id(), Revision: snapshot.Revision, Facts: page.Facts, HasMore: page.HasMore}, nil
 }
 
 func (r *runtimeInstance) subscribe(ctx context.Context, request interaction.SubscribeRequest) (interaction.EventStream, error) {
@@ -533,7 +624,7 @@ func (r *runtimeInstance) subscribe(ctx context.Context, request interaction.Sub
 		return nil, err
 	}
 	if request.AfterRevision != snapshot.Revision {
-		return nil, agent.NewCodedError(agent.ErrorConflict, agent.CodeRevisionConflict, "gateway.subscribe", "subscriber must first obtain the current Session Snapshot", nil)
+		return nil, agent.NewCodedError(agent.ErrorConflict, agent.CodeRevisionConflict, "gateway.subscribe", "subscriber must first obtain the current SessionView", nil)
 	}
 	return r.events.subscribe()
 }

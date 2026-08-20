@@ -31,7 +31,7 @@ func (r *runtimeInstance) send(ctx context.Context, request interaction.SendRequ
 	}
 	item := session.QueueItem{Message: message, Delivery: session.DeliveryNormal}
 	if r.state == runtimeRunning {
-		commit, err := r.commitLocked(ctx, request.ExpectedRevision, "send", []session.Change{{Kind: session.EnqueueMessage, QueueItem: &item}})
+		commit, err := r.commitExternalLocked(ctx, request.ExpectedRevision, "send", request.Actor, []session.Change{{Kind: session.EnqueueMessage, QueueItem: &item}})
 		r.mu.Unlock()
 		if err != nil {
 			return interaction.EnqueueReceipt{}, err
@@ -39,7 +39,7 @@ func (r *runtimeInstance) send(ctx context.Context, request interaction.SendRequ
 		return interaction.EnqueueReceipt{MessageID: message.ID, Revision: commit.Revision}, nil
 	}
 	run, step, changes := r.startChangesLocked(snapshot, item, true)
-	_, err = r.commitLocked(ctx, request.ExpectedRevision, "send-start", changes)
+	_, err = r.commitExternalLocked(ctx, request.ExpectedRevision, "send-start", request.Actor, changes)
 	if err != nil {
 		run.cancel()
 		r.mu.Unlock()
@@ -73,7 +73,7 @@ func (r *runtimeInstance) steer(ctx context.Context, request interaction.SteerRe
 		Parts: cloneRuntimeParts(request.Input.Parts), CreatedAt: time.Now().UTC(),
 	}
 	item := session.QueueItem{Message: message, Delivery: session.DeliverySteer}
-	commit, err := r.commitLocked(ctx, request.ExpectedRevision, "steer", []session.Change{{Kind: session.EnqueueMessage, QueueItem: &item}})
+	commit, err := r.commitExternalLocked(ctx, request.ExpectedRevision, "steer", request.Actor, []session.Change{{Kind: session.EnqueueMessage, QueueItem: &item}})
 	if err != nil {
 		return interaction.EnqueueReceipt{}, err
 	}
@@ -104,7 +104,7 @@ func (r *runtimeInstance) pending(ctx context.Context, request interaction.RunPe
 		return interaction.RunReceipt{}, agent.NewCodedError(agent.ErrorConflict, agent.CodeNoPendingWork, "gateway.run_pending", "session has no pending normal input", nil)
 	}
 	run, step, changes := r.startChangesLocked(snapshot, item, false)
-	_, err = r.commitLocked(ctx, request.ExpectedRevision, "run-pending", changes)
+	_, err = r.commitExternalLocked(ctx, request.ExpectedRevision, "run-pending", request.Actor, changes)
 	if err != nil {
 		run.cancel()
 		r.mu.Unlock()
@@ -121,7 +121,7 @@ func (r *runtimeInstance) pending(ctx context.Context, request interaction.RunPe
 	}
 }
 
-func (r *runtimeInstance) cancel(_ context.Context, request interaction.CancelRequest) error {
+func (r *runtimeInstance) cancel(ctx context.Context, request interaction.CancelRequest) error {
 	if request.SessionID != r.id() {
 		return invalidInput("gateway.cancel", "SessionID is required")
 	}
@@ -130,8 +130,19 @@ func (r *runtimeInstance) cancel(_ context.Context, request interaction.CancelRe
 	if err := r.ensureOpenLocked("gateway.cancel"); err != nil {
 		return err
 	}
+	snapshot, err := r.viewLocked(ctx)
+	if err != nil {
+		return err
+	}
+	if request.ExpectedRevision != snapshot.Revision {
+		cause := agent.NewCodedError(agent.ErrorConflict, agent.CodeRevisionConflict, "gateway.cancel", "expected revision does not match", nil)
+		return &interaction.RevisionConflictError{CurrentRevision: snapshot.Revision, SnapshotRequired: true, Cause: cause}
+	}
 	if r.state == runtimeIdle || r.active == nil {
 		return nil
+	}
+	if request.Actor.Valid() {
+		r.active.controlActor = request.Actor
 	}
 	r.active.cancelRequested = true
 	r.active.cancel()
@@ -178,14 +189,7 @@ func (r *runtimeInstance) close(ctx context.Context) error {
 		}
 	}
 	if !r.closing {
-		r.closing = true
-		var runDone <-chan struct{}
-		if r.active != nil {
-			r.active.cancelRequested = true
-			r.active.cancel()
-			runDone = r.active.done
-		}
-		go r.finishClose(runDone)
+		r.startCloseLocked()
 	}
 	done := r.closeDone
 	r.mu.Unlock()
@@ -195,6 +199,17 @@ func (r *runtimeInstance) close(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func (r *runtimeInstance) startCloseLocked() {
+	r.closing = true
+	var runDone <-chan struct{}
+	if r.active != nil {
+		r.active.cancelRequested = true
+		r.active.cancel()
+		runDone = r.active.done
+	}
+	go r.finishClose(runDone)
 }
 
 func (r *runtimeInstance) finishClose(runDone <-chan struct{}) {
@@ -274,7 +289,7 @@ func (r *runtimeInstance) updateModelConfig(ctx context.Context, request interac
 	config := cloneRuntimeConfig(request.Config)
 	change := session.ModelConfigChange{Previous: cloneRuntimeConfig(snapshot.ModelConfig), Current: cloneRuntimeConfig(config)}
 	event := session.SessionEvent{Kind: session.EventModelConfigChanged, ModelConfigChanged: &change}
-	commit, err := r.commitLocked(ctx, request.ExpectedRevision, "model-config", []session.Change{
+	commit, err := r.commitExternalLocked(ctx, request.ExpectedRevision, "model-config", request.Actor, []session.Change{
 		{Kind: session.SetModelConfig, ModelConfig: &config},
 		{Kind: session.AppendSessionEvent, SessionEvent: &event},
 	})
@@ -327,7 +342,7 @@ func (r *runtimeInstance) editQueued(ctx context.Context, request interaction.Ed
 		return interaction.CommitReceipt{}, agent.NewCodedError(agent.ErrorNotFound, agent.CodeQueueItemNotFound, "gateway.edit_queued", "queue item was not found", nil)
 	}
 	edit := session.QueueEdit{MessageID: request.MessageID, Input: request.Input, Delivery: item.Delivery}
-	commit, err := r.commitLocked(ctx, request.ExpectedRevision, "queue-edit", []session.Change{{Kind: session.EditQueue, QueueEdit: &edit}})
+	commit, err := r.commitExternalLocked(ctx, request.ExpectedRevision, "queue-edit", request.Actor, []session.Change{{Kind: session.EditQueue, QueueEdit: &edit}})
 	if err != nil {
 		return interaction.CommitReceipt{}, err
 	}
@@ -344,7 +359,7 @@ func (r *runtimeInstance) deleteQueued(ctx context.Context, request interaction.
 		return interaction.CommitReceipt{}, err
 	}
 	change := session.QueueDelete{MessageID: request.MessageID}
-	commit, err := r.commitLocked(ctx, request.ExpectedRevision, "queue-delete", []session.Change{{Kind: session.DeleteQueue, QueueDelete: &change}})
+	commit, err := r.commitExternalLocked(ctx, request.ExpectedRevision, "queue-delete", request.Actor, []session.Change{{Kind: session.DeleteQueue, QueueDelete: &change}})
 	if err != nil {
 		return interaction.CommitReceipt{}, err
 	}
@@ -361,7 +376,7 @@ func (r *runtimeInstance) reclassifyQueued(ctx context.Context, request interact
 		return interaction.CommitReceipt{}, err
 	}
 	change := session.QueueReclassify{MessageID: request.MessageID, Delivery: request.Delivery}
-	commit, err := r.commitLocked(ctx, request.ExpectedRevision, "queue-reclassify", []session.Change{{Kind: session.ReclassifyQueue, QueueReclassification: &change}})
+	commit, err := r.commitExternalLocked(ctx, request.ExpectedRevision, "queue-reclassify", request.Actor, []session.Change{{Kind: session.ReclassifyQueue, QueueReclassification: &change}})
 	if err != nil {
 		return interaction.CommitReceipt{}, err
 	}

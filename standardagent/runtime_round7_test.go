@@ -116,11 +116,11 @@ func TestRuntimeRejectsOversizedContextBeforeProviderCall(t *testing.T) {
 	if got := len(executor.fake.Requests()); got != 0 {
 		t.Fatalf("provider called %d times despite hard context limit", got)
 	}
-	snapshot, err := access.Snapshot(context.Background(), interaction.SnapshotRequest{SessionID: opened.SessionID})
+	snapshot, err := access.View(context.Background(), interaction.SessionViewRequest{SessionID: opened.SessionID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	runs := historyRunFacts(snapshot.History)
+	runs := historyRunFacts(snapshot.RecentHistory)
 	if len(runs) != 2 || runs[1].Kind != session.RunFailed {
 		t.Fatalf("run facts = %#v", runs)
 	}
@@ -158,9 +158,13 @@ func TestCancelIsNotBlockedByContextSource(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("ContextSource was not entered")
 	}
+	view, err := access.View(context.Background(), interaction.SessionViewRequest{SessionID: opened.SessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
 	canceled := make(chan error, 1)
 	go func() {
-		canceled <- access.Cancel(context.Background(), interaction.CancelRequest{SessionID: opened.SessionID})
+		canceled <- access.Cancel(context.Background(), interaction.CancelRequest{SessionID: opened.SessionID, ExpectedRevision: view.Revision})
 	}()
 	select {
 	case err := <-canceled:
@@ -303,10 +307,10 @@ func (m sessionPairModule) Register(reg agentslot.Registrar) error {
 func startRound7Application(t *testing.T, executor model.ModelExecutor, config AgentRuntimeConfig, extras ...agentslot.Module) (interaction.GatewayAccess, *session.MemoryStore, func()) {
 	t.Helper()
 	store := session.NewMemoryStore()
-	entry := &captureEntrypoint{}
+	entry := &captureChannel{}
 	modules := []agentslot.Module{sessionPairModule{store: store}, executorModule{executor: executor}}
 	modules = append(modules, extras...)
-	modules = append(modules, NewEntrypointModule("entrypoint.round7", "round7", entry))
+	modules = append(modules, NewGatewayChannelModule("entrypoint.round7", "round7", entry))
 	running, err := NewApplication(ApplicationSpec{Name: "round7", Modules: modules, RuntimeConfig: config, DefaultModelConfig: model.Config{ModelID: "default", Reasoning: model.ReasoningDefault}}).Start(context.Background())
 	if err != nil {
 		t.Fatal(err)

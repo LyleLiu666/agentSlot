@@ -16,22 +16,22 @@ import (
 )
 
 const (
-	runtimeModuleID            = "standardagent.internal.runtime"
-	gatewayAccessSlotID        = "standardagent.internal.gateway-access"
-	runtimeStateSlotID         = "standardagent.internal.runtime-state"
-	mountedEntrypointSlotID    = "standardagent.internal.mounted-entrypoint"
-	entrypointValidationSlotID = "standardagent.internal.entrypoint-validation-state"
+	runtimeModuleID         = "standardagent.internal.runtime"
+	gatewayAccessSlotID     = "standardagent.internal.gateway-access"
+	runtimeStateSlotID      = "standardagent.internal.runtime-state"
+	mountedChannelSlotID    = "standardagent.internal.mounted-channel"
+	channelValidationSlotID = "standardagent.internal.channel-validation-state"
 )
 
 var (
-	gatewayAccessSlot        = agentslot.One[interaction.GatewayAccess](gatewayAccessSlotID)
-	runtimeStateSlot         = agentslot.One[*applicationRuntime](runtimeStateSlotID)
-	mountedEntrypointSlot    = agentslot.Many[mountedEntrypoint](mountedEntrypointSlotID)
-	entrypointValidationSlot = agentslot.One[entrypointValidation](entrypointValidationSlotID)
+	gatewayAccessSlot     = agentslot.One[interaction.GatewayAccess](gatewayAccessSlotID)
+	runtimeStateSlot      = agentslot.One[*applicationRuntime](runtimeStateSlotID)
+	mountedChannelSlot    = agentslot.Many[mountedChannel](mountedChannelSlotID)
+	channelValidationSlot = agentslot.One[channelValidation](channelValidationSlotID)
 )
 
-type mountedEntrypoint struct{}
-type entrypointValidation struct{}
+type mountedChannel struct{}
+type channelValidation struct{}
 
 type runtimeModule struct {
 	binding      *gatewayBinding

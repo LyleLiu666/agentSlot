@@ -45,7 +45,7 @@ type referenceConfig struct {
 	observationOut io.Writer
 }
 
-func buildReference(config referenceConfig) (*agentslot.Application, *cli.Entrypoint, error) {
+func buildReference(config referenceConfig) (*agentslot.Application, *cli.Channel, error) {
 	if config.providerKey == "" || config.providerURL == "" || config.modelID == "" {
 		return nil, nil, errors.New("reference: provider key, URL, and model ID are required")
 	}
@@ -116,7 +116,7 @@ func buildReference(config referenceConfig) (*agentslot.Application, *cli.Entryp
 	if config.sessionID.Valid() {
 		cliConfig.AgentID, cliConfig.WorkspaceID = "", ""
 	}
-	entrypoint, err := cli.New(cliConfig)
+	channel, err := cli.New(cliConfig)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -129,10 +129,10 @@ func buildReference(config referenceConfig) (*agentslot.Application, *cli.Entryp
 		Modules: []agentslot.Module{
 			sessions, provider, bashTool, fileTools, httpTool, policyModule, observations,
 			interaction.NewModelCommandModule(),
-			standardagent.NewEntrypointModule("reference.entrypoint.cli", "cli", entrypoint),
+			standardagent.NewGatewayChannelModule("reference.channel.cli", "cli", channel),
 		},
 	})
-	return application, entrypoint, nil
+	return application, channel, nil
 }
 
 type referencePolicyModule struct {
@@ -166,7 +166,7 @@ func main() {
 		httpHosts: hosts, approveEffects: environmentBoolean("AGENTSLOT_APPROVE_EFFECTS"),
 		input: os.Stdin, output: os.Stdout, errorOutput: os.Stderr, observationOut: os.Stderr,
 	}
-	application, entrypoint, err := buildReference(config)
+	application, channel, err := buildReference(config)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -178,14 +178,14 @@ func main() {
 	}
 	select {
 	case <-ctx.Done():
-	case <-entrypoint.Done():
+	case <-channel.Done():
 	}
 	stopContext, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer stopCancel()
 	if err := running.Stop(stopContext); err != nil {
 		log.Fatal(err)
 	}
-	if err := entrypoint.Err(); err != nil {
+	if err := channel.Err(); err != nil {
 		log.Fatal(err)
 	}
 }

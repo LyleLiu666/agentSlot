@@ -12,6 +12,7 @@ import (
 	agent "github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/model"
 	"github.com/LyleLiu666/agentSlot/session"
+	"github.com/LyleLiu666/agentSlot/tool"
 )
 
 func TestMemoryStoreAssignsStableHistoryMetadata(t *testing.T) {
@@ -275,6 +276,81 @@ func TestHistoryPageUsesExclusiveSequenceCursorAndKeepsStepsWhole(t *testing.T) 
 	}
 	if _, err := store.HistoryPage(context.Background(), session.HistoryPageRequest{SessionID: created.Session.ID, StepLimit: 101}); err == nil {
 		t.Fatal("page larger than 100 steps was accepted")
+	}
+}
+
+func TestHistoryPageCountsLogicalStepsWithoutChargingRunFacts(t *testing.T) {
+	store := session.NewMemoryStore()
+	history := []session.HistoryFact{
+		{Run: &session.RunFact{SessionID: "history-step-quota", RunID: "run-1", Kind: session.RunStarted, ModelConfig: defaultConfig(), ConfigRevision: 1}},
+		{Message: historyStepMessage("message-1", "history-step-quota", "run-1", "step-1")},
+		{Run: &session.RunFact{SessionID: "history-step-quota", RunID: "run-1", Kind: session.RunCompleted, ModelConfig: defaultConfig(), ConfigRevision: 1}},
+		{Run: &session.RunFact{SessionID: "history-step-quota", RunID: "run-2", Kind: session.RunStarted, ModelConfig: defaultConfig(), ConfigRevision: 2}},
+		{Message: historyStepMessage("message-2", "history-step-quota", "run-2", "step-2")},
+		{Run: &session.RunFact{SessionID: "history-step-quota", RunID: "run-2", Kind: session.RunCompleted, ModelConfig: defaultConfig(), ConfigRevision: 2}},
+	}
+	created, err := store.Create(context.Background(), session.NewSession{
+		Session: agent.Session{ID: "history-step-quota", AgentID: "agent-1", WorkspaceID: "workspace-1"},
+		History: history, ModelConfig: defaultConfig(), RunState: session.RunIdle,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := store.HistoryPage(context.Background(), session.HistoryPageRequest{SessionID: created.Session.ID, StepLimit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Facts) != 6 || page.HasMore {
+		t.Fatalf("two-Step page = %#v", page)
+	}
+	latest, err := store.HistoryPage(context.Background(), session.HistoryPageRequest{SessionID: created.Session.ID, StepLimit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(latest.Facts) != 3 || latest.Facts[0].Run == nil || latest.Facts[0].Run.RunID != "run-2" {
+		t.Fatalf("latest Step leaked lifecycle facts from an older Run: %#v", latest)
+	}
+}
+
+func TestHistoryPageNeverSplitsToolProtocolWithinOneStep(t *testing.T) {
+	store := session.NewMemoryStore()
+	older := historyStepMessage("message-old", "history-tool-page", "run-1", "step-1")
+	assistant := historyStepMessage("message-tool", "history-tool-page", "run-1", "step-2")
+	assistant.Role = agent.RoleAssistant
+	call := agent.ToolCall{
+		ID: "call-1", CorrelationID: "provider-call-1", MessageID: assistant.ID,
+		SessionID: assistant.SessionID, RunID: assistant.RunID, StepID: assistant.StepID,
+		Name: "example", Arguments: []byte(`{"value":1}`),
+	}
+	result := tool.ToolResult{CallID: call.ID, Status: tool.ResultSucceeded, Output: []byte(`{"ok":true}`)}
+	created, err := store.Create(context.Background(), session.NewSession{
+		Session: agent.Session{ID: assistant.SessionID, AgentID: "agent-1", WorkspaceID: "workspace-1"},
+		History: []session.HistoryFact{
+			{Message: older}, {Message: assistant}, {ToolCall: &call}, {ToolResult: &result},
+		},
+		ModelConfig: defaultConfig(), RunState: session.RunIdle,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := store.HistoryPage(context.Background(), session.HistoryPageRequest{SessionID: created.Session.ID, StepLimit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Facts) != 3 || !page.HasMore {
+		t.Fatalf("tool Step page = %#v", page)
+	}
+	for _, fact := range page.Facts {
+		if fact.StepID != assistant.StepID {
+			t.Fatalf("tool protocol was split across pages: %#v", page)
+		}
+	}
+}
+
+func historyStepMessage(id agent.MessageID, sessionID agent.SessionID, runID agent.RunID, stepID agent.StepID) *agent.Message {
+	return &agent.Message{
+		ID: id, SessionID: sessionID, RunID: runID, StepID: stepID, Role: agent.RoleUser,
+		Parts: []agent.MessagePart{{Kind: agent.PartText, Text: string(stepID)}},
 	}
 }
 

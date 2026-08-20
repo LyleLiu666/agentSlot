@@ -37,8 +37,8 @@ func TestSlashMenuAndStructuredClientsShareOneGatewayCommandBackend(t *testing.T
 			executorModule{executor: model.NewFakeModelExecutor()},
 			modelCatalogModule{key: "provider-b", catalog: catalog},
 			interaction.NewModelCommandModule(),
-			NewEntrypointModule("entrypoint.function", "function", functionEntry),
-			NewEntrypointModule("entrypoint.menu", "menu", menuEntry),
+			NewGatewayChannelModule("entrypoint.function", "function", functionEntry),
+			NewGatewayChannelModule("entrypoint.menu", "menu", menuEntry),
 		},
 	})
 	running, err := application.Start(context.Background())
@@ -61,7 +61,7 @@ func TestSlashMenuAndStructuredClientsShareOneGatewayCommandBackend(t *testing.T
 		t.Fatal(err)
 	}
 	if functionAccess != menuAccess {
-		t.Fatal("Entrypoints did not receive the same framework-owned Gateway binding")
+		t.Fatal("Gateway channels did not receive the same framework-owned Gateway binding")
 	}
 	functionCommands, err := functionAccess.Commands(context.Background(), interaction.CommandScope{})
 	if err != nil {

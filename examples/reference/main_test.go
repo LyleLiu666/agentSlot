@@ -64,7 +64,7 @@ func TestReferenceAgentRunsRealProviderBashSessionGatewayAndRuntimeChain(t *test
 		workspace: workspace, sessionDir: sessionDirectory, httpHosts: []string{parsed.Host}, approveEffects: true,
 		input: io.NopCloser(strings.NewReader("run the check\n/quit\n")), output: &output, errorOutput: &errorOutput, observationOut: io.Discard,
 	}
-	application, entrypoint, err := buildReference(config)
+	application, channel, err := buildReference(config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,14 +72,14 @@ func TestReferenceAgentRunsRealProviderBashSessionGatewayAndRuntimeChain(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	waitReferenceCLI(t, entrypoint.Done())
+	waitReferenceCLI(t, channel.Done())
 	stopContext, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := running.Stop(stopContext); err != nil {
 		t.Fatal(err)
 	}
-	if entrypoint.Err() != nil || errorOutput.Len() != 0 {
-		t.Fatalf("CLI error=%v stderr=%q", entrypoint.Err(), errorOutput.String())
+	if channel.Err() != nil || errorOutput.Len() != 0 {
+		t.Fatalf("CLI error=%v stderr=%q", channel.Err(), errorOutput.String())
 	}
 	if requests.Load() != 2 {
 		t.Fatalf("provider requests = %d", requests.Load())

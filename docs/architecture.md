@@ -59,8 +59,7 @@ rolls back only modules whose `Start` completed successfully.
 An Application Assembly is the application scope, not a Session scope. One Assembly can
 serve many Workspaces and Sessions. It owns the fixed SessionManager and shared
 components such as SessionStore, ModelExecutor, optional Provider adapters, Tools,
-Context components, Hooks, InteractionCommands, Entrypoints, and Gateway
-adapters. When the Assembly starts, the resulting application Runtime owns one
+Context components, Hooks, InteractionCommands, and GatewayChannels. When the Assembly starts, the resulting application Runtime owns one
 process-local Session-to-AgentRuntime registry and one fixed in-process Gateway.
 A framework-internal Runtime coordinator operates the registry; the Gateway is
 the sole user-interaction backend. None of these three framework objects is a
@@ -106,13 +105,15 @@ The runtime boundary below the Assembly is explicit:
    child fact identities, and re-derives Context for the child's final model;
    it never copies source Queue or RunJournal execution state. A summary start
    persists only its explicit summary input.
-6. The fixed Gateway is shared by the Application and routes commands/events
-   using `AgentID + WorkspaceID + SessionID + RunID`. Entrypoints receive only
-   carrier-neutral Gateway access and never receive Runtime objects. In-process
-   adapters call it directly; only out-of-process adapters require RPC. Live
-   subscriptions begin at an exact Snapshot revision; disconnect and stream
-   overflow do not cancel the Run. Non-streaming calls aggregate the same
-   durable Run facts rather than invoking a second execution path.
+6. The fixed Gateway is shared by the Application. GatewayChannels receive only
+   carrier-neutral Gateway access and never receive Runtime objects. A Channel
+   owns its communication protocol, remote authentication and authorization,
+   routing, encoding, and rate limiting. In-process Channels call GatewayAccess
+   directly; only out-of-process Channels require a wire protocol. Live
+   subscriptions begin at the current SessionView revision; persistence emits
+   only revision notifications, and clients refresh the authoritative View.
+   Disconnect and stream overflow do not cancel the Run. Non-streaming calls
+   aggregate the same durable Run facts rather than invoking a second path.
 
 ## Application host
 
@@ -133,12 +134,12 @@ operates it:
 - the internal Runtime module resolves only declared typed Slot dependencies at
   Build time; the started Runtime binds package-private Runtime access only to
   the fixed Gateway and binds carrier-neutral Gateway access to standard
-  Entrypoint Module wrappers;
-- standard Agent Entrypoints are installed through
-  `standardagent.NewEntrypointModule`; an internal build validator rejects an
+  GatewayChannel Module wrappers;
+- standard Agent Channels are installed through
+  `standardagent.NewGatewayChannelModule`; an internal build validator rejects an
   otherwise profile-valid raw contribution that skipped Gateway attachment;
-- lifecycle dependency order starts the Runtime module before Entrypoint
-  Modules. Shutdown first prevents new Entrypoint commands, then closes
+- lifecycle dependency order starts the Runtime module before GatewayChannel
+  Modules. Shutdown first prevents new Channel commands, then closes
   AgentRuntimes and the registry, then closes Gateway/adapters and shared
   dependencies.
 
@@ -299,7 +300,7 @@ implementation format.
 
 ## Current implementation frontier
 
-The published foundation now includes sixteen standard domain contracts and
+The published foundation now includes fifteen standard domain contracts and
 typed Slots for Session management/storage, model execution/catalogs, tools,
 context, hooks, interaction, tool policy/approval, and passive observation.
 The `standardagent` package supplies the
@@ -309,10 +310,10 @@ idle-only model switching. Reference implementations currently include the
 in-memory and crash-safe file Session aggregates, deterministic and OpenAI Chat
 Compatible model executors, static model catalog, tail compactor, explicitly
 installed Bash/file/HTTP tools, the built-in `model` InteractionCommand,
-function-style in-process and line-oriented CLI Entrypoints, deterministic
+function-style in-process and line-oriented CLI GatewayChannels, deterministic
 tool policy/approval, and a JSON Lines observation module. The fixed Gateway
-provides live temporary/durable events, Snapshot/revision subscription, and
-non-stream aggregation. The branch-free reference Agent under
+provides temporary chunk/reset events, durable revision notifications,
+SessionView/history-cursor recovery, and non-stream aggregation. The branch-free reference Agent under
 `examples/reference` verifies the CLI → Gateway → Runtime → real Provider →
 Bash → Provider → persistent Session chain. The remaining frontier includes:
 

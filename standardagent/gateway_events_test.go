@@ -38,13 +38,17 @@ func TestGatewayStreamsTemporaryOutputAndDurableCommitsInOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitRuntimeIdle(t, access, opened.SessionID)
+	view, err := access.View(context.Background(), interaction.SessionViewRequest{SessionID: opened.SessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	var chunks, attempts []string
 	var resetAttempt string
-	var committed bool
-	for !committed {
+	var reachedFinalRevision bool
+	for !reachedFinalRevision {
 		event, err := stream.Recv(ctx)
 		if err != nil {
 			t.Fatal(err)
@@ -55,10 +59,11 @@ func TestGatewayStreamsTemporaryOutputAndDurableCommitsInOrder(t *testing.T) {
 			attempts = append(attempts, event.AttemptID)
 		case interaction.EventReset:
 			resetAttempt = event.AttemptID
-		case interaction.EventCommitted:
-			if event.Message != nil && event.Message.Role == "assistant" {
-				committed = true
+		case interaction.EventRevision:
+			if event.SessionID != opened.SessionID || event.RunID != "" || event.StepID != "" || event.AttemptID != "" || event.Text != "" {
+				t.Fatalf("durable notification leaked payload: %#v", event)
 			}
+			reachedFinalRevision = event.Revision == view.Revision
 		}
 	}
 	if resetAttempt != "attempt-1" || !reflect.DeepEqual(chunks, []string{"par", "done"}) || !reflect.DeepEqual(attempts, []string{"attempt-1", "attempt-2"}) {
@@ -70,9 +75,9 @@ func TestNonStreamingResultContainsOnlyAssistantTextMessages(t *testing.T) {
 	runID := agent.RunID("run-1")
 	inputID := agent.MessageID("message-input")
 	textID := agent.MessageID("message-text")
-	result, err := aggregateRunResult(interaction.SessionSnapshot{
+	result, err := aggregateRunResult(interaction.SessionView{
 		SessionID: "session-1", Revision: 9,
-		History: []session.HistoryFact{
+		RecentHistory: []session.HistoryFact{
 			{Message: &agent.Message{ID: inputID, RunID: runID, Role: agent.RoleUser}},
 			// A content-empty assistant message exists only to own ToolCalls.
 			{Message: &agent.Message{ID: "message-tool-owner", RunID: runID, Role: agent.RoleAssistant}},
@@ -88,7 +93,7 @@ func TestNonStreamingResultContainsOnlyAssistantTextMessages(t *testing.T) {
 	}
 }
 
-func TestSlowEventSubscriberFailsAtBoundedBuffer(t *testing.T) {
+func TestSlowEventSubscriberDropsTemporaryChunksBeforeDurableRevision(t *testing.T) {
 	hub := newEventHub()
 	stream, err := hub.subscribe()
 	if err != nil {
@@ -98,12 +103,37 @@ func TestSlowEventSubscriberFailsAtBoundedBuffer(t *testing.T) {
 	for index := 0; index <= eventStreamBufferLimit; index++ {
 		hub.publish(interaction.Event{Kind: interaction.EventChunk, Text: "x"})
 	}
-	if _, err := stream.Recv(context.Background()); !errors.Is(err, interaction.ErrEventStreamOverflow) {
-		t.Fatalf("slow subscriber error = %v", err)
+	hub.publish(interaction.Event{Kind: interaction.EventRevision, SessionID: "session-1", Revision: 7})
+	for {
+		event, err := stream.Recv(context.Background())
+		if err != nil {
+			t.Fatalf("temporary overflow closed stream before revision: %v", err)
+		}
+		if event.Kind == interaction.EventRevision {
+			if event.Revision != 7 {
+				t.Fatalf("revision event = %#v", event)
+			}
+			break
+		}
 	}
 }
 
-func TestEventStreamReleasesDrainedMessageBuffer(t *testing.T) {
+func TestSlowEventSubscriberClosesWhenDurableRevisionsCannotBeDelivered(t *testing.T) {
+	hub := newEventHub()
+	stream, err := hub.subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	for index := 0; index <= eventStreamBufferLimit; index++ {
+		hub.publish(interaction.Event{Kind: interaction.EventRevision, SessionID: "session-1", Revision: agent.Revision(index + 1)})
+	}
+	if _, err := stream.Recv(context.Background()); !errors.Is(err, interaction.ErrEventStreamOverflow) {
+		t.Fatalf("durable overflow error = %v", err)
+	}
+}
+
+func TestEventStreamReleasesDrainedBuffer(t *testing.T) {
 	hub := newEventHub()
 	contract, err := hub.subscribe()
 	if err != nil {
@@ -111,8 +141,7 @@ func TestEventStreamReleasesDrainedMessageBuffer(t *testing.T) {
 	}
 	stream := contract.(*runtimeEventStream)
 	defer stream.Close()
-	message := agent.Message{ID: "message-1", Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "large payload"}}}
-	hub.publish(interaction.Event{Kind: interaction.EventCommitted, Message: &message})
+	hub.publish(interaction.Event{Kind: interaction.EventRevision, SessionID: "session-1", Revision: 2})
 	if _, err := stream.Recv(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +153,7 @@ func TestEventStreamReleasesDrainedMessageBuffer(t *testing.T) {
 	}
 }
 
-func TestGatewayReconnectRequiresSnapshotBeforeSubscribingFromStaleRevision(t *testing.T) {
+func TestGatewayReconnectRequiresViewBeforeSubscribingFromStaleRevision(t *testing.T) {
 	executor := model.NewFakeModelExecutor(model.FakeExecution{Events: []model.ModelEvent{complete("done")}})
 	access, stop := startRuntimeTestApplication(t, executor)
 	defer stop()
@@ -134,9 +163,9 @@ func TestGatewayReconnectRequiresSnapshotBeforeSubscribingFromStaleRevision(t *t
 	}
 	waitRuntimeIdle(t, access, opened.SessionID)
 	if _, err := access.Subscribe(context.Background(), interaction.SubscribeRequest{SessionID: opened.SessionID, AfterRevision: opened.Revision}); err == nil {
-		t.Fatal("stale subscriber was accepted without first obtaining a current Snapshot")
+		t.Fatal("stale subscriber was accepted without first obtaining a current SessionView")
 	}
-	snapshot, err := access.Snapshot(context.Background(), interaction.SnapshotRequest{SessionID: opened.SessionID, KnownRevision: opened.Revision})
+	snapshot, err := access.View(context.Background(), interaction.SessionViewRequest{SessionID: opened.SessionID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,12 +194,12 @@ func TestGatewayNonStreamingAggregationUsesTheSameDurableRun(t *testing.T) {
 	if result.Outcome != "completed" || !result.RunID.Valid() || len(result.AssistantMessages) != 2 || result.AssistantMessages[0].Parts[0].Text != "first" || result.AssistantMessages[1].Parts[0].Text != "second" {
 		t.Fatalf("aggregate result = %#v", result)
 	}
-	snapshot, err := access.Snapshot(context.Background(), interaction.SnapshotRequest{SessionID: opened.SessionID})
+	snapshot, err := access.View(context.Background(), interaction.SessionViewRequest{SessionID: opened.SessionID})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var durable int
-	for _, fact := range snapshot.History {
+	for _, fact := range snapshot.RecentHistory {
 		if fact.Message != nil && fact.Message.Role == "assistant" && fact.Message.RunID == result.RunID {
 			durable++
 		}
@@ -205,22 +234,22 @@ func TestDisconnectingEventStreamDoesNotCancelRun(t *testing.T) {
 	}
 	close(blocked)
 	waitRuntimeIdle(t, access, opened.SessionID)
-	snapshot, err := access.Snapshot(context.Background(), interaction.SnapshotRequest{SessionID: opened.SessionID})
+	snapshot, err := access.View(context.Background(), interaction.SessionViewRequest{SessionID: opened.SessionID})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var completed bool
-	for _, fact := range snapshot.History {
+	for _, fact := range snapshot.RecentHistory {
 		if fact.Run != nil && fact.Run.Kind == "completed" {
 			completed = true
 		}
 	}
 	if !completed {
-		t.Fatalf("disconnect canceled or lost the Run: %#v", snapshot.History)
+		t.Fatalf("disconnect canceled or lost the Run: %#v", snapshot.RecentHistory)
 	}
 }
 
-func TestStreamingCommitAndNonStreamingResultExposeTheSameFact(t *testing.T) {
+func TestRevisionNotificationAndNonStreamingResultResolveToTheSameDurableFact(t *testing.T) {
 	executor := model.NewFakeModelExecutor(model.FakeExecution{Events: []model.ModelEvent{
 		{Kind: model.EventDelta, Text: "temporary"}, complete("durable"),
 	}})
@@ -245,29 +274,32 @@ func TestStreamingCommitAndNonStreamingResultExposeTheSameFact(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	var streamed *agent.Message
-	for streamed == nil {
+	var notified bool
+	for !notified {
 		event, err := stream.Recv(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if event.Kind == interaction.EventCommitted && event.Message != nil && event.Message.Role == agent.RoleAssistant {
-			streamed = event.Message
+		if event.Kind == interaction.EventRevision && event.Revision == result.Revision {
+			if event.SessionID != opened.SessionID || event.RunID != "" || event.StepID != "" || event.AttemptID != "" || event.Text != "" {
+				t.Fatalf("revision notification leaked fact payload: %#v", event)
+			}
+			notified = true
 		}
 	}
-	if !reflect.DeepEqual(*streamed, result.AssistantMessages[0]) {
-		t.Fatalf("streamed fact = %#v, non-streaming fact = %#v", *streamed, result.AssistantMessages[0])
-	}
-	streamed.Parts[0].Text = "mutated by client"
-	snapshot, err := access.Snapshot(context.Background(), interaction.SnapshotRequest{SessionID: opened.SessionID})
+	snapshot, err := access.View(context.Background(), interaction.SessionViewRequest{SessionID: opened.SessionID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, fact := range snapshot.History {
-		if fact.Message != nil && fact.Message.ID == result.AssistantMessages[0].ID && fact.Message.Parts[0].Text != "durable" {
-			t.Fatal("mutating a streamed event changed persisted History")
+	for _, fact := range snapshot.RecentHistory {
+		if fact.Message != nil && fact.Message.ID == result.AssistantMessages[0].ID {
+			if !reflect.DeepEqual(*fact.Message, result.AssistantMessages[0]) {
+				t.Fatalf("View fact = %#v, non-streaming fact = %#v", *fact.Message, result.AssistantMessages[0])
+			}
+			return
 		}
 	}
+	t.Fatal("assistant fact was not recoverable through revision + View")
 }
 
 func TestGatewayEventStreamsAreIsolatedBySession(t *testing.T) {
@@ -315,7 +347,7 @@ func TestClosingSessionWakesEventReceiver(t *testing.T) {
 		_, err := stream.Recv(context.Background())
 		received <- err
 	}()
-	if err := access.CloseSession(context.Background(), interaction.CloseSessionRequest{SessionID: opened.SessionID}); err != nil {
+	if err := access.CloseSession(context.Background(), interaction.CloseSessionRequest{SessionID: opened.SessionID, ExpectedRevision: opened.Revision}); err != nil {
 		t.Fatal(err)
 	}
 	select {

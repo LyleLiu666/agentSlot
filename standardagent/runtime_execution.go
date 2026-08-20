@@ -36,6 +36,7 @@ type activeRun struct {
 	prepareOnce     sync.Once
 	prepareRevision agent.Revision
 	usedTokens      int64
+	controlActor    agent.ActorIdentity
 }
 
 func (r *activeRun) signalPrepared(revision agent.Revision) {
@@ -474,7 +475,13 @@ func (r *runtimeInstance) finishRun(run *activeRun, outcome stepOutcome) (*activ
 			nextRun, nextStep, changes = r.appendNextRunChanges(snapshot, item, changes)
 		}
 	}
-	if _, err := r.commitLocked(context.Background(), snapshot.Revision, "run-finish", changes); err != nil {
+	actor := agent.ActorIdentity{}
+	if terminalKind == session.RunCanceled && run.controlActor.Valid() {
+		actor = run.controlActor
+	} else if terminalKind == session.RunCompleted {
+		actor = agent.ActorIdentity{Kind: agent.ActorAgent, ID: string(snapshot.Session.AgentID)}
+	}
+	if _, err := r.commitLockedAs(context.Background(), snapshot.Revision, "run-finish", actor, changes); err != nil {
 		if nextRun != nil {
 			nextRun.cancel()
 		}
@@ -571,16 +578,33 @@ func (r *runtimeInstance) viewLocked(ctx context.Context) (session.Snapshot, err
 }
 
 func (r *runtimeInstance) commitLocked(ctx context.Context, expected agent.Revision, operation string, changes []session.Change) (session.Commit, error) {
+	return r.commitLockedAs(ctx, expected, operation, agent.ActorIdentity{}, changes)
+}
+
+func (r *runtimeInstance) commitExternalLocked(ctx context.Context, expected agent.Revision, operation string, actor agent.ActorIdentity, changes []session.Change) (session.Commit, error) {
+	commit, err := r.commitLockedAs(ctx, expected, operation, actor, changes)
+	if err == nil || !agent.IsCode(err, agent.CodeRevisionConflict) {
+		return commit, err
+	}
+	current := r.revision()
+	if snapshot, viewErr := r.session.View(ctx); viewErr == nil {
+		current = snapshot.Revision
+		r.revisionValue.Store(uint64(current))
+	}
+	return session.Commit{}, &interaction.RevisionConflictError{CurrentRevision: current, SnapshotRequired: true, Cause: err}
+}
+
+func (r *runtimeInstance) commitLockedAs(ctx context.Context, expected agent.Revision, operation string, actor agent.ActorIdentity, changes []session.Change) (session.Commit, error) {
 	commit, err := r.components.store.Commit(ctx, session.CommitRequest{
 		SessionID: r.id(), ExpectedRevision: expected,
-		IdempotencyKey: fmt.Sprintf("runtime-%s-%s", operation, r.nextID("commit")), Changes: changes,
+		IdempotencyKey: fmt.Sprintf("runtime-%s-%s", operation, r.nextID("commit")), Actor: actor, Changes: changes,
 	})
 	if err != nil {
 		return session.Commit{}, err
 	}
 	r.revisionValue.Store(uint64(commit.Revision))
 	r.observer.publish(hook.CommitView{SessionID: r.id(), RunID: runIDForCommit(changes), Revision: commit.Revision})
-	r.publishCommitEvents(commit.Revision, changes)
+	r.publishCommitEvent(commit.Revision)
 	r.publishCommitObservations(changes)
 	return commit, nil
 }
@@ -618,28 +642,8 @@ func (r *runtimeInstance) publishCommitObservations(changes []session.Change) {
 	}
 }
 
-func (r *runtimeInstance) publishCommitEvents(revision agent.Revision, changes []session.Change) {
-	runID := runIDForCommit(changes)
-	published := false
-	for _, change := range changes {
-		if change.Message == nil {
-			continue
-		}
-		message := *change.Message
-		message.Parts = cloneRuntimeParts(message.Parts)
-		r.events.publish(interaction.Event{Kind: interaction.EventCommitted, SessionID: r.id(), RunID: message.RunID, StepID: message.StepID, Revision: revision, Message: &message})
-		published = true
-	}
-	kind := interaction.EventCommitted
-	for _, change := range changes {
-		if change.RunState != nil {
-			kind = interaction.EventState
-			break
-		}
-	}
-	if !published || kind == interaction.EventState {
-		r.events.publish(interaction.Event{Kind: kind, SessionID: r.id(), RunID: runID, Revision: revision})
-	}
+func (r *runtimeInstance) publishCommitEvent(revision agent.Revision) {
+	r.events.publish(interaction.Event{Kind: interaction.EventRevision, SessionID: r.id(), Revision: revision})
 }
 
 func (r *runtimeInstance) ensureOpenLocked(operation string) error {

@@ -7,7 +7,7 @@ import (
 	"github.com/LyleLiu666/agentSlot/interaction"
 )
 
-// gatewayBinding is the stable capability attached to Entrypoints during
+// gatewayBinding is the stable capability bound to Gateway channels during
 // Build. Start atomically binds the live Gateway and Stop removes it, so an
 // adapter cannot accidentally operate on a half-started application.
 type gatewayBinding struct {
@@ -165,12 +165,20 @@ func (b *gatewayBinding) UpdateModelConfig(ctx context.Context, request interact
 	return target.UpdateModelConfig(ctx, request)
 }
 
-func (b *gatewayBinding) Snapshot(ctx context.Context, request interaction.SnapshotRequest) (interaction.SessionSnapshot, error) {
+func (b *gatewayBinding) View(ctx context.Context, request interaction.SessionViewRequest) (interaction.SessionView, error) {
 	target, err := b.access()
 	if err != nil {
-		return interaction.SessionSnapshot{}, err
+		return interaction.SessionView{}, err
 	}
-	return target.Snapshot(ctx, request)
+	return target.View(ctx, request)
+}
+
+func (b *gatewayBinding) History(ctx context.Context, request interaction.HistoryRequest) (interaction.HistoryPage, error) {
+	target, err := b.access()
+	if err != nil {
+		return interaction.HistoryPage{}, err
+	}
+	return target.History(ctx, request)
 }
 
 func (b *gatewayBinding) Subscribe(ctx context.Context, request interaction.SubscribeRequest) (interaction.EventStream, error) {

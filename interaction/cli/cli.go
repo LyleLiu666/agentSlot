@@ -1,4 +1,4 @@
-// Package cli provides a line-oriented Entrypoint backed only by the fixed
+// Package cli provides a line-oriented GatewayChannel backed only by the fixed
 // GatewayAccess contract. It is a renderer and transport adapter, not an
 // alternate Agent backend.
 package cli
@@ -17,6 +17,7 @@ import (
 
 	agent "github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/interaction"
+	"github.com/LyleLiu666/agentSlot/session"
 )
 
 const defaultMaxLineBytes = 1 << 20
@@ -25,17 +26,18 @@ type Config struct {
 	AgentID      agent.AgentID
 	WorkspaceID  agent.WorkspaceID
 	SessionID    agent.SessionID
+	Actor        agent.ActorIdentity
 	Input        io.ReadCloser
 	Output       io.Writer
 	ErrorOutput  io.Writer
 	MaxLineBytes int
 }
 
-type Entrypoint struct {
+type Channel struct {
 	mu         sync.Mutex
 	config     Config
 	access     interaction.GatewayAccess
-	attached   bool
+	bound      bool
 	starting   bool
 	started    bool
 	session    agent.SessionID
@@ -46,9 +48,9 @@ type Entrypoint struct {
 	closeInput sync.Once
 }
 
-var _ interaction.Entrypoint = (*Entrypoint)(nil)
+var _ interaction.GatewayChannel = (*Channel)(nil)
 
-func New(config Config) (*Entrypoint, error) {
+func New(config Config) (*Channel, error) {
 	if config.Input == nil || config.Output == nil || config.ErrorOutput == nil {
 		return nil, errors.New("cli: input, output, and error output are required")
 	}
@@ -63,35 +65,41 @@ func New(config Config) (*Entrypoint, error) {
 	if config.MaxLineBytes <= 0 {
 		return nil, errors.New("cli: MaxLineBytes must be positive")
 	}
-	return &Entrypoint{config: config, done: make(chan struct{})}, nil
+	if config.Actor == (agent.ActorIdentity{}) {
+		config.Actor = agent.ActorIdentity{Kind: agent.ActorLocalUser, ID: "cli"}
+	}
+	if !config.Actor.Valid() {
+		return nil, errors.New("cli: Actor must be a valid local, remote, service, or agent identity")
+	}
+	return &Channel{config: config, done: make(chan struct{})}, nil
 }
 
-func (e *Entrypoint) Attach(access interaction.GatewayAccess) error {
+func (e *Channel) Bind(access interaction.GatewayAccess) error {
 	if nilGateway(access) {
 		return errors.New("cli: GatewayAccess is required")
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.attached {
-		return errors.New("cli: Entrypoint is already attached")
+	if e.bound {
+		return errors.New("cli: Channel is already bound")
 	}
 	e.access = access
-	e.attached = true
+	e.bound = true
 	return nil
 }
 
-func (e *Entrypoint) Start(ctx context.Context) error {
+func (e *Channel) Start(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	e.mu.Lock()
-	if !e.attached || nilGateway(e.access) {
+	if !e.bound || nilGateway(e.access) {
 		e.mu.Unlock()
-		return errors.New("cli: Entrypoint is not attached")
+		return errors.New("cli: Channel is not bound")
 	}
 	if e.started || e.starting {
 		e.mu.Unlock()
-		return errors.New("cli: Entrypoint is already starting or started")
+		return errors.New("cli: Channel is already starting or started")
 	}
 	e.starting = true
 	access := e.access
@@ -128,7 +136,7 @@ func (e *Entrypoint) Start(ctx context.Context) error {
 	return nil
 }
 
-func (e *Entrypoint) Stop(ctx context.Context) error {
+func (e *Channel) Stop(ctx context.Context) error {
 	e.mu.Lock()
 	if !e.started {
 		e.mu.Unlock()
@@ -149,15 +157,15 @@ func (e *Entrypoint) Stop(ctx context.Context) error {
 	}
 }
 
-func (e *Entrypoint) Done() <-chan struct{} { return e.done }
+func (e *Channel) Done() <-chan struct{} { return e.done }
 
-func (e *Entrypoint) Err() error {
+func (e *Channel) Err() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.err
 }
 
-func (e *Entrypoint) run(ctx context.Context) {
+func (e *Channel) run(ctx context.Context) {
 	defer close(e.done)
 	scanner := bufio.NewScanner(e.config.Input)
 	scanner.Buffer(make([]byte, 64<<10), e.config.MaxLineBytes)
@@ -181,7 +189,7 @@ func (e *Entrypoint) run(ctx context.Context) {
 	}
 }
 
-func (e *Entrypoint) handleLine(ctx context.Context, line string) (bool, error) {
+func (e *Channel) handleLine(ctx context.Context, line string) (bool, error) {
 	if !strings.HasPrefix(line, "/") {
 		return false, e.send(ctx, line)
 	}
@@ -217,9 +225,9 @@ func (e *Entrypoint) handleLine(ctx context.Context, line string) (bool, error) 
 	}
 }
 
-func (e *Entrypoint) send(ctx context.Context, text string) error {
+func (e *Channel) send(ctx context.Context, text string) error {
 	result, err := e.access.SendAndWait(ctx, interaction.SendRequest{
-		SessionID: e.session, ExpectedRevision: e.revision,
+		SessionID: e.session, ExpectedRevision: e.revision, Actor: e.config.Actor,
 		Input: agent.MessageInput{Parts: []agent.MessagePart{{Kind: agent.PartText, Text: text}}},
 	})
 	if err != nil {
@@ -230,7 +238,7 @@ func (e *Entrypoint) send(ctx context.Context, text string) error {
 	return nil
 }
 
-func (e *Entrypoint) renderMessages(messages []agent.Message) {
+func (e *Channel) renderMessages(messages []agent.Message) {
 	for _, message := range messages {
 		for _, part := range message.Parts {
 			switch part.Kind {
@@ -243,7 +251,7 @@ func (e *Entrypoint) renderMessages(messages []agent.Message) {
 	}
 }
 
-func (e *Entrypoint) invokeCommand(ctx context.Context, key, argumentsText string) error {
+func (e *Channel) invokeCommand(ctx context.Context, key, argumentsText string) error {
 	var arguments json.RawMessage
 	if argumentsText != "" {
 		arguments = json.RawMessage(argumentsText)
@@ -253,7 +261,7 @@ func (e *Entrypoint) invokeCommand(ctx context.Context, key, argumentsText strin
 	}
 	result, err := e.access.InvokeCommand(ctx, interaction.CommandInvocation{
 		Scope: interaction.CommandScope{AgentID: e.config.AgentID, WorkspaceID: e.config.WorkspaceID, SessionID: e.session},
-		Key:   key, ExpectedRevision: e.revision, Arguments: arguments,
+		Key:   key, ExpectedRevision: e.revision, Actor: e.config.Actor, Arguments: arguments,
 	})
 	if err != nil {
 		return err
@@ -267,7 +275,7 @@ func (e *Entrypoint) invokeCommand(ctx context.Context, key, argumentsText strin
 	return nil
 }
 
-func (e *Entrypoint) help(ctx context.Context) error {
+func (e *Channel) help(ctx context.Context) error {
 	descriptors, err := e.access.Commands(ctx, interaction.CommandScope{
 		AgentID: e.config.AgentID, WorkspaceID: e.config.WorkspaceID, SessionID: e.session,
 	})
@@ -284,16 +292,16 @@ func (e *Entrypoint) help(ctx context.Context) error {
 	return nil
 }
 
-func (e *Entrypoint) cancelRun(ctx context.Context) error {
-	if err := e.access.Cancel(ctx, interaction.CancelRequest{SessionID: e.session}); err != nil {
+func (e *Channel) cancelRun(ctx context.Context) error {
+	if err := e.access.Cancel(ctx, interaction.CancelRequest{SessionID: e.session, ExpectedRevision: e.revision, Actor: e.config.Actor}); err != nil {
 		return err
 	}
 	_, err := e.refreshAfterIdle(ctx)
 	return err
 }
 
-func (e *Entrypoint) runPending(ctx context.Context) error {
-	receipt, err := e.access.RunPending(ctx, interaction.RunPendingRequest{SessionID: e.session, ExpectedRevision: e.revision})
+func (e *Channel) runPending(ctx context.Context) error {
+	receipt, err := e.access.RunPending(ctx, interaction.RunPendingRequest{SessionID: e.session, ExpectedRevision: e.revision, Actor: e.config.Actor})
 	if err != nil {
 		return err
 	}
@@ -302,8 +310,12 @@ func (e *Entrypoint) runPending(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	history, err := e.historyThroughRunStart(ctx, snapshot, receipt.RunID)
+	if err != nil {
+		return err
+	}
 	messages := make([]agent.Message, 0)
-	for _, fact := range snapshot.History {
+	for _, fact := range history {
 		if fact.Message != nil && fact.Message.RunID == receipt.RunID && fact.Message.Role == agent.RoleAssistant {
 			messages = append(messages, *fact.Message)
 		}
@@ -312,13 +324,53 @@ func (e *Entrypoint) runPending(ctx context.Context) error {
 	return nil
 }
 
-func (e *Entrypoint) refreshAfterIdle(ctx context.Context) (interaction.SessionSnapshot, error) {
-	if err := e.access.WhenIdle(ctx, interaction.WhenIdleRequest{SessionID: e.session}); err != nil {
-		return interaction.SessionSnapshot{}, err
+func (e *Channel) historyThroughRunStart(ctx context.Context, view interaction.SessionView, runID agent.RunID) ([]session.HistoryFact, error) {
+	history := append([]session.HistoryFact(nil), view.RecentHistory...)
+	if runStarted(history, runID) || !view.HasMoreHistory {
+		return history, nil
 	}
-	snapshot, err := e.access.Snapshot(ctx, interaction.SnapshotRequest{SessionID: e.session, KnownRevision: e.revision})
+	if len(history) == 0 || history[0].Sequence == 0 {
+		return nil, errors.New("cli: SessionView cannot page older History without a sequence cursor")
+	}
+	before := history[0].Sequence
+	for {
+		page, err := e.access.History(ctx, interaction.HistoryRequest{
+			SessionID: e.session, BeforeHistorySequence: before, StepLimit: 100,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if len(page.Facts) == 0 {
+			return history, nil
+		}
+		next := page.Facts[0].Sequence
+		if next == 0 || next >= before {
+			return nil, errors.New("cli: Gateway returned a non-decreasing History cursor")
+		}
+		history = append(append([]session.HistoryFact(nil), page.Facts...), history...)
+		if runStarted(page.Facts, runID) || !page.HasMore {
+			return history, nil
+		}
+		before = next
+	}
+}
+
+func runStarted(history []session.HistoryFact, runID agent.RunID) bool {
+	for _, fact := range history {
+		if fact.Run != nil && fact.Run.RunID == runID && fact.Run.Kind == session.RunStarted {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *Channel) refreshAfterIdle(ctx context.Context) (interaction.SessionView, error) {
+	if err := e.access.WhenIdle(ctx, interaction.WhenIdleRequest{SessionID: e.session}); err != nil {
+		return interaction.SessionView{}, err
+	}
+	snapshot, err := e.access.View(ctx, interaction.SessionViewRequest{SessionID: e.session})
 	if err != nil {
-		return interaction.SessionSnapshot{}, err
+		return interaction.SessionView{}, err
 	}
 	e.revision = snapshot.Revision
 	return snapshot, nil

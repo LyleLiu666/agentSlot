@@ -34,11 +34,11 @@ func TestRuntimeSendCommitsOnlyCompleteModelOutput(t *testing.T) {
 	if err := access.WhenIdle(context.Background(), interaction.WhenIdleRequest{SessionID: opened.SessionID}); err != nil {
 		t.Fatalf("WhenIdle: %v", err)
 	}
-	snapshot, err := access.Snapshot(context.Background(), interaction.SnapshotRequest{SessionID: opened.SessionID})
+	snapshot, err := access.View(context.Background(), interaction.SessionViewRequest{SessionID: opened.SessionID})
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
-	messages := historyMessageFacts(snapshot.History)
+	messages := historyMessageFacts(snapshot.RecentHistory)
 	if snapshot.RunState != session.RunIdle || snapshot.ActiveRunID != "" || len(messages) != 2 {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
@@ -48,7 +48,7 @@ func TestRuntimeSendCommitsOnlyCompleteModelOutput(t *testing.T) {
 	if messages[1].ID == "" || messages[1].Role != agent.RoleAssistant {
 		t.Fatalf("assistant identity was not allocated by Runtime: %#v", messages[1])
 	}
-	runs := historyRunFacts(snapshot.History)
+	runs := historyRunFacts(snapshot.RecentHistory)
 	if len(runs) != 2 || runs[0].Kind != session.RunStarted || runs[1].Kind != session.RunCompleted || runs[0].ModelConfig.ModelID != "default" {
 		t.Fatalf("run facts = %#v", runs)
 	}
@@ -82,14 +82,14 @@ func TestRuntimeRejectsModelConfigChangeWhileRunningAndCancelsCleanly(t *testing
 	if !agent.IsCode(err, agent.CodeActiveRun) {
 		t.Fatalf("UpdateModelConfig error = %v, code=%q", err, agent.CodeOf(err))
 	}
-	if err := access.Cancel(context.Background(), interaction.CancelRequest{SessionID: opened.SessionID}); err != nil {
+	if err := access.Cancel(context.Background(), interaction.CancelRequest{SessionID: opened.SessionID, ExpectedRevision: receipt.Revision}); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
 	if err := access.WhenIdle(ctx, interaction.WhenIdleRequest{SessionID: opened.SessionID}); err != nil {
 		t.Fatalf("WhenIdle after cancel: %v", err)
 	}
-	snapshot, err := access.Snapshot(context.Background(), interaction.SnapshotRequest{SessionID: opened.SessionID})
-	if err != nil || snapshot.RunState != session.RunIdle || len(historyMessageFacts(snapshot.History)) != 1 {
+	snapshot, err := access.View(context.Background(), interaction.SessionViewRequest{SessionID: opened.SessionID})
+	if err != nil || snapshot.RunState != session.RunIdle || len(historyMessageFacts(snapshot.RecentHistory)) != 1 {
 		t.Fatalf("snapshot after cancel = %#v, %v", snapshot, err)
 	}
 }
@@ -197,12 +197,12 @@ func TestRuntimeCommitsToolCallAndResultThenContinuesModel(t *testing.T) {
 	if len(requests[1].Inputs) < 4 || requests[1].Inputs[len(requests[1].Inputs)-2].ToolCall == nil || requests[1].Inputs[len(requests[1].Inputs)-2].ToolCall.CorrelationID != "provider-call-1" || requests[1].Inputs[len(requests[1].Inputs)-1].ToolResult == nil {
 		t.Fatalf("second request lacks tool exchange: %#v", requests[1].Inputs)
 	}
-	snapshot, err := access.Snapshot(ctx, interaction.SnapshotRequest{SessionID: opened.SessionID})
-	if err != nil || len(snapshot.History) < 6 {
+	snapshot, err := access.View(ctx, interaction.SessionViewRequest{SessionID: opened.SessionID})
+	if err != nil || len(snapshot.RecentHistory) < 6 {
 		t.Fatalf("snapshot = %#v, %v", snapshot, err)
 	}
 	var callCount, resultCount int
-	for _, fact := range snapshot.History {
+	for _, fact := range snapshot.RecentHistory {
 		if fact.ToolCall != nil {
 			callCount++
 		}
@@ -245,7 +245,7 @@ func TestRuntimeFailureLeavesQueuedNormalForExplicitRunPending(t *testing.T) {
 	if err := access.WhenIdle(ctx, interaction.WhenIdleRequest{SessionID: opened.SessionID}); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := access.Snapshot(context.Background(), interaction.SnapshotRequest{SessionID: opened.SessionID})
+	snapshot, err := access.View(context.Background(), interaction.SessionViewRequest{SessionID: opened.SessionID})
 	if err != nil || len(snapshot.Queue) != 1 || snapshot.Queue[0].Message.ID != queued.MessageID {
 		t.Fatalf("failed run queue = %#v, %v", snapshot.Queue, err)
 	}
@@ -311,10 +311,12 @@ func TestRuntimeAllowsDifferentSessionsToRunConcurrently(t *testing.T) {
 	defer stop()
 	first := createRuntimeTestSession(t, access)
 	second := createRuntimeTestSession(t, access)
-	if _, err := access.Send(context.Background(), interaction.SendRequest{SessionID: first.SessionID, ExpectedRevision: first.Revision, Input: textInput("one")}); err != nil {
+	firstReceipt, err := access.Send(context.Background(), interaction.SendRequest{SessionID: first.SessionID, ExpectedRevision: first.Revision, Input: textInput("one")})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := access.Send(context.Background(), interaction.SendRequest{SessionID: second.SessionID, ExpectedRevision: second.Revision, Input: textInput("two")}); err != nil {
+	secondReceipt, err := access.Send(context.Background(), interaction.SendRequest{SessionID: second.SessionID, ExpectedRevision: second.Revision, Input: textInput("two")})
+	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -326,10 +328,10 @@ func TestRuntimeAllowsDifferentSessionsToRunConcurrently(t *testing.T) {
 	if requests[0].SessionID == requests[1].SessionID {
 		t.Fatalf("requests were not isolated by Session: %#v", requests)
 	}
-	if err := access.Cancel(context.Background(), interaction.CancelRequest{SessionID: first.SessionID}); err != nil {
+	if err := access.Cancel(context.Background(), interaction.CancelRequest{SessionID: first.SessionID, ExpectedRevision: firstReceipt.Revision}); err != nil {
 		t.Fatal(err)
 	}
-	if err := access.Cancel(context.Background(), interaction.CancelRequest{SessionID: second.SessionID}); err != nil {
+	if err := access.Cancel(context.Background(), interaction.CancelRequest{SessionID: second.SessionID, ExpectedRevision: secondReceipt.Revision}); err != nil {
 		t.Fatal(err)
 	}
 	if err := access.WhenIdle(ctx, interaction.WhenIdleRequest{SessionID: first.SessionID}); err != nil {
@@ -346,7 +348,8 @@ func TestCloseSessionCancelsRunWithoutDeletingDurableSession(t *testing.T) {
 	access, stop := startRuntimeTestApplication(t, fake)
 	defer stop()
 	opened := createRuntimeTestSession(t, access)
-	if _, err := access.Send(context.Background(), interaction.SendRequest{SessionID: opened.SessionID, ExpectedRevision: opened.Revision, Input: textInput("close")}); err != nil {
+	receipt, err := access.Send(context.Background(), interaction.SendRequest{SessionID: opened.SessionID, ExpectedRevision: opened.Revision, Input: textInput("close")})
+	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -354,15 +357,15 @@ func TestCloseSessionCancelsRunWithoutDeletingDurableSession(t *testing.T) {
 	if err := fake.WaitForRequests(ctx, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := access.CloseSession(ctx, interaction.CloseSessionRequest{SessionID: opened.SessionID}); err != nil {
+	if err := access.CloseSession(ctx, interaction.CloseSessionRequest{SessionID: opened.SessionID, ExpectedRevision: receipt.Revision}); err != nil {
 		t.Fatalf("CloseSession: %v", err)
 	}
 	resumed, err := access.ResumeSession(ctx, interaction.ResumeSessionRequest{SessionID: opened.SessionID})
 	if err != nil {
 		t.Fatalf("ResumeSession after close: %v", err)
 	}
-	snapshot, err := access.Snapshot(ctx, interaction.SnapshotRequest{SessionID: resumed.SessionID})
-	if err != nil || snapshot.RunState != session.RunIdle || len(historyMessageFacts(snapshot.History)) != 1 {
+	snapshot, err := access.View(ctx, interaction.SessionViewRequest{SessionID: resumed.SessionID})
+	if err != nil || snapshot.RunState != session.RunIdle || len(historyMessageFacts(snapshot.RecentHistory)) != 1 {
 		t.Fatalf("resumed snapshot = %#v, %v", snapshot, err)
 	}
 }
@@ -409,10 +412,10 @@ func (recoveryFailStore) Recover(context.Context, session.SessionRef) (session.S
 func startRuntimeTestApplication(t *testing.T, executor model.ModelExecutor, extra ...agentslot.Module) (interaction.GatewayAccess, func()) {
 	t.Helper()
 	memory := session.NewMemoryModule()
-	entry := &captureEntrypoint{}
+	entry := &captureChannel{}
 	modules := []agentslot.Module{memory, executorModule{executor: executor}}
 	modules = append(modules, extra...)
-	modules = append(modules, NewEntrypointModule("entrypoint.runtime-test", "test", entry))
+	modules = append(modules, NewGatewayChannelModule("entrypoint.runtime-test", "test", entry))
 	application := NewApplication(ApplicationSpec{Name: "runtime-test", Modules: modules, DefaultModelConfig: model.Config{ModelID: "default", Reasoning: model.ReasoningDefault}})
 	running, err := application.Start(context.Background())
 	if err != nil {

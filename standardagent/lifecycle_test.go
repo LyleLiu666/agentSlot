@@ -12,14 +12,14 @@ import (
 	"github.com/LyleLiu666/agentSlot/interaction"
 )
 
-func TestStandardApplicationLifecycleSurroundsEntrypoints(t *testing.T) {
+func TestStandardApplicationLifecycleSurroundsGatewayChannels(t *testing.T) {
 	events := &eventLog{}
-	entry := &lifecycleEntrypoint{captureEntrypoint: captureEntrypoint{}, events: events}
+	entry := &lifecycleChannel{captureChannel: captureChannel{}, events: events}
 	application := NewApplication(ApplicationSpec{
 		Name: "lifecycle-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
 			&lifecycleComponentsModule{componentsModule: componentsModule{store: newSeededStore()}, events: events},
-			NewEntrypointModule("entrypoint.test", "test", entry),
+			NewGatewayChannelModule("entrypoint.test", "test", entry),
 		},
 	})
 	runtime, err := application.Start(context.Background())
@@ -35,22 +35,22 @@ func TestStandardApplicationLifecycleSurroundsEntrypoints(t *testing.T) {
 	}
 }
 
-func TestEntrypointStartFailureRollsBackGatewayAndComponents(t *testing.T) {
+func TestGatewayChannelStartFailureRollsBackGatewayAndComponents(t *testing.T) {
 	events := &eventLog{}
 	startErr := errors.New("listener failed")
-	entry := &lifecycleEntrypoint{captureEntrypoint: captureEntrypoint{}, events: events, startErr: startErr}
+	entry := &lifecycleChannel{captureChannel: captureChannel{}, events: events, startErr: startErr}
 	application := NewApplication(ApplicationSpec{
 		Name: "rollback-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
 			&lifecycleComponentsModule{componentsModule: componentsModule{store: newSeededStore()}, events: events},
-			NewEntrypointModule("entrypoint.test", "test", entry),
+			NewGatewayChannelModule("entrypoint.test", "test", entry),
 		},
 	})
 	_, err := application.Start(context.Background())
 	if !errors.Is(err, startErr) {
 		t.Fatalf("start error = %v, want %v", err, startErr)
 	}
-	_, err = entry.Access().Snapshot(context.Background(), interaction.SnapshotRequest{SessionID: "session-1"})
+	_, err = entry.Access().View(context.Background(), interaction.SessionViewRequest{SessionID: "session-1"})
 	if !agent.IsCode(err, agent.CodeApplicationNotStarted) {
 		t.Fatalf("Snapshot after rollback error = %v, code=%q", err, agent.CodeOf(err))
 	}
@@ -92,18 +92,18 @@ func (m *lifecycleComponentsModule) Stop(context.Context) error {
 	return nil
 }
 
-type lifecycleEntrypoint struct {
-	captureEntrypoint
+type lifecycleChannel struct {
+	captureChannel
 	events   *eventLog
 	startErr error
 }
 
-func (e *lifecycleEntrypoint) Start(context.Context) error {
+func (e *lifecycleChannel) Start(context.Context) error {
 	e.events.add("start:entrypoint")
 	return e.startErr
 }
 
-func (e *lifecycleEntrypoint) Stop(context.Context) error {
+func (e *lifecycleChannel) Stop(context.Context) error {
 	e.events.add("stop:entrypoint")
 	return nil
 }

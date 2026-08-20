@@ -14,12 +14,12 @@ import (
 )
 
 func TestNewApplicationBuildsStandardProfileAndAttachesGateway(t *testing.T) {
-	entry := &captureEntrypoint{}
+	entry := &captureChannel{}
 	application := NewApplication(ApplicationSpec{
 		Name: "test-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
 			componentsModule{store: newSeededStore()},
-			NewEntrypointModule("entrypoint.test", "test", entry),
+			NewGatewayChannelModule("entrypoint.test", "test", entry),
 		},
 	})
 	if _, ok := any(application).(*agentslot.Application); !ok {
@@ -34,25 +34,25 @@ func TestNewApplicationBuildsStandardProfileAndAttachesGateway(t *testing.T) {
 	}
 	access := entry.Access()
 	if access == nil {
-		t.Fatal("entrypoint did not receive GatewayAccess during Build")
+		t.Fatal("GatewayChannel did not receive GatewayAccess during Build")
 	}
 	if _, ok := access.(*gatewayBinding); !ok {
-		t.Fatalf("entrypoint received %T, want the isolated GatewayAccess binding", access)
+		t.Fatalf("GatewayChannel received %T, want the isolated GatewayAccess binding", access)
 	}
-	_, err = access.Snapshot(context.Background(), interaction.SnapshotRequest{SessionID: "session-1"})
+	_, err = access.View(context.Background(), interaction.SessionViewRequest{SessionID: "session-1"})
 	if !agent.IsCode(err, agent.CodeApplicationNotStarted) {
-		t.Fatalf("pre-start Snapshot error = %v, code=%q", err, agent.CodeOf(err))
+		t.Fatalf("pre-start View error = %v, code=%q", err, agent.CodeOf(err))
 	}
 }
 
-func TestGatewaySnapshotUsesKnownRevisionForReconnectNotCAS(t *testing.T) {
+func TestGatewayViewReturnsCurrentAuthoritativeRevision(t *testing.T) {
 	store := newSeededStore()
-	entry := &captureEntrypoint{}
+	entry := &captureChannel{}
 	application := NewApplication(ApplicationSpec{
-		Name: "snapshot-agent", DefaultModelConfig: testDefaultModel(),
+		Name: "view-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
 			componentsModule{store: store},
-			NewEntrypointModule("entrypoint.test", "test", entry),
+			NewGatewayChannelModule("entrypoint.test", "test", entry),
 		},
 	})
 	runtime, err := application.Start(context.Background())
@@ -64,31 +64,23 @@ func TestGatewaySnapshotUsesKnownRevisionForReconnectNotCAS(t *testing.T) {
 	if _, err := access.ResumeSession(context.Background(), interaction.ResumeSessionRequest{SessionID: "session-1"}); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
-	snapshot, err := access.Snapshot(context.Background(), interaction.SnapshotRequest{
-		SessionID: "session-1", KnownRevision: 1,
-	})
+	snapshot, err := access.View(context.Background(), interaction.SessionViewRequest{SessionID: "session-1"})
 	if err != nil || snapshot.Revision != 1 {
-		t.Fatalf("behind Snapshot = %#v, %v; want current revision 1", snapshot, err)
+		t.Fatalf("View = %#v, %v; want current revision 1", snapshot, err)
 	}
-	if len(snapshot.History) != 1 || snapshot.History[0].Message == nil || snapshot.History[0].Message.SessionID != "session-1" {
-		t.Fatalf("Snapshot history = %#v, want complete Session history projection", snapshot.History)
-	}
-	_, err = access.Snapshot(context.Background(), interaction.SnapshotRequest{
-		SessionID: "session-1", KnownRevision: 4,
-	})
-	if !agent.IsCode(err, agent.CodeRevisionConflict) {
-		t.Fatalf("ahead Snapshot error = %v, code=%q", err, agent.CodeOf(err))
+	if len(snapshot.RecentHistory) != 1 || snapshot.RecentHistory[0].Message == nil || snapshot.RecentHistory[0].Message.SessionID != "session-1" {
+		t.Fatalf("View history = %#v, want recent Session history projection", snapshot.RecentHistory)
 	}
 }
 
 func TestGatewayRejectsInvalidResumeBeforeCallingStore(t *testing.T) {
 	store := newSeededStore()
-	entry := &captureEntrypoint{}
+	entry := &captureChannel{}
 	application := NewApplication(ApplicationSpec{
 		Name: "validation-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
 			componentsModule{store: store},
-			NewEntrypointModule("entrypoint.test", "test", entry),
+			NewGatewayChannelModule("entrypoint.test", "test", entry),
 		},
 	})
 	runtime, err := application.Start(context.Background())
@@ -107,7 +99,7 @@ func TestGatewayRejectsInvalidResumeBeforeCallingStore(t *testing.T) {
 
 func TestStandardProfileRejectsMissingRequiredComponents(t *testing.T) {
 	application := NewApplication(ApplicationSpec{Name: "missing", Modules: []agentslot.Module{
-		NewEntrypointModule("entrypoint.test", "test", &captureEntrypoint{}),
+		NewGatewayChannelModule("entrypoint.test", "test", &captureChannel{}),
 	}})
 	_, err := application.Build()
 	if !errors.Is(err, agentslot.ErrRequirementUnsatisfied) {
@@ -121,7 +113,7 @@ func TestStandardApplicationRejectsNegativeContextLimitAtBuild(t *testing.T) {
 		RuntimeConfig: AgentRuntimeConfig{Context: ContextConfig{HardTokenLimit: -1}},
 		Modules: []agentslot.Module{
 			componentsModule{store: newSeededStore()},
-			NewEntrypointModule("entrypoint.test", "test", &captureEntrypoint{}),
+			NewGatewayChannelModule("entrypoint.test", "test", &captureChannel{}),
 		},
 	})
 	if _, err := application.Build(); err == nil {
@@ -134,7 +126,7 @@ func TestStandardApplicationRequiresValidDefaultModelConfigAtBuild(t *testing.T)
 		Name: "missing-default-model",
 		Modules: []agentslot.Module{
 			componentsModule{store: newSeededStore()},
-			NewEntrypointModule("entrypoint.test", "test", &captureEntrypoint{}),
+			NewGatewayChannelModule("entrypoint.test", "test", &captureChannel{}),
 		},
 	})
 	if _, err := application.Build(); err == nil {
@@ -142,10 +134,10 @@ func TestStandardApplicationRequiresValidDefaultModelConfigAtBuild(t *testing.T)
 	}
 }
 
-func TestStandardApplicationRejectsEntrypointThatBypassesGatewayWrapper(t *testing.T) {
+func TestStandardApplicationRejectsGatewayChannelThatBypassesFrameworkWrapper(t *testing.T) {
 	application := NewApplication(ApplicationSpec{Name: "raw-entrypoint", DefaultModelConfig: testDefaultModel(), Modules: []agentslot.Module{
 		componentsModule{store: newSeededStore()},
-		rawEntrypointModule{entrypoint: &captureEntrypoint{}},
+		rawChannelModule{channel: &captureChannel{}},
 	}})
 	_, err := application.Build()
 	if !errors.Is(err, agentslot.ErrRequirementUnsatisfied) {
@@ -153,25 +145,48 @@ func TestStandardApplicationRejectsEntrypointThatBypassesGatewayWrapper(t *testi
 	}
 }
 
-func TestStandardApplicationRejectsRawEntrypointAlongsideWrappedEntrypoint(t *testing.T) {
+func TestStandardApplicationRejectsRawChannelAlongsideWrappedChannel(t *testing.T) {
 	application := NewApplication(ApplicationSpec{Name: "mixed-entrypoints", DefaultModelConfig: testDefaultModel(), Modules: []agentslot.Module{
 		componentsModule{store: newSeededStore()},
-		NewEntrypointModule("entrypoint.wrapped", "wrapped", &captureEntrypoint{}),
-		rawEntrypointModule{entrypoint: &captureEntrypoint{}},
+		NewGatewayChannelModule("entrypoint.wrapped", "wrapped", &captureChannel{}),
+		rawChannelModule{channel: &captureChannel{}},
 	}})
 	if _, err := application.Build(); err == nil {
-		t.Fatal("Build succeeded with a raw Entrypoint contribution")
+		t.Fatal("Build succeeded with a raw GatewayChannel contribution")
+	}
+}
+
+func TestGatewayChannelBindingSurvivesARetryableBuildFailure(t *testing.T) {
+	channel := &singleBindChannel{}
+	retry := &failFirstBuildModule{}
+	application := NewApplication(ApplicationSpec{
+		Name: "retry-channel-build", DefaultModelConfig: testDefaultModel(),
+		Modules: []agentslot.Module{
+			componentsModule{store: newSeededStore()},
+			NewGatewayChannelModule("channel.retry", "retry", channel),
+			retry,
+		},
+		Requirements: []agentslot.Requirement{agentslot.RequireOne(retryBuildSlot)},
+	})
+	if _, err := application.Build(); err == nil {
+		t.Fatal("first Build succeeded; want transient constructor failure")
+	}
+	if _, err := application.Build(); err != nil {
+		t.Fatalf("retry Build: %v", err)
+	}
+	if channel.BindCalls() != 1 {
+		t.Fatalf("GatewayChannel Bind calls = %d, want 1 across Build retry", channel.BindCalls())
 	}
 }
 
 func TestConcurrentResumeCreatesOneRuntimePerSession(t *testing.T) {
 	store := newSeededStore()
-	entry := &captureEntrypoint{}
+	entry := &captureChannel{}
 	application := NewApplication(ApplicationSpec{
 		Name: "resume-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
 			componentsModule{store: store},
-			NewEntrypointModule("entrypoint.test", "test", entry),
+			NewGatewayChannelModule("entrypoint.test", "test", entry),
 		},
 	})
 	runtime, err := application.Start(context.Background())
@@ -206,7 +221,7 @@ func TestConcurrentResumeCreatesOneRuntimePerSession(t *testing.T) {
 		t.Fatalf("SessionStore.Recover calls = %d, want 1", got)
 	}
 
-	snapshot, err := access.Snapshot(context.Background(), interaction.SnapshotRequest{SessionID: "session-1"})
+	snapshot, err := access.View(context.Background(), interaction.SessionViewRequest{SessionID: "session-1"})
 	if err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}
@@ -216,12 +231,12 @@ func TestConcurrentResumeCreatesOneRuntimePerSession(t *testing.T) {
 }
 
 func TestSessionRuntimesShareOneAssembledComponentSet(t *testing.T) {
-	entry := &captureEntrypoint{}
+	entry := &captureChannel{}
 	application := NewApplication(ApplicationSpec{
 		Name: "component-sharing-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
 			componentsModule{store: newSeededStore()},
-			NewEntrypointModule("entrypoint.test", "test", entry),
+			NewGatewayChannelModule("entrypoint.test", "test", entry),
 		},
 	})
 	runtime, err := application.Start(context.Background())
@@ -265,12 +280,12 @@ func TestSessionRuntimesShareOneAssembledComponentSet(t *testing.T) {
 
 func TestCanceledResumeLeaderDoesNotCancelOtherCallers(t *testing.T) {
 	store := &cancelFirstRecoverStore{seededStore: newSeededStore(), firstEntered: make(chan struct{})}
-	entry := &captureEntrypoint{}
+	entry := &captureChannel{}
 	application := NewApplication(ApplicationSpec{
 		Name: "resume-cancellation-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
 			componentsModule{store: store},
-			NewEntrypointModule("entrypoint.test", "test", entry),
+			NewGatewayChannelModule("entrypoint.test", "test", entry),
 		},
 	})
 	runtime, err := application.Start(context.Background())
@@ -304,12 +319,12 @@ func TestCanceledResumeLeaderDoesNotCancelOtherCallers(t *testing.T) {
 }
 
 func TestCreateAllocatesDistinctSessionIDs(t *testing.T) {
-	entry := &captureEntrypoint{}
+	entry := &captureChannel{}
 	application := NewApplication(ApplicationSpec{
 		Name: "create-identity-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
 			componentsModule{store: newSeededStore()},
-			NewEntrypointModule("entrypoint.test", "test", entry),
+			NewGatewayChannelModule("entrypoint.test", "test", entry),
 		},
 	})
 	runtime, err := application.Start(context.Background())
@@ -330,12 +345,12 @@ func TestCreateAllocatesDistinctSessionIDs(t *testing.T) {
 
 func TestCloseRemovesRuntimeWithoutDeletingSession(t *testing.T) {
 	store := newSeededStore()
-	entry := &captureEntrypoint{}
+	entry := &captureChannel{}
 	application := NewApplication(ApplicationSpec{
 		Name: "close-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
 			componentsModule{store: store},
-			NewEntrypointModule("entrypoint.test", "test", entry),
+			NewGatewayChannelModule("entrypoint.test", "test", entry),
 		},
 	})
 	runtime, err := application.Start(context.Background())
@@ -343,10 +358,11 @@ func TestCloseRemovesRuntimeWithoutDeletingSession(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 	access := entry.Access()
-	if _, err := access.ResumeSession(context.Background(), interaction.ResumeSessionRequest{SessionID: "session-1"}); err != nil {
+	opened, err := access.ResumeSession(context.Background(), interaction.ResumeSessionRequest{SessionID: "session-1"})
+	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}
-	if err := access.CloseSession(context.Background(), interaction.CloseSessionRequest{SessionID: "session-1"}); err != nil {
+	if err := access.CloseSession(context.Background(), interaction.CloseSessionRequest{SessionID: "session-1", ExpectedRevision: opened.Revision}); err != nil {
 		t.Fatalf("close: %v", err)
 	}
 	if _, err := access.ResumeSession(context.Background(), interaction.ResumeSessionRequest{SessionID: "session-1"}); err != nil {
@@ -358,7 +374,7 @@ func TestCloseRemovesRuntimeWithoutDeletingSession(t *testing.T) {
 	if err := runtime.Stop(context.Background()); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
-	_, err = access.Snapshot(context.Background(), interaction.SnapshotRequest{SessionID: "session-1"})
+	_, err = access.View(context.Background(), interaction.SessionViewRequest{SessionID: "session-1"})
 	if !agent.IsCode(err, agent.CodeApplicationNotStarted) {
 		t.Fatalf("post-stop Snapshot error = %v, code=%q", err, agent.CodeOf(err))
 	}
@@ -370,12 +386,12 @@ func TestCloseWaitsForConcurrentResumeAndLeavesNoRuntimeBehind(t *testing.T) {
 		entered:     make(chan struct{}),
 		release:     make(chan struct{}),
 	}
-	entry := &captureEntrypoint{}
+	entry := &captureChannel{}
 	application := NewApplication(ApplicationSpec{
 		Name: "resume-close-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
 			componentsModule{store: store},
-			NewEntrypointModule("entrypoint.test", "test", entry),
+			NewGatewayChannelModule("entrypoint.test", "test", entry),
 		},
 	})
 	runtime, err := application.Start(context.Background())
@@ -392,7 +408,7 @@ func TestCloseWaitsForConcurrentResumeAndLeavesNoRuntimeBehind(t *testing.T) {
 	<-store.entered
 	closeDone := make(chan error, 1)
 	go func() {
-		closeDone <- entry.Access().CloseSession(context.Background(), interaction.CloseSessionRequest{SessionID: "session-1"})
+		closeDone <- entry.Access().CloseSession(context.Background(), interaction.CloseSessionRequest{SessionID: "session-1", ExpectedRevision: 1})
 	}()
 	close(store.release)
 	if err := <-resumeDone; err != nil {
@@ -401,49 +417,96 @@ func TestCloseWaitsForConcurrentResumeAndLeavesNoRuntimeBehind(t *testing.T) {
 	if err := <-closeDone; err != nil {
 		t.Fatalf("close concurrent with resume: %v", err)
 	}
-	_, err = entry.Access().Snapshot(context.Background(), interaction.SnapshotRequest{SessionID: "session-1"})
+	_, err = entry.Access().View(context.Background(), interaction.SessionViewRequest{SessionID: "session-1"})
 	if !agent.IsCode(err, agent.CodeSessionNotOpen) {
 		t.Fatalf("Snapshot after concurrent close error = %v, code=%q", err, agent.CodeOf(err))
 	}
 }
 
-type captureEntrypoint struct {
+type captureChannel struct {
 	mu     sync.Mutex
 	access interaction.GatewayAccess
 }
 
-func (e *captureEntrypoint) Attach(access interaction.GatewayAccess) error {
+type singleBindChannel struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (c *singleBindChannel) Bind(interaction.GatewayAccess) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls++
+	if c.calls > 1 {
+		return errors.New("channel was bound more than once")
+	}
+	return nil
+}
+
+func (c *singleBindChannel) BindCalls() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls
+}
+
+var retryBuildSlot = agentslot.One[string]("standardagent.test.retry-build")
+
+type failFirstBuildModule struct {
+	mu       sync.Mutex
+	attempts int
+}
+
+func (*failFirstBuildModule) ID() string { return "test.fail-first-build" }
+
+func (m *failFirstBuildModule) Register(reg agentslot.Registrar) error {
+	return reg.Contribute(agentslot.SetWith(retryBuildSlot, func(agentslot.Resolver) (string, error) {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		m.attempts++
+		if m.attempts == 1 {
+			return "", errors.New("transient constructor failure")
+		}
+		return "ready", nil
+	}))
+}
+
+func (e *captureChannel) Bind(access interaction.GatewayAccess) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.access = access
 	return nil
 }
 
-func (e *captureEntrypoint) Access() interaction.GatewayAccess {
+func (e *captureChannel) Access() interaction.GatewayAccess {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.access
 }
 
 type componentsModule struct {
-	store session.SessionStore
+	store    session.SessionStore
+	executor model.ModelExecutor
 }
 
-type rawEntrypointModule struct {
-	entrypoint interaction.Entrypoint
+type rawChannelModule struct {
+	channel interaction.GatewayChannel
 }
 
-func (rawEntrypointModule) ID() string { return "entrypoint.raw" }
+func (rawChannelModule) ID() string { return "entrypoint.raw" }
 
-func (m rawEntrypointModule) Register(reg agentslot.Registrar) error {
-	return reg.Contribute(agentslot.Add(interaction.EntrypointSlot, "raw", m.entrypoint))
+func (m rawChannelModule) Register(reg agentslot.Registrar) error {
+	return reg.Contribute(agentslot.Add(interaction.ChannelSlot, "raw", m.channel))
 }
 
 func (m componentsModule) ID() string { return "test.components" }
 func (m componentsModule) Register(reg agentslot.Registrar) error {
+	executor := m.executor
+	if executor == nil {
+		executor = fakeExecutor{}
+	}
 	return reg.Contribute(
 		agentslot.Set(session.StoreSlot, m.store),
-		agentslot.Set(model.ExecutorSlot, model.ModelExecutor(fakeExecutor{})),
+		agentslot.Set(model.ExecutorSlot, executor),
 	)
 }
 

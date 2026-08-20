@@ -27,17 +27,18 @@ func TestRuntimePublishesPassiveTraceMetricAuditAndUsageFacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitRuntimeIdle(t, access, opened.SessionID)
-	snapshot, err := access.Snapshot(context.Background(), interaction.SnapshotRequest{SessionID: opened.SessionID})
+	snapshot, err := access.View(context.Background(), interaction.SessionViewRequest{SessionID: opened.SessionID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := access.UpdateModelConfig(context.Background(), interaction.UpdateModelConfigRequest{
+	updated, err := access.UpdateModelConfig(context.Background(), interaction.UpdateModelConfigRequest{
 		SessionID: opened.SessionID, ExpectedRevision: snapshot.Revision,
 		Config: model.Config{ProviderKey: "provider", ModelID: "second", Reasoning: model.ReasoningDefault},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := access.CloseSession(context.Background(), interaction.CloseSessionRequest{SessionID: opened.SessionID}); err != nil {
+	if err := access.CloseSession(context.Background(), interaction.CloseSessionRequest{SessionID: opened.SessionID, ExpectedRevision: updated.Revision}); err != nil {
 		t.Fatal(err)
 	}
 	stop()
@@ -108,10 +109,10 @@ func startObservedApplication(t *testing.T, executor model.ModelExecutor, record
 	t.Helper()
 	defaultModel := model.Config{ProviderKey: "provider", ModelID: "first", Reasoning: model.ReasoningDefault}
 	memory := session.NewMemoryModule()
-	entry := &captureEntrypoint{}
+	entry := &captureChannel{}
 	modules := []agentslot.Module{memory, executorModule{executor: executor}, observationModule{records: records}}
 	modules = append(modules, extras...)
-	modules = append(modules, NewEntrypointModule("entrypoint.observation-test", "test", entry))
+	modules = append(modules, NewGatewayChannelModule("entrypoint.observation-test", "test", entry))
 	application := NewApplication(ApplicationSpec{Name: "observation-test", Modules: modules, DefaultModelConfig: defaultModel})
 	running, err := application.Start(context.Background())
 	if err != nil {

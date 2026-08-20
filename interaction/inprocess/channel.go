@@ -11,39 +11,39 @@ import (
 	"github.com/LyleLiu666/agentSlot/interaction"
 )
 
-// Entrypoint retains the GatewayAccess attached by standardagent Build.
+// Channel retains the GatewayAccess bound by standardagent Build.
 // Multiple callers may obtain and use the returned capability concurrently.
-type Entrypoint struct {
-	mu       sync.RWMutex
-	access   interaction.GatewayAccess
-	attached bool
+type Channel struct {
+	mu     sync.RWMutex
+	access interaction.GatewayAccess
+	bound  bool
 }
 
-func New() *Entrypoint { return &Entrypoint{} }
+func New() *Channel { return &Channel{} }
 
-func (e *Entrypoint) Attach(access interaction.GatewayAccess) error {
+func (e *Channel) Bind(access interaction.GatewayAccess) error {
 	if nilGateway(access) {
-		return agent.NewError(agent.ErrorInvalidInput, "interaction.inprocess.attach", "GatewayAccess is required", nil)
+		return agent.NewError(agent.ErrorInvalidInput, "interaction.inprocess.bind", "GatewayAccess is required", nil)
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.attached {
-		return agent.NewError(agent.ErrorConflict, "interaction.inprocess.attach", "Entrypoint is already attached", nil)
+	if e.bound {
+		return agent.NewError(agent.ErrorConflict, "interaction.inprocess.bind", "Channel is already bound", nil)
 	}
 	e.access = access
-	e.attached = true
+	e.bound = true
 	return nil
 }
 
 // Access returns the public Gateway capability. The capability itself remains
 // safe across application Start/Stop through the framework-owned binding.
-func (e *Entrypoint) Access() (interaction.GatewayAccess, error) {
+func (e *Channel) Access() (interaction.GatewayAccess, error) {
 	e.mu.RLock()
 	access := e.access
-	attached := e.attached
+	bound := e.bound
 	e.mu.RUnlock()
-	if !attached || nilGateway(access) {
-		return nil, agent.NewCodedError(agent.ErrorUnavailable, agent.CodeApplicationNotStarted, "interaction.inprocess.access", "Entrypoint is not attached", nil)
+	if !bound || nilGateway(access) {
+		return nil, agent.NewCodedError(agent.ErrorUnavailable, agent.CodeApplicationNotStarted, "interaction.inprocess.access", "Channel is not bound", nil)
 	}
 	return access, nil
 }
@@ -61,4 +61,4 @@ func nilGateway(value interaction.GatewayAccess) bool {
 	}
 }
 
-var _ interaction.Entrypoint = (*Entrypoint)(nil)
+var _ interaction.GatewayChannel = (*Channel)(nil)

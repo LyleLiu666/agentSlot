@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sync"
 
 	agentslot "github.com/LyleLiu666/agentSlot"
 	"github.com/LyleLiu666/agentSlot/interaction"
@@ -55,65 +56,65 @@ func NewApplication(spec ApplicationSpec) *agentslot.Application {
 	modules := make([]agentslot.Module, 0, len(spec.Modules)+2)
 	modules = append(modules, newRuntimeModule(spec.RuntimeConfig, spec.DefaultModelConfig))
 	modules = append(modules, spec.Modules...)
-	modules = append(modules, entrypointValidationModule{})
+	modules = append(modules, channelValidationModule{})
 	requirements := []agentslot.Requirement{
 		agentslot.RequireOne(session.StoreSlot),
 		agentslot.RequireOne(model.ExecutorSlot),
-		agentslot.RequireMany(interaction.EntrypointSlot, 1),
+		agentslot.RequireMany(interaction.ChannelSlot, 1),
 	}
 	requirements = append(requirements, spec.Requirements...)
 	return agentslot.NewApplication(spec.Name, modules, requirements...)
 }
 
-// entrypointValidationModule turns use of NewEntrypointModule into a build
+// channelValidationModule turns use of NewGatewayChannelModule into a build
 // invariant without adding a framework-private Slot to the public profile.
-type entrypointValidationModule struct{}
+type channelValidationModule struct{}
 
-func (entrypointValidationModule) ID() string { return "standardagent.internal.entrypoint-validation" }
+func (channelValidationModule) ID() string { return "standardagent.internal.channel-validation" }
 
-func (entrypointValidationModule) RequiredSlots() []agentslot.Requirement {
+func (channelValidationModule) RequiredSlots() []agentslot.Requirement {
 	return []agentslot.Requirement{
-		agentslot.RequireMany(interaction.EntrypointSlot, 1),
-		agentslot.RequireMany(mountedEntrypointSlot, 1),
+		agentslot.RequireMany(interaction.ChannelSlot, 1),
+		agentslot.RequireMany(mountedChannelSlot, 1),
 	}
 }
 
-func (entrypointValidationModule) Register(reg agentslot.Registrar) error {
-	return reg.Contribute(agentslot.SetWith(entrypointValidationSlot,
-		func(resolver agentslot.Resolver) (entrypointValidation, error) {
-			entrypoints, err := agentslot.ResolveMany(resolver, interaction.EntrypointSlot)
+func (channelValidationModule) Register(reg agentslot.Registrar) error {
+	return reg.Contribute(agentslot.SetWith(channelValidationSlot,
+		func(resolver agentslot.Resolver) (channelValidation, error) {
+			channels, err := agentslot.ResolveMany(resolver, interaction.ChannelSlot)
 			if err != nil {
-				return entrypointValidation{}, err
+				return channelValidation{}, err
 			}
-			mounted, err := agentslot.ResolveMany(resolver, mountedEntrypointSlot)
+			mounted, err := agentslot.ResolveMany(resolver, mountedChannelSlot)
 			if err != nil {
-				return entrypointValidation{}, err
+				return channelValidation{}, err
 			}
 			mountedKeys := make(map[string]struct{}, len(mounted))
 			for _, contribution := range mounted {
 				mountedKeys[contribution.Key] = struct{}{}
 			}
-			if len(entrypoints) != len(mountedKeys) {
-				return entrypointValidation{}, fmt.Errorf("standardagent: every Entrypoint must be installed with NewEntrypointModule")
+			if len(channels) != len(mountedKeys) {
+				return channelValidation{}, fmt.Errorf("standardagent: every GatewayChannel must be installed with NewGatewayChannelModule")
 			}
-			for _, entrypoint := range entrypoints {
-				if _, ok := mountedKeys[entrypoint.Key]; !ok {
-					return entrypointValidation{}, fmt.Errorf("standardagent: Entrypoint %q was not installed with NewEntrypointModule", entrypoint.Key)
+			for _, channel := range channels {
+				if _, ok := mountedKeys[channel.Key]; !ok {
+					return channelValidation{}, fmt.Errorf("standardagent: GatewayChannel %q was not installed with NewGatewayChannelModule", channel.Key)
 				}
 			}
-			return entrypointValidation{}, nil
+			return channelValidation{}, nil
 		}))
 }
 
-// NewEntrypointModule wraps one caller-facing adapter with the fixed
+// NewGatewayChannelModule wraps one caller-facing adapter with the fixed
 // GatewayAccess binding. The wrapper is important: its lifecycle starts after
 // the application Runtime has created the Gateway, and it never receives the
 // private RuntimeAccess or SessionStore.
-func NewEntrypointModule(id, key string, entrypoint interaction.Entrypoint) agentslot.Module {
-	return &entrypointModule{id: id, key: key, entrypoint: entrypoint}
+func NewGatewayChannelModule(id, key string, channel interaction.GatewayChannel) agentslot.Module {
+	return &gatewayChannelModule{id: id, key: key, channel: channel}
 }
 
-func isNilEntrypoint(value interaction.Entrypoint) bool {
+func isNilGatewayChannel(value interaction.GatewayChannel) bool {
 	if value == nil {
 		return true
 	}
@@ -126,49 +127,57 @@ func isNilEntrypoint(value interaction.Entrypoint) bool {
 	}
 }
 
-type entrypointModule struct {
-	id         string
-	key        string
-	entrypoint interaction.Entrypoint
+type gatewayChannelModule struct {
+	id      string
+	key     string
+	channel interaction.GatewayChannel
+	bindMu  sync.Mutex
+	bound   bool
 }
 
-func (m *entrypointModule) ID() string { return m.id }
+func (m *gatewayChannelModule) ID() string { return m.id }
 
-func (m *entrypointModule) RequiredSlots() []agentslot.Requirement {
+func (m *gatewayChannelModule) RequiredSlots() []agentslot.Requirement {
 	return []agentslot.Requirement{agentslot.RequireOne(gatewayAccessSlot)}
 }
 
-func (m *entrypointModule) Register(reg agentslot.Registrar) error {
-	if m.id == "" || m.key == "" || isNilEntrypoint(m.entrypoint) {
-		return fmt.Errorf("standardagent: invalid Entrypoint module %q/%q", m.id, m.key)
+func (m *gatewayChannelModule) Register(reg agentslot.Registrar) error {
+	if m.id == "" || m.key == "" || isNilGatewayChannel(m.channel) {
+		return fmt.Errorf("standardagent: invalid GatewayChannel module %q/%q", m.id, m.key)
 	}
 	return reg.Contribute(
-		agentslot.Add(mountedEntrypointSlot, m.key, mountedEntrypoint{}),
-		agentslot.AddWith(interaction.EntrypointSlot, m.key,
-			func(resolver agentslot.Resolver) (interaction.Entrypoint, error) {
+		agentslot.Add(mountedChannelSlot, m.key, mountedChannel{}),
+		agentslot.AddWith(interaction.ChannelSlot, m.key,
+			func(resolver agentslot.Resolver) (interaction.GatewayChannel, error) {
+				m.bindMu.Lock()
+				defer m.bindMu.Unlock()
+				if m.bound {
+					return m.channel, nil
+				}
 				access, err := agentslot.ResolveOne(resolver, gatewayAccessSlot)
 				if err != nil {
 					return nil, err
 				}
-				if err := m.entrypoint.Attach(access); err != nil {
-					return nil, fmt.Errorf("attach Entrypoint %q: %w", m.key, err)
+				if err := m.channel.Bind(access); err != nil {
+					return nil, fmt.Errorf("bind GatewayChannel %q: %w", m.key, err)
 				}
-				return m.entrypoint, nil
+				m.bound = true
+				return m.channel, nil
 			}),
 	)
 }
 
 // The wrapper owns the adapter's optional lifecycle while preserving the
 // fixed start order established by its private GatewayAccess dependency.
-func (m *entrypointModule) Start(ctx context.Context) error {
-	if lifecycle, ok := m.entrypoint.(agentslot.Lifecycle); ok {
+func (m *gatewayChannelModule) Start(ctx context.Context) error {
+	if lifecycle, ok := m.channel.(agentslot.Lifecycle); ok {
 		return lifecycle.Start(ctx)
 	}
 	return nil
 }
 
-func (m *entrypointModule) Stop(ctx context.Context) error {
-	if lifecycle, ok := m.entrypoint.(agentslot.Lifecycle); ok {
+func (m *gatewayChannelModule) Stop(ctx context.Context) error {
+	if lifecycle, ok := m.channel.(agentslot.Lifecycle); ok {
 		return lifecycle.Stop(ctx)
 	}
 	return nil

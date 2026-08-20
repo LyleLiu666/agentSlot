@@ -11,6 +11,9 @@
 - 本文记录二者差距以及关闭差距的顺序；
 - 不把上线部署、生产认证或 wire protocol 选择设为开发启动门禁。
 
+当前迁移状态：第 0～4 轮已经完成；第 5～6 轮尚待执行。这里的完成表示合同、实现、
+测试和当轮组件地图已经同步，不表示后续轮次可以省略。
+
 ## 2. 最终结构
 
 ```mermaid
@@ -209,7 +212,7 @@ Compactor 可替换，但 Runtime 固定验证工具协议完整性和模型硬 
 
 ## 8. 固定 Runtime 命令与状态
 
-Runtime 状态为 idle/running/closed。同一 Session 最多一个活跃 Run。所有外部写命令通过 Gateway 到达，并统一携带 ActorIdentity、IdempotencyKey 和 ExpectedRevision。
+Runtime 状态为 idle/running/closed。同一 Session 最多一个活跃 Run。所有外部写命令通过 Gateway 到达，并统一携带 ActorIdentity 和 ExpectedRevision。提交幂等键由固定 Runtime 在内部生成，Channel 不能伪造 SessionStore 事务身份。
 
 | 命令 | 固定行为 |
 | --- | --- |
@@ -345,10 +348,10 @@ sequenceDiagram
 
 ### 第 4 轮：GatewayChannel、严格 CAS 与分页 View
 
-- 先写两个 Channel 并发、冲突、断线恢复和分页稳定性测试；
-- 将旧 Entrypoint 迁移为 GatewayChannel，更新 CLI 和进程内 Channel；
-- 所有外部写命令 strict CAS；实现冲突错误、revision 通知、View 和历史分页；
-- 删除重复 Gateway 子 Slot，同步中英文组件地图。
+- [x] 先写两个 Channel 并发、冲突、断线恢复和分页稳定性测试；
+- [x] 将旧 Entrypoint 迁移为 GatewayChannel，更新 CLI 和进程内 Channel；
+- [x] 所有外部写命令 strict CAS；实现冲突错误、revision 通知、View 和历史分页；
+- [x] 删除重复 Gateway 子 Slot，同步中英文组件地图。
 
 ### 第 5 轮：Hook、Observer 与 Tool 白名单
 

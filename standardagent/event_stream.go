@@ -137,11 +137,27 @@ func (s *runtimeEventStream) enqueue(event interaction.Event) bool {
 		return false
 	}
 	if len(s.queue) >= eventStreamBufferLimit {
-		s.closed = true
-		s.err = interaction.ErrEventStreamOverflow
-		s.queue = nil
-		close(s.changed)
-		return false
+		if event.Kind == interaction.EventChunk || event.Kind == interaction.EventReset {
+			return true
+		}
+		dropped := false
+		for index, queued := range s.queue {
+			if queued.Kind != interaction.EventChunk && queued.Kind != interaction.EventReset {
+				continue
+			}
+			copy(s.queue[index:], s.queue[index+1:])
+			s.queue[len(s.queue)-1] = interaction.Event{}
+			s.queue = s.queue[:len(s.queue)-1]
+			dropped = true
+			break
+		}
+		if !dropped {
+			s.closed = true
+			s.err = interaction.ErrEventStreamOverflow
+			s.queue = nil
+			close(s.changed)
+			return false
+		}
 	}
 	s.queue = append(s.queue, event)
 	close(s.changed)
@@ -162,11 +178,5 @@ func (s *runtimeEventStream) closeFromHub() {
 }
 
 func cloneInteractionEvent(source interaction.Event) interaction.Event {
-	copy := source
-	if source.Message != nil {
-		message := *source.Message
-		message.Parts = cloneRuntimeParts(message.Parts)
-		copy.Message = &message
-	}
-	return copy
+	return source
 }

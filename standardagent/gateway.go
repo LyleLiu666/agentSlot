@@ -93,7 +93,7 @@ func (g *gateway) SendAndWait(ctx context.Context, request interaction.SendReque
 		if err := runtime.idle(ctx, interaction.WhenIdleRequest{SessionID: request.SessionID}); err != nil {
 			return interaction.RunResult{}, err
 		}
-		snapshot, err := runtime.snapshot(ctx, interaction.SnapshotRequest{SessionID: request.SessionID})
+		snapshot, err := historyThroughInput(ctx, runtime, request.SessionID, receipt.MessageID)
 		if err != nil {
 			return interaction.RunResult{}, err
 		}
@@ -101,9 +101,36 @@ func (g *gateway) SendAndWait(ctx context.Context, request interaction.SendReque
 	})
 }
 
-func aggregateRunResult(snapshot interaction.SessionSnapshot, inputID agent.MessageID) (interaction.RunResult, error) {
+func historyThroughInput(ctx context.Context, runtime runtimeAccess, sessionID agent.SessionID, inputID agent.MessageID) (interaction.SessionView, error) {
+	var before session.HistorySequence
+	var facts []session.HistoryFact
+	var revision agent.Revision
+	for {
+		page, err := runtime.history(ctx, interaction.HistoryRequest{SessionID: sessionID, BeforeHistorySequence: before, StepLimit: 100})
+		if err != nil {
+			return interaction.SessionView{}, err
+		}
+		if revision == 0 {
+			revision = page.Revision
+		}
+		facts = append(page.Facts, facts...)
+		found := false
+		for _, fact := range page.Facts {
+			if fact.Message != nil && fact.Message.ID == inputID {
+				found = true
+				break
+			}
+		}
+		if found || !page.HasMore || len(page.Facts) == 0 {
+			return interaction.SessionView{SessionID: sessionID, Revision: revision, RecentHistory: facts}, nil
+		}
+		before = page.Facts[0].Sequence
+	}
+}
+
+func aggregateRunResult(snapshot interaction.SessionView, inputID agent.MessageID) (interaction.RunResult, error) {
 	result := interaction.RunResult{SessionID: snapshot.SessionID, InputMessageID: inputID, Revision: snapshot.Revision}
-	for _, fact := range snapshot.History {
+	for _, fact := range snapshot.RecentHistory {
 		if fact.Message != nil && fact.Message.ID == inputID {
 			result.RunID = fact.Message.RunID
 			break
@@ -112,7 +139,7 @@ func aggregateRunResult(snapshot interaction.SessionSnapshot, inputID agent.Mess
 	if !result.RunID.Valid() {
 		return interaction.RunResult{}, agent.NewCodedError(agent.ErrorConflict, agent.CodeNoPendingWork, "gateway.send_and_wait", "input was accepted but did not start a Run", nil)
 	}
-	for _, fact := range snapshot.History {
+	for _, fact := range snapshot.RecentHistory {
 		if fact.Message != nil && fact.Message.RunID == result.RunID && fact.Message.Role == agent.RoleAssistant && assistantHasText(*fact.Message) {
 			message := *fact.Message
 			message.Parts = cloneRuntimeParts(message.Parts)
@@ -193,9 +220,15 @@ func (g *gateway) UpdateModelConfig(ctx context.Context, request interaction.Upd
 	})
 }
 
-func (g *gateway) Snapshot(ctx context.Context, request interaction.SnapshotRequest) (interaction.SessionSnapshot, error) {
-	return withRuntime(ctx, g, request.SessionID, func(runtime runtimeAccess) (interaction.SessionSnapshot, error) {
-		return runtime.snapshot(ctx, request)
+func (g *gateway) View(ctx context.Context, request interaction.SessionViewRequest) (interaction.SessionView, error) {
+	return withRuntime(ctx, g, request.SessionID, func(runtime runtimeAccess) (interaction.SessionView, error) {
+		return runtime.view(ctx, request)
+	})
+}
+
+func (g *gateway) History(ctx context.Context, request interaction.HistoryRequest) (interaction.HistoryPage, error) {
+	return withRuntime(ctx, g, request.SessionID, func(runtime runtimeAccess) (interaction.HistoryPage, error) {
+		return runtime.history(ctx, request)
 	})
 }
 
@@ -232,7 +265,7 @@ func (g *gateway) InvokeCommand(ctx context.Context, invocation interaction.Comm
 	if !ok {
 		return interaction.CommandResult{}, agent.NewCodedError(agent.ErrorNotFound, agent.CodeCommandNotFound, "gateway.invoke_command", "interaction command is not installed", nil)
 	}
-	actions := &commandActions{coordinator: coordinator, scope: invocation.Scope, open: true}
+	actions := &commandActions{coordinator: coordinator, scope: invocation.Scope, actor: invocation.Actor, open: true}
 	defer actions.close()
 	return command.Invoke(ctx, invocation, actions)
 }
@@ -248,7 +281,7 @@ func cloneCommandDescriptor(descriptor interaction.CommandDescriptor) interactio
 
 func (g *gateway) CloseSession(ctx context.Context, request interaction.CloseSessionRequest) error {
 	_, err := withCoordinator(ctx, g, func(coordinator *runtimeCoordinator) (struct{}, error) {
-		return struct{}{}, coordinator.close(ctx, request.SessionID)
+		return struct{}{}, coordinator.close(ctx, request)
 	})
 	return err
 }
@@ -257,6 +290,7 @@ type commandActions struct {
 	mu          sync.RWMutex
 	coordinator *runtimeCoordinator
 	scope       interaction.CommandScope
+	actor       agent.ActorIdentity
 	open        bool
 }
 
@@ -265,6 +299,7 @@ func (a *commandActions) close() {
 	a.open = false
 	a.coordinator = nil
 	a.scope = interaction.CommandScope{}
+	a.actor = agent.ActorIdentity{}
 	a.mu.Unlock()
 }
 
@@ -284,26 +319,27 @@ func (a *commandActions) Apply(ctx context.Context, request interaction.ActionRe
 	switch request.Kind {
 	case interaction.ActionSend:
 		receipt, err := runtime.send(ctx, interaction.SendRequest{
-			SessionID: a.scope.SessionID, ExpectedRevision: request.ExpectedRevision, Input: request.Input,
+			SessionID: a.scope.SessionID, ExpectedRevision: request.ExpectedRevision, Actor: a.actor, Input: request.Input,
 		})
 		return interaction.ActionResult{Revision: receipt.Revision, MessageID: receipt.MessageID}, err
 	case interaction.ActionSteer:
 		receipt, err := runtime.steer(ctx, interaction.SteerRequest{
-			SessionID: a.scope.SessionID, ExpectedRevision: request.ExpectedRevision, Input: request.Input,
+			SessionID: a.scope.SessionID, ExpectedRevision: request.ExpectedRevision, Actor: a.actor, Input: request.Input,
 		})
 		return interaction.ActionResult{Revision: receipt.Revision, MessageID: receipt.MessageID}, err
 	case interaction.ActionRunPending:
 		receipt, err := runtime.pending(ctx, interaction.RunPendingRequest{
-			SessionID: a.scope.SessionID, ExpectedRevision: request.ExpectedRevision,
+			SessionID: a.scope.SessionID, ExpectedRevision: request.ExpectedRevision, Actor: a.actor,
 		})
 		return interaction.ActionResult{Revision: receipt.Revision, RunID: receipt.RunID}, err
 	case interaction.ActionCancel:
-		err := runtime.cancel(ctx, interaction.CancelRequest{SessionID: a.scope.SessionID})
+		err := runtime.cancel(ctx, interaction.CancelRequest{SessionID: a.scope.SessionID, ExpectedRevision: request.ExpectedRevision, Actor: a.actor})
 		return interaction.ActionResult{}, err
 	case interaction.ActionUpdateModelConfig:
 		receipt, err := runtime.updateModelConfig(ctx, interaction.UpdateModelConfigRequest{
 			SessionID:               a.scope.SessionID,
 			ExpectedRevision:        request.ExpectedRevision,
+			Actor:                   a.actor,
 			Config:                  request.Config,
 			AcceptCompatibilityLoss: request.AcceptCompatibilityLoss,
 		})

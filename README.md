@@ -224,23 +224,23 @@ history, memory, execution, policy, multi-agent workflow, gateway, billing, and
 operations ecosystems.
 
 A runnable standard LLM agent requires exactly one SessionStore, exactly one
-ModelExecutor, and at least one Entrypoint. The fixed SessionManager,
+ModelExecutor, and at least one GatewayChannel. The fixed SessionManager,
 AgentRuntime, and in-process Gateway are supplied by the framework rather than
 selected through Slots.
-Standard applications install each Entrypoint with
-`standardagent.NewEntrypointModule`; Build rejects a raw Entrypoint contribution
-that would bypass GatewayAccess attachment or lifecycle ordering.
+Standard applications install each Channel with
+`standardagent.NewGatewayChannelModule`; Build rejects a raw GatewayChannel
+contribution that would bypass GatewayAccess binding or lifecycle ordering.
 Tools, ModelProviders, Context components, and AgentHooks are optional globally;
 an installed ModelExecutor may explicitly require one or more ModelProviders.
 `interaction.command` is an optional `Many` Slot for structured commands that
-register only with the Gateway. Entrypoints render the Gateway's UI-neutral
+register only with the Gateway. Channels render the Gateway's UI-neutral
 command directory as slash commands, menus, buttons, forms, or command palettes.
 `Application.Start` creates a started application Runtime that owns one
 process-local Session-to-AgentRuntime registry. Every created or resumed
 AgentRuntime registered by that application lives in the same process; durable
 Sessions that have not been opened do not occupy a Runtime. A framework-internal
 Runtime coordinator operates the registry; only the Gateway receives private
-Runtime access. Every Entrypoint receives the same carrier-neutral Gateway
+Runtime access. Every GatewayChannel receives the same carrier-neutral Gateway
 access and cannot obtain AgentRuntime pointers. The Gateway, registry,
 coordinator, and private assembly anchors are framework mechanics, not public
 Slots. This single-process
@@ -284,15 +284,21 @@ packages. They are Contracted, but no domain ecosystem is yet Conformant or
 Proven.
 
 The `standardagent` package implements the application-scoped Runtime registry,
-coordinator, fixed Gateway, GatewayAccess binding, Entrypoint wrapper, automatic
+coordinator, fixed Gateway, GatewayAccess binding, GatewayChannel wrapper, automatic
 standard profile, and the fixed Session AgentRuntime state machine. Send,
 SendAndWait, Steer, RunPending, Cancel, WhenIdle, Close, Queue mutation, and
 model-config commands now execute through the Gateway. `Subscribe` publishes
-live delta/reset events with Run, Step, and physical Attempt identity plus
-durable commit/state notifications; temporary output and client cursors are not
-persisted. A subscriber first obtains the current Snapshot revision, and a slow
-subscriber is closed explicitly so it can reconnect instead of growing an
-unbounded in-memory queue. Disconnecting a subscriber never cancels its Run.
+live chunk/reset events with Run, Step, and physical Attempt identity; temporary
+output and client cursors are not persisted. Every successful persistence emits
+only a `SessionID + Revision` notification, after which the client reads the
+authoritative SessionView. SessionView contains Queue, model configuration,
+state, and at most the latest 100 complete logical Steps; older History uses an
+exclusive sequence cursor. Temporary events may be dropped under pressure. A
+subscriber that cannot receive a durable revision notification is closed so it
+can reconnect through View instead of growing an unbounded queue. Disconnecting
+a subscriber never cancels its Run. Every external write carries
+ExpectedRevision; stale writes return a typed conflict and are never retried
+implicitly.
 `SendAndWait` wraps the same Run and returns only that Run's durable assistant
 text messages rather than executing a second model path. Run start/terminal
 facts retain the frozen model configuration. The
@@ -321,7 +327,7 @@ through ModelExecutor capabilities. `model.catalog` has a typed contract and
 an explicit StaticCatalog reference implementation. Applications can
 explicitly install `interaction.NewModelCommandModule`; slash, menu, and
 structured clients then invoke that one Gateway command backend. The
-`interaction/inprocess` package provides a function-style Entrypoint, and
+`interaction/inprocess` package provides a function-style GatewayChannel, and
 [`interaction/cli`](interaction/cli) provides a lifecycle-owned line protocol;
 both expose only GatewayAccess. `policy.guard` and `approval.service` now gate
 tool execution without gaining loop control. Trace, Metric, Audit, and Usage

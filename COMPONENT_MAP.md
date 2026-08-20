@@ -24,7 +24,7 @@ Current repository reality:
 
 | Inventory | Count |
 | --- | ---: |
-| Mapped standard component ecosystems | 41 |
+| Mapped standard component ecosystems | 37 |
 | Standardized domain vocabularies | 4 |
 | Contracted AgentSlot-owned domain interfaces | 15 |
 | Conformant component ecosystems | 0 |
@@ -55,7 +55,7 @@ Its description uses `AssemblyDescription` and the `agentslot.assembly/v0` schem
 | --- | --- | --- | --- | --- |
 | `session.store` | `SessionStore` | `One` | exactly 1 | Persists the Session aggregate—History, Context, Queue, RunJournal, SessionModelConfig, revisions, and atomic CAS transactions. |
 | `model.executor` | `ModelExecutor` | `One` | exactly 1 | Executes one logical model call while containing provider-specific physical attempts, streaming recovery, and final failure semantics. |
-| `interaction.entrypoint` | `Entrypoint` | `Many` | at least 1 | Adapts TUI, Web, desktop, function, HTTP, ACP, or another caller-facing surface to the fixed Gateway. |
+| `gateway.channel` | `GatewayChannel` | `Many` | at least 1 | Binds a TUI, Web, desktop, function, HTTP, ACP, or another caller-facing channel to the fixed Gateway. |
 
 `AgentRuntime`, the in-process Gateway, and their control path are framework
 behavior, not Slots or replaceable component ecosystems. Creating or explicitly resuming a Session
@@ -64,7 +64,7 @@ not. One started application Runtime and all AgentRuntimes registered beneath it
 live in one process. The same Session has one Runtime in that registry, that
 Runtime stays resident while idle, and it is released only by explicit Close or
 application shutdown.
-Entrypoints invoke only the fixed Gateway's carrier-neutral API; they never
+Gateway channels invoke only the fixed Gateway's carrier-neutral API; they never
 receive Runtime access or AgentRuntime pointers. `Application.Start` creates a
 started application Runtime that owns one process-local Session-to-Runtime
 registry and one Gateway. A
@@ -104,7 +104,7 @@ flowchart LR
     AR --> RC["framework Runtime coordinator"]
     AR --> G["fixed Gateway"]
     RC --> REG
-    E["Entrypoint (1..n)"] --> G
+    E["GatewayChannel (1..n)"] --> G
     IC["InteractionCommand (0..n)"] --> G
     G --> RC
     RC --> SM["fixed SessionManager"]
@@ -137,7 +137,7 @@ Fifteen foundational domain rows are now **Contracted**: each has a public
 domain interface, typed Slot, and contract tests. The repository now contains
 independent memory and crash-safe file Session stores, deterministic Fake and
 OpenAI Chat Compatible executors, Bash/file/HTTP tools, in-process and CLI
-Entrypoints, deterministic tool policy/approval components, and a JSON Lines
+Gateway channels, deterministic tool policy/approval components, and a JSON Lines
 observation module. The fixed Runtime consumes these components without
 concrete-type branches. No ecosystem yet has the reusable conformance suite
 required by the next maturity level, so all remain Contracted rather than
@@ -153,8 +153,8 @@ Slots, and several modules may contribute to one `Many` or `Chain` Slot.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `interaction.entrypoint` | `Entrypoint` | `Many` | globally requires at least 1 | Adapts a caller-facing protocol, function API, or UI to the fixed Gateway without receiving Runtime access. | Contracted |
-| `interaction.command` | `InteractionCommand` | `Many` | optional | Registers a keyed UI-neutral command with the fixed Gateway; Entrypoints render the shared descriptor as slash commands, menus, buttons, forms, or command palettes. | Contracted |
+| `gateway.channel` | `GatewayChannel` | `Many` | globally requires at least 1 | Binds one caller-facing protocol, function API, or UI to the fixed Gateway and receives only `GatewayAccess`. | Contracted |
+| `interaction.command` | `InteractionCommand` | `Many` | optional | Registers a keyed UI-neutral command with the fixed Gateway; Channels render the shared descriptor as slash commands, menus, buttons, forms, or command palettes. | Contracted |
 | `agent.hook` | `AgentHook` | `Chain` | optional | Runs ordered, controlled hooks: proposes follow-on input before run completion or observes committed facts, without mutating Session or Runtime state directly. | Contracted |
 | `runtime.observer` | `RuntimeObserver` | `Chain` | optional | Passively observes typed agent, run, message, tool, retry, and lifecycle events without controlling the Runtime. | Mapped |
 
@@ -290,40 +290,43 @@ map.
 
 ### 8. Gateway and delivery
 
-| Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
-| --- | --- | --- | --- | --- | --- |
-| `gateway.transport` | `GatewayTransport` | `Many` | optional | Connects named external channels such as HTTP, WebSocket, ACP, chat platforms, or message queues. | Mapped |
-| `gateway.identity` | `IdentityResolver` | `One` | optional | Maps transport identities to stable application principals. | Mapped |
-| `gateway.route` | `RouteResolver` | `One` | optional | Selects the target agent/session from authenticated inbound requests. | Mapped |
-| `gateway.delivery` | `DeliveryAdapter` | `Many` | optional | Delivers asynchronous output back through a named external channel. | Mapped |
-
 The fixed Gateway is an in-process, carrier-neutral interaction backend, not a
 network forwarding service and not a Slot. Every direct TUI, Web UI, desktop
-application, function API, HTTP server, or ACP server is an `Entrypoint` or uses
-one, and every Entrypoint calls the same Gateway API. In-process adapters call it
-directly; out-of-process adapters map their wire protocol onto it. The optional
-gateway Slots above customize transport, identity, routing policy, and delivery
-without replacing the Gateway core.
+application, function API, HTTP server, or ACP server installs a
+`GatewayChannel`, and every Channel calls the same Gateway API. In-process
+Channels call it directly; out-of-process Channels map their wire protocol onto
+it. A Channel owns its communication protocol, remote authentication and
+authorization, routing, output encoding, and rate limiting. These are not
+separate standard Slots because splitting them would create alternate paths
+around the fixed Gateway. The Channel passes a durable `ActorIdentity` with
+every write; Gateway records it but never uses it to re-authenticate or stores
+credentials.
 
 Only the Gateway consumes `interaction.command` contributions. It exposes one
-UI-neutral command directory and structured invocation contract. An Entrypoint
+UI-neutral command directory and structured invocation contract. A Channel
 may render the stable key `model` as `/model`, a menu, a button, or a form, but
 does not execute a separate command implementation. InteractionCommand cannot
 access SessionStore, Runtime access, or the model/tool loop directly.
 The framework currently provides an explicitly installed built-in `model`
-command, a function-style `interaction/inprocess` Entrypoint, and a line-oriented
-`interaction/cli` Entrypoint as reference implementations. Importing any package
+command, a function-style `interaction/inprocess` Channel, and a line-oriented
+`interaction/cli` Channel as reference implementations. Importing any package
 installs nothing; the absence of a shared conformance suite keeps these
 ecosystems at Contracted maturity.
 
 AgentSlot standardizes neither transient-chunk cursors nor client ACK cursors.
-Reconnect uses a client revision and Session Snapshot, followed by a live
-subscription from that exact current revision. A disconnect never cancels the
-Run; a subscriber that exceeds the bounded in-process event buffer is closed
-explicitly and reconnects through Snapshot instead of consuming unbounded
-memory. A concrete transport
-adapter or external messaging system may keep private reliable-delivery state, but that
-state is not a standard Slot or Session fact and cannot change run completion.
+Every external write carries `ExpectedRevision`. A stale write returns a typed
+revision conflict with the current revision and is never retried implicitly.
+Reconnect reads the authoritative `SessionView`: it contains current state,
+Queue, model configuration, and at most the latest 100 complete logical Steps.
+Older History is read backwards with an exclusive `BeforeHistorySequence`
+cursor and a maximum of 100 complete Steps per page. After persistence Gateway
+emits only `SessionID + Revision`; clients then refresh the View. Transient
+chunk/reset events may be dropped, and disconnect never cancels the Run. A
+subscriber whose buffer cannot accept a durable revision notification is
+closed explicitly and reconnects through View rather than consuming unbounded
+memory. A concrete Channel or external messaging system may keep private
+reliable-delivery state, but that state is not a standard Slot or Session fact
+and cannot change Run completion.
 
 ### 9. Usage and billing
 

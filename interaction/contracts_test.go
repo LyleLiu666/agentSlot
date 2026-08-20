@@ -9,12 +9,13 @@ import (
 	"testing"
 
 	agentslot "github.com/LyleLiu666/agentSlot"
+	agent "github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/interaction"
 )
 
-type entrypoint struct{}
+type channel struct{}
 
-func (entrypoint) Attach(interaction.GatewayAccess) error { return nil }
+func (channel) Bind(interaction.GatewayAccess) error { return nil }
 
 type command struct{}
 
@@ -22,35 +23,35 @@ func (command) Describe() interaction.CommandDescriptor {
 	return interaction.CommandDescriptor{Key: "example"}
 }
 
-func TestEntrypointRejectsDuplicateAdapterKey(t *testing.T) {
+func TestGatewayChannelRejectsDuplicateAdapterKey(t *testing.T) {
 	builder := agentslot.NewBuilder()
 	if err := builder.Install(module{}); err != nil {
 		t.Fatalf("install first: %v", err)
 	}
-	err := builder.Install(duplicateEntrypointModule{})
+	err := builder.Install(duplicateChannelModule{})
 	if !errors.Is(err, agentslot.ErrDuplicateKey) {
-		t.Fatalf("duplicate entrypoint error = %v, want ErrDuplicateKey", err)
+		t.Fatalf("duplicate channel error = %v, want ErrDuplicateKey", err)
 	}
 }
 
-type duplicateEntrypointModule struct{}
+type duplicateChannelModule struct{}
 
-func (duplicateEntrypointModule) ID() string { return "interaction.duplicate" }
-func (duplicateEntrypointModule) Register(reg agentslot.Registrar) error {
-	return reg.Contribute(agentslot.Add(interaction.EntrypointSlot, "test", interaction.Entrypoint(entrypoint{})))
+func (duplicateChannelModule) ID() string { return "interaction.duplicate" }
+func (duplicateChannelModule) Register(reg agentslot.Registrar) error {
+	return reg.Contribute(agentslot.Add(interaction.ChannelSlot, "test", interaction.GatewayChannel(channel{})))
 }
 func (command) Invoke(context.Context, interaction.CommandInvocation, interaction.CommandActions) (interaction.CommandResult, error) {
 	return interaction.CommandResult{}, nil
 }
 
-var _ interaction.Entrypoint = entrypoint{}
+var _ interaction.GatewayChannel = channel{}
 var _ interaction.InteractionCommand = command{}
 
 type module struct{}
 
 func (module) ID() string { return "interaction.contracts" }
 func (module) Register(reg agentslot.Registrar) error {
-	return reg.Contribute(agentslot.Add(interaction.EntrypointSlot, "test", interaction.Entrypoint(entrypoint{})))
+	return reg.Contribute(agentslot.Add(interaction.ChannelSlot, "test", interaction.GatewayChannel(channel{})))
 }
 
 type commandModule struct{}
@@ -60,17 +61,53 @@ func (commandModule) Register(reg agentslot.Registrar) error {
 	return reg.Contribute(agentslot.Add(interaction.CommandSlot, "example", interaction.InteractionCommand(command{})))
 }
 
-func TestEntrypointIsKeyedManySlot(t *testing.T) {
+func TestGatewayChannelIsKeyedManySlot(t *testing.T) {
 	builder := agentslot.NewBuilder()
 	if err := builder.Install(module{}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	assembly, err := builder.Build(agentslot.RequireMany(interaction.EntrypointSlot, 1))
+	assembly, err := builder.Build(agentslot.RequireMany(interaction.ChannelSlot, 1))
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	if _, ok := agentslot.Lookup(assembly, interaction.EntrypointSlot, "test"); !ok {
-		t.Fatal("interaction.entrypoint contribution missing")
+	if _, ok := agentslot.Lookup(assembly, interaction.ChannelSlot, "test"); !ok {
+		t.Fatal("gateway.channel contribution missing")
+	}
+}
+
+func TestRevisionConflictCarriesRefreshMetadataAndStableClassification(t *testing.T) {
+	cause := agent.NewCodedError(agent.ErrorConflict, agent.CodeRevisionConflict, "session.commit", "stale", nil)
+	err := &interaction.RevisionConflictError{CurrentRevision: 9, SnapshotRequired: true, Cause: cause}
+	if !agent.IsCode(err, agent.CodeRevisionConflict) || err.CurrentRevision != 9 || !err.SnapshotRequired {
+		t.Fatalf("revision conflict = %#v, code=%q", err, agent.CodeOf(err))
+	}
+}
+
+func TestEveryGatewayWriteCarriesRevisionAndActor(t *testing.T) {
+	requests := []any{
+		interaction.SendRequest{},
+		interaction.SteerRequest{},
+		interaction.RunPendingRequest{},
+		interaction.CancelRequest{},
+		interaction.EditQueuedRequest{},
+		interaction.DeleteQueuedRequest{},
+		interaction.ReclassifyQueuedRequest{},
+		interaction.UpdateModelConfigRequest{},
+		interaction.CloseSessionRequest{},
+		interaction.CommandInvocation{},
+	}
+	wantRevision := reflect.TypeOf(agent.Revision(0))
+	wantActor := reflect.TypeOf(agent.ActorIdentity{})
+	for _, request := range requests {
+		typeOf := reflect.TypeOf(request)
+		revision, ok := typeOf.FieldByName("ExpectedRevision")
+		if !ok || revision.Type != wantRevision {
+			t.Errorf("%s must carry ExpectedRevision of type agent.Revision", typeOf.Name())
+		}
+		actor, ok := typeOf.FieldByName("Actor")
+		if !ok || actor.Type != wantActor {
+			t.Errorf("%s must carry Actor of type agent.ActorIdentity", typeOf.Name())
+		}
 	}
 }
 

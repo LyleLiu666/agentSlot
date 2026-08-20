@@ -27,7 +27,7 @@ func TestCLIUsesGatewayForTextAndExplicitStructuredCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	gateway := &gatewayProbe{revision: 1}
-	if err := entry.Attach(gateway); err != nil {
+	if err := entry.Bind(gateway); err != nil {
 		t.Fatal(err)
 	}
 	if err := entry.Start(context.Background()); err != nil {
@@ -62,7 +62,7 @@ func TestCLIResumesConfiguredSessionAndRendersGenericHelp(t *testing.T) {
 		t.Fatal(err)
 	}
 	gateway := &gatewayProbe{revision: 7}
-	if err := entry.Attach(gateway); err != nil {
+	if err := entry.Bind(gateway); err != nil {
 		t.Fatal(err)
 	}
 	if err := entry.Start(context.Background()); err != nil {
@@ -85,7 +85,7 @@ func TestCLIStopUnblocksAWaitingInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := entry.Attach(&gatewayProbe{revision: 1}); err != nil {
+	if err := entry.Bind(&gatewayProbe{revision: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if err := entry.Start(context.Background()); err != nil {
@@ -109,7 +109,7 @@ func TestCLIConcurrentStartOpensOnlyOneSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	gateway := &gatewayProbe{revision: 1}
-	if err := entry.Attach(gateway); err != nil {
+	if err := entry.Bind(gateway); err != nil {
 		t.Fatal(err)
 	}
 	results := make(chan error, 2)
@@ -139,7 +139,7 @@ func TestCLIValidatesItsTransportBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := entry.Attach(nil); err == nil {
+	if err := entry.Bind(nil); err == nil {
 		t.Fatal("CLI accepted nil Gateway")
 	}
 }
@@ -152,7 +152,7 @@ func TestCLIStartReportsSessionHeaderWriteFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := entry.Attach(&gatewayProbe{revision: 1}); err != nil {
+	if err := entry.Bind(&gatewayProbe{revision: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if err := entry.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "write Session header") {
@@ -160,11 +160,39 @@ func TestCLIStartReportsSessionHeaderWriteFailure(t *testing.T) {
 	}
 }
 
+func TestCLIRunPendingPagesHistoryUntilTheRunStart(t *testing.T) {
+	input := io.NopCloser(strings.NewReader("/pending\n/quit\n"))
+	var output bytes.Buffer
+	entry, err := cli.New(cli.Config{
+		AgentID: "agent-1", WorkspaceID: "workspace-1", Input: input, Output: &output, ErrorOutput: io.Discard,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway := &pagedGatewayProbe{gatewayProbe: &gatewayProbe{revision: 1}}
+	if err := entry.Bind(gateway); err != nil {
+		t.Fatal(err)
+	}
+	if err := entry.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	waitDone(t, entry)
+	if err := entry.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "early reply") || !strings.Contains(output.String(), "late reply") {
+		t.Fatalf("paged Run output = %q", output.String())
+	}
+	if gateway.historyCalls != 1 {
+		t.Fatalf("History calls = %d, want 1", gateway.historyCalls)
+	}
+}
+
 type failingWriter struct{}
 
 func (failingWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
 
-func waitDone(t *testing.T, entry *cli.Entrypoint) {
+func waitDone(t *testing.T, entry *cli.Channel) {
 	t.Helper()
 	select {
 	case <-entry.Done():
@@ -234,12 +262,45 @@ func (g *gatewayProbe) RunPending(_ context.Context, request interaction.RunPend
 	return interaction.RunReceipt{SessionID: request.SessionID, RunID: "run-pending", Revision: g.revision}, nil
 }
 
-func (g *gatewayProbe) Snapshot(_ context.Context, request interaction.SnapshotRequest) (interaction.SessionSnapshot, error) {
-	return interaction.SessionSnapshot{
+func (g *gatewayProbe) View(_ context.Context, request interaction.SessionViewRequest) (interaction.SessionView, error) {
+	return interaction.SessionView{
 		SessionID: request.SessionID, Revision: g.revision, RunState: session.RunIdle,
-		History: []session.HistoryFact{{Message: &agent.Message{
+		RecentHistory: []session.HistoryFact{{Message: &agent.Message{
 			ID: "message-pending", SessionID: request.SessionID, RunID: "run-pending", StepID: "step-pending",
 			Role: agent.RoleAssistant, Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "pending reply"}},
 		}}},
+	}, nil
+}
+
+type pagedGatewayProbe struct {
+	*gatewayProbe
+	historyCalls int
+}
+
+func (g *pagedGatewayProbe) View(_ context.Context, request interaction.SessionViewRequest) (interaction.SessionView, error) {
+	return interaction.SessionView{
+		SessionID: request.SessionID, Revision: g.revision, RunState: session.RunIdle, HasMoreHistory: true,
+		RecentHistory: []session.HistoryFact{{
+			Sequence: 102,
+			Message: &agent.Message{
+				ID: "message-late", SessionID: request.SessionID, RunID: "run-pending", StepID: "step-late",
+				Role: agent.RoleAssistant, Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "late reply"}},
+			},
+		}},
+	}, nil
+}
+
+func (g *pagedGatewayProbe) History(_ context.Context, request interaction.HistoryRequest) (interaction.HistoryPage, error) {
+	g.historyCalls++
+	started := session.RunFact{SessionID: request.SessionID, RunID: "run-pending", Kind: session.RunStarted}
+	return interaction.HistoryPage{
+		SessionID: request.SessionID, Revision: g.revision,
+		Facts: []session.HistoryFact{
+			{Sequence: 100, Run: &started},
+			{Sequence: 101, Message: &agent.Message{
+				ID: "message-early", SessionID: request.SessionID, RunID: "run-pending", StepID: "step-early",
+				Role: agent.RoleAssistant, Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "early reply"}},
+			}},
+		},
 	}, nil
 }

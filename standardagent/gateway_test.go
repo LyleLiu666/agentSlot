@@ -12,7 +12,7 @@ import (
 )
 
 func TestGatewayPublishesAndInvokesOneSharedCommandCatalog(t *testing.T) {
-	entry := &captureEntrypoint{}
+	entry := &captureChannel{}
 	application := NewApplication(ApplicationSpec{
 		Name: "commands-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
@@ -24,7 +24,7 @@ func TestGatewayPublishesAndInvokesOneSharedCommandCatalog(t *testing.T) {
 					Fields: []interaction.FieldDescriptor{{Key: "mode", Choices: []interaction.Choice{{Value: "one", Title: "One"}}}},
 				}, result: json.RawMessage(`{"ok":true}`)},
 			}},
-			NewEntrypointModule("entrypoint.test", "test", entry),
+			NewGatewayChannelModule("entrypoint.test", "test", entry),
 		},
 	})
 	runtime, err := application.Start(context.Background())
@@ -67,7 +67,7 @@ func TestBuildRejectsCommandWhoseDescriptorDoesNotMatchSlotKey(t *testing.T) {
 			commandModule{commands: map[string]interaction.InteractionCommand{
 				"model": fakeCommand{descriptor: interaction.CommandDescriptor{Key: "other"}},
 			}},
-			NewEntrypointModule("entrypoint.test", "test", &captureEntrypoint{}),
+			NewGatewayChannelModule("entrypoint.test", "test", &captureChannel{}),
 		},
 	})
 	if _, err := application.Build(); err == nil {
@@ -76,12 +76,12 @@ func TestBuildRejectsCommandWhoseDescriptorDoesNotMatchSlotKey(t *testing.T) {
 }
 
 func TestGatewayRoutesExecutionOnlyToAnOpenRuntime(t *testing.T) {
-	entry := &captureEntrypoint{}
+	entry := &captureChannel{}
 	application := NewApplication(ApplicationSpec{
 		Name: "routing-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
 			componentsModule{store: newSeededStore()},
-			NewEntrypointModule("entrypoint.test", "test", entry),
+			NewGatewayChannelModule("entrypoint.test", "test", entry),
 		},
 	})
 	runtime, err := application.Start(context.Background())
@@ -107,14 +107,14 @@ func TestGatewayRoutesExecutionOnlyToAnOpenRuntime(t *testing.T) {
 }
 
 func TestInteractionCommandCannotRetainActionsAfterInvocation(t *testing.T) {
-	entry := &captureEntrypoint{}
+	entry := &captureChannel{}
 	command := &retainingCommand{}
 	application := NewApplication(ApplicationSpec{
 		Name: "command-scope-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
 			componentsModule{store: newSeededStore()},
 			commandModule{commands: map[string]interaction.InteractionCommand{"retain": command}},
-			NewEntrypointModule("entrypoint.test", "test", entry),
+			NewGatewayChannelModule("entrypoint.test", "test", entry),
 		},
 	})
 	runtime, err := application.Start(context.Background())
@@ -145,13 +145,13 @@ func TestInteractionCommandCannotRetainActionsAfterInvocation(t *testing.T) {
 }
 
 func TestCommandActionsAreBoundToInvocationSession(t *testing.T) {
-	entry := &captureEntrypoint{}
+	entry := &captureChannel{}
 	application := NewApplication(ApplicationSpec{
 		Name: "command-target-agent", DefaultModelConfig: testDefaultModel(),
 		Modules: []agentslot.Module{
 			componentsModule{store: newSeededStore()},
 			commandModule{commands: map[string]interaction.InteractionCommand{"cancel": applyingCommand{}}},
-			NewEntrypointModule("entrypoint.test", "test", entry),
+			NewGatewayChannelModule("entrypoint.test", "test", entry),
 		},
 	})
 	runtime, err := application.Start(context.Background())
@@ -163,7 +163,7 @@ func TestCommandActionsAreBoundToInvocationSession(t *testing.T) {
 		t.Fatalf("resume: %v", err)
 	}
 	_, err = entry.Access().InvokeCommand(context.Background(), interaction.CommandInvocation{
-		Key: "cancel", Scope: interaction.CommandScope{SessionID: "session-1"},
+		Key: "cancel", Scope: interaction.CommandScope{SessionID: "session-1"}, ExpectedRevision: 1,
 	})
 	if err != nil {
 		t.Fatalf("bound cancel action: %v", err)
@@ -200,8 +200,8 @@ func (applyingCommand) Describe() interaction.CommandDescriptor {
 	return interaction.CommandDescriptor{Key: "cancel", Title: "Cancel"}
 }
 
-func (applyingCommand) Invoke(ctx context.Context, _ interaction.CommandInvocation, actions interaction.CommandActions) (interaction.CommandResult, error) {
-	_, err := actions.Apply(ctx, interaction.ActionRequest{Kind: interaction.ActionCancel})
+func (applyingCommand) Invoke(ctx context.Context, invocation interaction.CommandInvocation, actions interaction.CommandActions) (interaction.CommandResult, error) {
+	_, err := actions.Apply(ctx, interaction.ActionRequest{Kind: interaction.ActionCancel, ExpectedRevision: invocation.ExpectedRevision})
 	return interaction.CommandResult{}, err
 }
 
