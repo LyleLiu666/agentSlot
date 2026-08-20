@@ -97,9 +97,12 @@ func TestGatewayRoutesExecutionOnlyToAnOpenRuntime(t *testing.T) {
 	if _, err := entry.Access().ResumeSession(context.Background(), interaction.ResumeSessionRequest{SessionID: "session-1"}); err != nil {
 		t.Fatalf("resume: %v", err)
 	}
-	_, err = entry.Access().Send(context.Background(), interaction.SendRequest{SessionID: "session-1"})
-	if !agent.IsCode(err, agent.CodeRuntimeUnavailable) {
-		t.Fatalf("Send through skeleton Runtime error = %v, code=%q", err, agent.CodeOf(err))
+	_, err = entry.Access().Send(context.Background(), interaction.SendRequest{
+		SessionID: "session-1", ExpectedRevision: 3,
+		Input: agent.MessageInput{Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "hello"}}},
+	})
+	if err != nil {
+		t.Fatalf("Send through fixed Runtime: %v", err)
 	}
 }
 
@@ -156,8 +159,8 @@ func TestCommandActionsAreBoundToInvocationSession(t *testing.T) {
 	_, err = entry.Access().InvokeCommand(context.Background(), interaction.CommandInvocation{
 		Key: "cancel", Scope: interaction.CommandScope{SessionID: "session-1"},
 	})
-	if !agent.IsCode(err, agent.CodeRuntimeUnavailable) {
-		t.Fatalf("command action error = %v, code=%q", err, agent.CodeOf(err))
+	if err != nil {
+		t.Fatalf("bound cancel action: %v", err)
 	}
 }
 

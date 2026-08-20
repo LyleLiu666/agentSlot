@@ -41,6 +41,11 @@ func cloneHistoryFact(source HistoryFact) HistoryFact {
 		result := cloneToolResult(*source.ToolResult)
 		copy.ToolResult = &result
 	}
+	if source.Run != nil {
+		run := *source.Run
+		run.ModelConfig = cloneModelConfig(source.Run.ModelConfig)
+		copy.Run = &run
+	}
 	return copy
 }
 

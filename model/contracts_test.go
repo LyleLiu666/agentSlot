@@ -46,14 +46,11 @@ func TestModelExecutorIsOneTypedSlot(t *testing.T) {
 }
 
 func TestModelEventsSeparateTemporaryAndTerminalFacts(t *testing.T) {
-	message := &agent.Message{
-		ID: "message-1", SessionID: "session-1", RunID: "run-1", StepID: "step-1", Role: agent.RoleAssistant,
-		Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "complete"}},
-	}
+	output := &model.Completion{Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "complete"}}}
 	valid := []model.ModelEvent{
 		{Kind: model.EventDelta, Text: "partial"},
 		{Kind: model.EventReset},
-		{Kind: model.EventComplete, Message: message},
+		{Kind: model.EventComplete, Output: output},
 		{Kind: model.EventFailed, Err: errors.New("provider failed")},
 	}
 	for _, event := range valid {
@@ -66,6 +63,43 @@ func TestModelEventsSeparateTemporaryAndTerminalFacts(t *testing.T) {
 	}
 	if err := (model.ModelEvent{Kind: model.EventFailed}).Validate(); err == nil {
 		t.Fatal("failed event without error accepted")
+	}
+	if err := (model.ModelEvent{Kind: model.EventDelta}).Validate(); err == nil {
+		t.Fatal("empty delta accepted")
+	}
+	if err := (model.ModelEvent{Kind: model.EventReset, Text: "stale"}).Validate(); err == nil {
+		t.Fatal("reset event with text accepted")
+	}
+}
+
+func TestFakeModelExecutorScriptsAndDetachesRequests(t *testing.T) {
+	output := &model.Completion{Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "done"}}}
+	fake := model.NewFakeModelExecutor(model.FakeExecution{Events: []model.ModelEvent{
+		{Kind: model.EventDelta, Text: "do"},
+		{Kind: model.EventComplete, Output: output},
+	}})
+	request := model.ModelRequest{
+		SessionID: "session-1", RunID: "run-1", StepID: "step-1",
+		Config:   model.Config{ModelID: "model-1", Reasoning: model.ReasoningDefault},
+		Messages: []agent.Message{{ID: "message-1", SessionID: "session-1", Role: agent.RoleUser, Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "hello"}}}},
+	}
+	stream, err := fake.Execute(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if event, err := stream.Recv(context.Background()); err != nil || event.Kind != model.EventDelta {
+		t.Fatalf("first Recv = %#v, %v", event, err)
+	}
+	if event, err := stream.Recv(context.Background()); err != nil || event.Kind != model.EventComplete || event.Output.Parts[0].Text != "done" {
+		t.Fatalf("second Recv = %#v, %v", event, err)
+	}
+	if _, err := stream.Recv(context.Background()); !errors.Is(err, model.ErrStreamClosed) {
+		t.Fatalf("terminal Recv error = %v, want ErrStreamClosed", err)
+	}
+	request.Messages[0].Parts[0].Text = "mutated"
+	requests := fake.Requests()
+	if requests[0].Messages[0].Parts[0].Text != "hello" {
+		t.Fatalf("captured request was aliased: %#v", requests[0])
 	}
 }
 

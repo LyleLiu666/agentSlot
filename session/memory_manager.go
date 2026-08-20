@@ -297,6 +297,13 @@ func rewriteForFork(source Snapshot, newSessionID agent.SessionID, agentID agent
 			result.CallID = callID(result.CallID)
 			fact.ToolResult = &result
 		}
+		if fact.Run != nil {
+			run := *fact.Run
+			run.SessionID = newSessionID
+			run.RunID = runID(run.RunID)
+			run.ModelConfig = cloneModelConfig(run.ModelConfig)
+			fact.Run = &run
+		}
 	}
 	// A complete-history fork copies canonical conversation facts. Model-facing
 	// Context is re-derived for the child's selected model; pending delivery and

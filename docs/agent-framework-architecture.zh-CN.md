@@ -257,7 +257,8 @@ stateDiagram-v2
 
 一次 Run 的标准循环只有一个控制者：AgentRuntime。
 
-1. 从 Queue 原子认领输入，冻结本 Run 的 SessionModelConfig，建立 RunJournal；
+1. 从 Queue 原子认领输入，冻结本 Run 的 SessionModelConfig，并追加携带配置与来源
+   revision 的 `RunStarted` History 事实；RunJournal 只在产生待执行工具调用时建立；
 2. 从 History、已认领输入、固定 Prompt、Tool 定义和 Context 组件装配合法模型请求；
 3. 调用 ModelExecutor 完成一次逻辑模型调用；
 4. 临时 chunk 只发事件，完整 assistant 结果才提交 History；

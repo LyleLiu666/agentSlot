@@ -254,10 +254,10 @@ and are snapshotted for each Run.
 
 The `session` package includes a reference `MemoryStore` and `MemoryManager`.
 They implement append-only History facts, Context, Queue, RunJournal,
-SessionModelConfig inheritance, revision/CAS commits, and the basic crash
-recovery transition. These are development and contract-reference
-implementations, not a production database or a completed AgentRuntime loop;
-production storage remains a replaceable `session.store` Slot. Development
+SessionModelConfig inheritance, Run lifecycle facts, revision/CAS commits, and
+the basic crash recovery transition. These are development and
+contract-reference implementations, not a production database; production
+storage remains a replaceable `session.store` Slot. Development
 applications can explicitly install `session.NewMemoryModule`; importing the
 package never selects it as a hidden default.
 
@@ -277,14 +277,18 @@ The first nine standard component contracts are now available in the
 `session`, `model`, `tool`, `context`, `hook`, and `interaction` packages. They
 are Contracted, but no domain ecosystem is yet Conformant or Proven.
 
-These packages define replaceable component boundaries only. The
-`standardagent` package now implements the application-scoped Runtime registry,
-coordinator, fixed Gateway skeleton, GatewayAccess binding, Entrypoint wrapper,
-and automatic standard profile. Its Session execution object is deliberately a
-skeleton until the Session and AgentRuntime rounds: Snapshot and lifecycle
-routing are real, while Send, model execution, tools, and event streaming
-return a typed unavailable error rather than pretending to succeed. Importing
-any package still has no registration or startup side effect.
+The `standardagent` package implements the application-scoped Runtime registry,
+coordinator, fixed Gateway, GatewayAccess binding, Entrypoint wrapper, automatic
+standard profile, and the fixed Session AgentRuntime state machine. Send,
+Steer, RunPending, Cancel, WhenIdle, Close, Queue mutation, and model-config
+commands now execute through the Gateway. Model calls consume temporary
+delta/reset events without persisting them and commit only complete assistant
+output; Run start/terminal facts retain the frozen model configuration. The
+`model` package includes an explicitly installed deterministic
+`FakeModelExecutor` for development and contract tests. Tool dispatch, Context
+assembly, Hook execution, and reconnectable Gateway event streaming remain in
+their dedicated implementation rounds. Importing any package still has no
+registration or startup side effect.
 
 ## Relationship to previous-generation SDKs
 

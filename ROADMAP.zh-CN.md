@@ -328,17 +328,20 @@ AgentSlot 参考这些行为，不复制 pi 的类型、聚合 Session 或产品
   默认继承且允许显式覆盖；
 - 验证浏览不创建 Runtime，并发 resume 的单实例语义不制造半成品。
 
-### 阶段 3：跑通固定 AgentRuntime
+### 阶段 3：跑通固定 AgentRuntime（执行内核参考实现已完成）
 
-- 实现框架 AgentRuntime，不新增 Runtime Slot、Host 或公开 Factory；
-- 完成 ModelExecutor、内部 RuntimeAccess、无密钥确定性链路和真实 OpenAI Chat
-  Compatible 入口；
-- 验证 idle/running/closed、Send、Steer、RunPending、ModelConfig、UpdateModelConfig、
+- 已实现框架 AgentRuntime，不新增 Runtime Slot、Host 或公开 Factory；
+- 已完成 FakeModelExecutor、内部 RuntimeAccess 和无密钥确定性链路；真实 Provider
+  适配器按后续生态批次实现，不作为开发启动门禁；
+- 已验证 idle/running/closed、Send、Steer、RunPending、ModelConfig、UpdateModelConfig、
   Cancel、WhenIdle 和 Close；
 - 验证 running 拒绝更新、Cancel/WhenIdle 后更新、CAS 冲突、跨 Provider 切换、
   兼容性确认和单个 Run 配置不变；
-- 验证一个 Application Assembly 下的零 Tool、流式事件、多 Session 隔离和 Runtime idle 常驻；
-- 验证正常完成自动 FIFO，取消、错误和重启后回到 idle 且不自动消费旧 Queue。
+- 已验证一个 Application Assembly 下的零 Tool、模型流接入、多 Session 隔离和 Runtime
+  idle 常驻；Gateway 对外流式事件在专门批次完成；
+- 已验证正常完成自动 FIFO，取消、错误和重启后回到 idle 且不自动消费旧 Queue；
+- Run 开始和终态作为 append-only History 事实记录冻结的模型配置及来源 revision，临时
+  chunk/reset 不持久化。
 
 ### 阶段 4：完成第一批可扩展能力
 

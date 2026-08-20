@@ -238,7 +238,9 @@ func (a *commandActions) Apply(ctx context.Context, request interaction.ActionRe
 		})
 		return interaction.ActionResult{Revision: receipt.Revision, MessageID: receipt.MessageID}, err
 	case interaction.ActionRunPending:
-		receipt, err := runtime.pending(ctx, interaction.RunPendingRequest{SessionID: a.scope.SessionID})
+		receipt, err := runtime.pending(ctx, interaction.RunPendingRequest{
+			SessionID: a.scope.SessionID, ExpectedRevision: request.ExpectedRevision,
+		})
 		return interaction.ActionResult{Revision: receipt.Revision, RunID: receipt.RunID}, err
 	case interaction.ActionCancel:
 		err := runtime.cancel(ctx, interaction.CancelRequest{SessionID: a.scope.SessionID})

@@ -117,7 +117,8 @@ type EnqueueReceipt struct {
 }
 
 type RunPendingRequest struct {
-	SessionID agent.SessionID
+	SessionID        agent.SessionID
+	ExpectedRevision agent.Revision
 }
 
 type RunReceipt struct {

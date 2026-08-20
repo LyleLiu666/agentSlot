@@ -75,8 +75,11 @@ type ModelRequest struct {
 	RunID     agent.RunID
 	StepID    agent.StepID
 	Config    Config
-	Messages  []agent.Message
-	Tools     []tool.Definition
+	// ConfigRevision identifies the durable Session revision from which Config
+	// was frozen when the Run started.
+	ConfigRevision agent.Revision
+	Messages       []agent.Message
+	Tools          []tool.Definition
 }
 
 // Executor performs one logical model call and owns provider retry or
@@ -108,24 +111,40 @@ type ModelEvent struct {
 	Kind      ModelEventKind
 	AttemptID string
 	Text      string
-	Message   *agent.Message
+	Output    *Completion
 	Err       error
 }
 
-// Validate enforces the stream invariant that only complete events carry a
-// durable assistant message and only failed events carry an error.
+// Completion is one identity-free logical model result. The fixed Runtime,
+// not an Executor or Provider adapter, allocates durable Message containment.
+// Tool-call requests extend this value in the ToolDispatcher round.
+type Completion struct {
+	Parts []agent.MessagePart
+}
+
+// Valid reports whether the completed content can become a durable message.
+func (c Completion) Valid() bool {
+	return agent.MessageInput{Parts: c.Parts}.Valid()
+}
+
+// Validate enforces the stream invariant that only complete events carry
+// identity-free completed content and only failed events carry an error.
 func (e ModelEvent) Validate() error {
 	switch e.Kind {
-	case EventDelta, EventReset:
-		if e.Message != nil || e.Err != nil {
-			return fmt.Errorf("model: %s event cannot carry a complete message or error", e.Kind)
+	case EventDelta:
+		if e.Text == "" || e.Output != nil || e.Err != nil {
+			return errors.New("model: delta event requires text and no terminal payload")
+		}
+	case EventReset:
+		if e.Text != "" || e.Output != nil || e.Err != nil {
+			return errors.New("model: reset event cannot carry content or error")
 		}
 	case EventComplete:
-		if e.Message == nil || !e.Message.Valid() || !e.Message.RunID.Valid() || !e.Message.StepID.Valid() || e.Err != nil {
-			return errors.New("model: complete event requires a message and no error")
+		if e.Text != "" || e.Output == nil || !e.Output.Valid() || e.Err != nil {
+			return errors.New("model: complete event requires output and no error")
 		}
 	case EventFailed:
-		if e.Err == nil || e.Message != nil {
+		if e.Text != "" || e.Err == nil || e.Output != nil {
 			return errors.New("model: failed event requires an error and no message")
 		}
 	default:

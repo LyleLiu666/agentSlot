@@ -259,10 +259,14 @@ func TestMemoryStoreRecoveryPairsUnknownOutcomeAndEndsRunOnce(t *testing.T) {
 	}
 	pending := session.JournalEntry{RunID: call.RunID, StepID: call.StepID, ToolCall: &call, Status: session.JournalPending}
 	steer := message("steer-1", assistant.SessionID, agent.RoleUser, "interrupt")
+	unclaimedSteer := message("steer-2", assistant.SessionID, agent.RoleUser, "queued interrupt")
 	created, err := store.Create(context.Background(), session.NewSession{
 		Session: agent.Session{ID: assistant.SessionID, AgentID: "agent-1", WorkspaceID: "workspace-1"},
 		History: []session.HistoryFact{{Message: &assistant}, {ToolCall: &call}}, RunJournal: []session.JournalEntry{pending},
-		Queue:       []session.QueueItem{{Message: steer, Delivery: session.DeliverySteer, ClaimedBy: call.RunID}},
+		Queue: []session.QueueItem{
+			{Message: steer, Delivery: session.DeliverySteer, ClaimedBy: call.RunID},
+			{Message: unclaimedSteer, Delivery: session.DeliverySteer},
+		},
 		ModelConfig: defaultConfig(), RunState: session.RunRunning, ActiveRunID: call.RunID,
 	})
 	if err != nil {
@@ -290,12 +294,53 @@ func TestMemoryStoreRecoveryPairsUnknownOutcomeAndEndsRunOnce(t *testing.T) {
 	if recovered.RunJournal[0].Status != session.JournalOutcomeUnknown {
 		t.Fatalf("recovered journal = %#v", recovered.RunJournal)
 	}
-	if len(recovered.Queue) != 1 || recovered.Queue[0].Claimed() || recovered.Queue[0].Delivery != session.DeliveryHeld {
+	if len(recovered.Queue) != 2 || recovered.Queue[0].Claimed() || recovered.Queue[0].Delivery != session.DeliveryHeld || recovered.Queue[1].Claimed() || recovered.Queue[1].Delivery != session.DeliveryHeld {
 		t.Fatalf("recovered steer queue = %#v, want unclaimed held", recovered.Queue)
 	}
 	again, err := store.Recover(context.Background(), session.SessionRef{SessionID: created.Session.ID})
 	if err != nil || again.Revision != recovered.Revision || len(again.History) != len(recovered.History) {
 		t.Fatalf("second recovery = revision %d history %d err %v", again.Revision, len(again.History), err)
+	}
+}
+
+func TestMemoryStoreRecoveryAppendsInterruptedRunFactWithFrozenConfig(t *testing.T) {
+	store, snapshot := newStoredSession(t, "interrupted-run-session")
+	run := session.RunFact{
+		SessionID: snapshot.Session.ID, RunID: "run-1", Kind: session.RunStarted,
+		ModelConfig: defaultConfig(), ConfigRevision: snapshot.Revision,
+	}
+	started := commitChanges(t, store, snapshot.Session.ID, snapshot.Revision, "start-run-fact",
+		session.Change{Kind: session.SetRunState, RunState: &session.RunStateChange{RunID: run.RunID, State: session.RunRunning}},
+		session.Change{Kind: session.AppendRunFact, RunFact: &run},
+	)
+	mismatched := run
+	mismatched.Kind = session.RunCompleted
+	mismatched.ModelConfig.ModelID = "different-model"
+	_, err := store.Commit(context.Background(), session.CommitRequest{
+		SessionID: snapshot.Session.ID, ExpectedRevision: started.Revision, IdempotencyKey: "mismatched-run-terminal",
+		Changes: []session.Change{
+			{Kind: session.AppendRunFact, RunFact: &mismatched},
+			{Kind: session.SetRunState, RunState: &session.RunStateChange{RunID: run.RunID, State: session.RunIdle}},
+		},
+	})
+	if !agent.IsCode(err, agent.CodeHistoryInvariant) {
+		t.Fatalf("mismatched terminal error = %v, code=%q", err, agent.CodeOf(err))
+	}
+	recovered, err := store.Recover(context.Background(), session.SessionRef{SessionID: snapshot.Session.ID})
+	if err != nil {
+		t.Fatalf("Recover: %v", err)
+	}
+	if recovered.Revision != started.Revision.Next() || recovered.RunState != session.RunIdle {
+		t.Fatalf("recovered state = %#v", recovered)
+	}
+	runs := make([]session.RunFact, 0, 2)
+	for _, fact := range recovered.History {
+		if fact.Run != nil {
+			runs = append(runs, *fact.Run)
+		}
+	}
+	if len(runs) != 2 || runs[0].Kind != session.RunStarted || runs[1].Kind != session.RunInterrupted || runs[1].ConfigRevision != run.ConfigRevision || runs[1].ModelConfig.ModelID != run.ModelConfig.ModelID {
+		t.Fatalf("recovered run facts = %#v", runs)
 	}
 }
 

@@ -224,7 +224,7 @@ func validateNewSession(initial NewSession) error {
 	if initial.Context.Revision != 0 {
 		return invalid("session.create", "new session context revision must be zero")
 	}
-	if err := validateHistoryConsistency(initial.History, initial.RunJournal); err != nil {
+	if err := validateHistoryConsistency(initial.Session.ID, initial.History, initial.RunJournal); err != nil {
 		return invalid("session.create", err.Error())
 	}
 	return nil
@@ -298,6 +298,10 @@ func applyChanges(snapshot *Snapshot, request CommitRequest) error {
 			}
 			result := cloneToolResult(*change.ToolResult)
 			snapshot.History = append(snapshot.History, HistoryFact{ToolResult: &result})
+		case AppendRunFact:
+			if err := appendRunFact(snapshot, *change.RunFact); err != nil {
+				return err
+			}
 		case EnqueueMessage:
 			if change.QueueItem.Claimed() {
 				return invalid("session.commit", "new queue item cannot already be claimed")
@@ -407,6 +411,49 @@ func applyRunState(snapshot *Snapshot, change RunStateChange) error {
 	return nil
 }
 
+func appendRunFact(snapshot *Snapshot, fact RunFact) error {
+	started, terminal := runFacts(snapshot.History, fact.RunID)
+	switch fact.Kind {
+	case RunStarted:
+		if started != nil {
+			return historyConflict("run already has a start fact")
+		}
+		if snapshot.RunState != RunRunning || snapshot.ActiveRunID != fact.RunID {
+			return historyConflict("run start fact requires the active run")
+		}
+	case RunCompleted, RunCanceled, RunFailed, RunInterrupted:
+		if started == nil || terminal != nil {
+			return historyConflict("run terminal fact requires one unterminated start fact")
+		}
+		if snapshot.RunState != RunRunning || snapshot.ActiveRunID != fact.RunID {
+			return historyConflict("run terminal fact requires the active run")
+		}
+		if started.ConfigRevision != fact.ConfigRevision || !sameModelConfig(started.ModelConfig, fact.ModelConfig) {
+			return historyConflict("run terminal fact changed the frozen model config")
+		}
+	}
+	copy := fact
+	copy.ModelConfig = cloneModelConfig(fact.ModelConfig)
+	snapshot.History = append(snapshot.History, HistoryFact{Run: &copy})
+	return nil
+}
+
+func runFacts(history []HistoryFact, runID agent.RunID) (*RunFact, *RunFact) {
+	var started, terminal *RunFact
+	for index := range history {
+		fact := history[index].Run
+		if fact == nil || fact.RunID != runID {
+			continue
+		}
+		if fact.Kind == RunStarted {
+			started = fact
+		} else {
+			terminal = fact
+		}
+	}
+	return started, terminal
+}
+
 func applyJournal(snapshot *Snapshot, entry JournalEntry, sessionID agent.SessionID) error {
 	if err := entry.Validate(sessionID); err != nil {
 		return journalConflict(err.Error())
@@ -461,17 +508,29 @@ func recoverAggregate(snapshot *Snapshot) bool {
 		changed = true
 	}
 	if snapshot.RunState == RunRunning {
+		if started, terminal := runFacts(snapshot.History, interruptedRunID); started != nil && terminal == nil {
+			interrupted := *started
+			interrupted.Kind = RunInterrupted
+			interrupted.ModelConfig = cloneModelConfig(started.ModelConfig)
+			snapshot.History = append(snapshot.History, HistoryFact{Run: &interrupted})
+		}
 		snapshot.RunState = RunIdle
 		snapshot.ActiveRunID = ""
 		changed = true
 	}
 	for index := range snapshot.Queue {
 		item := &snapshot.Queue[index]
-		if interruptedRunID.Valid() && item.ClaimedBy == interruptedRunID {
+		if !interruptedRunID.Valid() {
+			continue
+		}
+		if item.ClaimedBy == interruptedRunID {
 			item.ClaimedBy = ""
-			if item.Delivery == DeliverySteer {
-				item.Delivery = DeliveryHeld
-			}
+			changed = true
+		}
+		// Every steer belongs to the interrupted Run, including one that
+		// was durably queued but not yet claimed at the safe-step boundary.
+		if item.Delivery == DeliverySteer {
+			item.Delivery = DeliveryHeld
 			changed = true
 		}
 	}
@@ -551,13 +610,18 @@ func validateToolTransactions(history []HistoryFact, changes []Change) error {
 	return nil
 }
 
-func validateHistoryConsistency(history []HistoryFact, journal []JournalEntry) error {
+func validateHistoryConsistency(sessionID agent.SessionID, history []HistoryFact, journal []JournalEntry) error {
 	messages := make(map[agent.MessageID]*agent.Message)
 	calls := make(map[agent.ToolCallID]bool)
 	results := make(map[agent.ToolCallID]bool)
 	pending := make(map[agent.ToolCallID]bool)
 	journalEntries := make(map[agent.ToolCallID]bool)
+	runStarts := make(map[agent.RunID]*RunFact)
+	runTerminals := make(map[agent.RunID]bool)
 	for _, fact := range history {
+		if err := fact.Validate(sessionID); err != nil {
+			return historyConflict(err.Error())
+		}
 		if fact.Message != nil {
 			if messages[fact.Message.ID] != nil {
 				return historyConflict("duplicate message in initial history")
@@ -582,6 +646,23 @@ func validateHistoryConsistency(history []HistoryFact, journal []JournalEntry) e
 				return historyConflict("unpaired or duplicate tool result in initial history")
 			}
 			results[fact.ToolResult.CallID] = true
+		}
+		if fact.Run != nil {
+			if fact.Run.Kind == RunStarted {
+				if runStarts[fact.Run.RunID] != nil {
+					return historyConflict("duplicate initial run start fact")
+				}
+				runStarts[fact.Run.RunID] = fact.Run
+			} else {
+				started := runStarts[fact.Run.RunID]
+				if started == nil || runTerminals[fact.Run.RunID] {
+					return historyConflict("initial run terminal has no unique start")
+				}
+				if started.ConfigRevision != fact.Run.ConfigRevision || !sameModelConfig(started.ModelConfig, fact.Run.ModelConfig) {
+					return historyConflict("initial run terminal changed frozen model config")
+				}
+				runTerminals[fact.Run.RunID] = true
+			}
 		}
 	}
 	for _, entry := range journal {
@@ -614,6 +695,21 @@ func validateHistoryConsistency(history []HistoryFact, journal []JournalEntry) e
 		}
 	}
 	return nil
+}
+
+func sameModelConfig(left, right SessionModelConfig) bool {
+	if left.ProviderKey != right.ProviderKey || left.ModelID != right.ModelID || left.Reasoning != right.Reasoning {
+		return false
+	}
+	return sameFloat(left.Parameters.Temperature, right.Parameters.Temperature) && sameInt(left.Parameters.MaxTokens, right.Parameters.MaxTokens)
+}
+
+func sameFloat(left, right *float64) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
+}
+
+func sameInt(left, right *int) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
 }
 
 func containsMessage(history []HistoryFact, id agent.MessageID) bool {

@@ -2,10 +2,13 @@ package standardagent
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"reflect"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	agent "github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/interaction"
@@ -389,6 +392,16 @@ type runtimeAccess interface {
 type runtimeInstance struct {
 	session    session.Session
 	components *runtimeComponents
+
+	mu            sync.Mutex
+	state         runtimeLifecycle
+	active        *activeRun
+	idleSignal    chan struct{}
+	closing       bool
+	closeDone     chan struct{}
+	prefix        string
+	sequence      atomic.Uint64
+	revisionValue atomic.Uint64
 }
 
 func newRuntimeInstance(s session.Session, components *runtimeComponents) (*runtimeInstance, error) {
@@ -398,7 +411,17 @@ func newRuntimeInstance(s session.Session, components *runtimeComponents) (*runt
 	if components == nil {
 		return nil, agent.NewError(agent.ErrorInternal, "standardagent.runtime", "Runtime components were not assembled", nil)
 	}
-	runtime := &runtimeInstance{session: s, components: components}
+	prefixBytes := make([]byte, 8)
+	if _, err := rand.Read(prefixBytes); err != nil {
+		return nil, agent.NewError(agent.ErrorInternal, "standardagent.runtime", "cannot initialize Runtime ID allocator", err)
+	}
+	idleSignal := make(chan struct{})
+	close(idleSignal)
+	runtime := &runtimeInstance{
+		session: s, components: components, state: runtimeIdle,
+		idleSignal: idleSignal, closeDone: make(chan struct{}), prefix: hex.EncodeToString(prefixBytes),
+	}
+	runtime.revisionValue.Store(uint64(s.Revision()))
 	if !runtime.id().Valid() {
 		return nil, agent.NewError(agent.ErrorInternal, "standardagent.runtime", "SessionManager returned an invalid SessionID", nil)
 	}
@@ -417,8 +440,10 @@ func nilSession(value session.Session) bool {
 		return false
 	}
 }
-func (r *runtimeInstance) id() agent.SessionID      { return r.session.ID() }
-func (r *runtimeInstance) revision() agent.Revision { return r.session.Revision() }
+func (r *runtimeInstance) id() agent.SessionID { return r.session.ID() }
+func (r *runtimeInstance) revision() agent.Revision {
+	return agent.Revision(r.revisionValue.Load())
+}
 
 func (r *runtimeInstance) snapshot(ctx context.Context, request interaction.SnapshotRequest) (interaction.SessionSnapshot, error) {
 	snapshot, err := r.session.View(ctx)
@@ -428,6 +453,7 @@ func (r *runtimeInstance) snapshot(ctx context.Context, request interaction.Snap
 	if request.KnownRevision > snapshot.Revision {
 		return interaction.SessionSnapshot{}, agent.NewCodedError(agent.ErrorConflict, agent.CodeRevisionConflict, "gateway.snapshot", "client revision is ahead of the persisted session", nil)
 	}
+	r.revisionValue.Store(uint64(snapshot.Revision))
 	return interaction.SessionSnapshot{
 		SessionID: r.id(), Revision: snapshot.Revision,
 		History: snapshot.History, Queue: snapshot.Queue,
@@ -435,44 +461,8 @@ func (r *runtimeInstance) snapshot(ctx context.Context, request interaction.Snap
 	}, nil
 }
 
-func (r *runtimeInstance) unavailable(op string) error {
-	return runtimeUnavailable(op)
-}
-
-func (r *runtimeInstance) close(context.Context) error { return nil }
-
-func (r *runtimeInstance) send(context.Context, interaction.SendRequest) (interaction.EnqueueReceipt, error) {
-	return interaction.EnqueueReceipt{}, r.unavailable("gateway.send")
-}
-func (r *runtimeInstance) steer(context.Context, interaction.SteerRequest) (interaction.EnqueueReceipt, error) {
-	return interaction.EnqueueReceipt{}, r.unavailable("gateway.steer")
-}
-func (r *runtimeInstance) pending(context.Context, interaction.RunPendingRequest) (interaction.RunReceipt, error) {
-	return interaction.RunReceipt{}, r.unavailable("gateway.run_pending")
-}
-func (r *runtimeInstance) cancel(context.Context, interaction.CancelRequest) error {
-	return r.unavailable("gateway.cancel")
-}
-func (r *runtimeInstance) idle(context.Context, interaction.WhenIdleRequest) error {
-	return r.unavailable("gateway.when_idle")
-}
-func (r *runtimeInstance) modelConfig(context.Context, interaction.ModelConfigRequest) (interaction.ModelConfigView, error) {
-	return interaction.ModelConfigView{}, r.unavailable("gateway.model_config")
-}
-func (r *runtimeInstance) updateModelConfig(context.Context, interaction.UpdateModelConfigRequest) (interaction.CommitReceipt, error) {
-	return interaction.CommitReceipt{}, r.unavailable("gateway.update_model_config")
-}
-func (r *runtimeInstance) editQueued(context.Context, interaction.EditQueuedRequest) (interaction.CommitReceipt, error) {
-	return interaction.CommitReceipt{}, r.unavailable("gateway.edit_queued")
-}
-func (r *runtimeInstance) deleteQueued(context.Context, interaction.DeleteQueuedRequest) (interaction.CommitReceipt, error) {
-	return interaction.CommitReceipt{}, r.unavailable("gateway.delete_queued")
-}
-func (r *runtimeInstance) reclassifyQueued(context.Context, interaction.ReclassifyQueuedRequest) (interaction.CommitReceipt, error) {
-	return interaction.CommitReceipt{}, r.unavailable("gateway.reclassify_queued")
-}
 func (r *runtimeInstance) subscribe(context.Context, interaction.SubscribeRequest) (interaction.EventStream, error) {
-	return nil, r.unavailable("gateway.subscribe")
+	return nil, runtimeUnavailable("gateway.subscribe")
 }
 
 func notStartedError() error {

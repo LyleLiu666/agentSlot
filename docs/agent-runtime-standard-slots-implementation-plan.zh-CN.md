@@ -540,8 +540,10 @@ Edit/Delete/Reclassify 必须携带 expected revision。仅未认领、尚未进
 
 SessionModelConfig 是 Session 聚合的版本化配置状态，不属于 History 或 Context。
 CreateSession 从 Agent 默认模型初始化；ResumeSession 恢复持久值；fork、摘要启动和
-sub-agent Session 默认继承来源 Session 当前值。每个 RunJournal 记录认领时冻结的
-配置版本，模型请求和完整 assistant 结果可追溯到同一版本。
+sub-agent Session 默认继承来源 Session 当前值。每个 Run 的开始/终态 History 事实记录
+认领时冻结的完整配置和来源 revision；ModelRequest 携带同一 ConfigRevision，因此后续
+模型切换不能改写既有 Run 的配置证据。RunJournal 继续只承担未完成工具执行的恢复证据，
+不复制 Run 配置事实。
 
 ### History
 
@@ -715,18 +717,21 @@ History。
   继承且允许显式覆盖。
 - 引入第二个独立存储实现前，不把生态位标记 Proven。
 
-### 阶段 4：固定 AgentRuntime 与并发状态机
+### 阶段 4：固定 AgentRuntime 与并发状态机（基础执行内核已完成）
 
-- 先覆盖 idle/running/closed、Send、Steer、RunPending、Cancel、WhenIdle、Close。
-- 覆盖 ModelConfig/UpdateModelConfig：idle 更新、running 拒绝、Cancel 后更新、CAS 冲突、
-  跨 Provider 切换、兼容性确认和每 Run 配置快照。
-- 压测同 Session 并发命令只产生一个 Run；不同 Session 可并行。
-- 测试 Runtime idle 常驻、显式 Close、应用停止和重新 resume：固定配置可更新，
-  SessionModelConfig 必须保留。
+- 已覆盖 idle/running/closed、Send、Steer、RunPending、Cancel、WhenIdle、Close，以及
+  Queue 修改和 ModelConfig/UpdateModelConfig 的固定 Gateway 命令面。
+- 已验证 idle 更新、running 拒绝、CAS、每 Run 配置快照和 Run 配置事实；跨 Provider
+  能力兼容性确认仍在模型配置交互批次完成。
+- 已验证同 Session normal 输入串行成不同 Run、Steer 在同一 Run 下一安全 step 继续，
+  不同 Session 可并行。
+- 已验证正常完成自动 FIFO；取消、模型失败和 Close 不自动消费旧 Queue；Close 后恢复
+  同一持久 Session。真实 Provider、Tool、Context、Hook 和 Gateway 事件不混入本阶段。
 
-### 阶段 5：ModelExecutor 与流式一致性
+### 阶段 5：ModelExecutor 与流式一致性（确定性执行器已完成）
 
-- 使用确定性 Executor 测试临时 chunk、reset、完整结果和最终失败。
+- 已使用 FakeModelExecutor 测试临时 chunk、reset、完整结果、最终失败和取消；Executor
+  只返回无持久身份的 Completion，唯一由 Runtime 分配 Message/Run/Step 身份。
 - 两种不同 Provider 协议验证重试/continuation 差异不泄漏到 Runtime。
 - 测试 AttemptID 进入运维/用量事件但不进入 History。
 

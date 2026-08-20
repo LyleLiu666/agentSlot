@@ -88,6 +88,7 @@ type HistoryFact struct {
 	Message    *agent.Message
 	ToolCall   *agent.ToolCall
 	ToolResult *tool.ToolResult
+	Run        *RunFact
 }
 
 // Validate checks the payload and its Session containment. Tool results do
@@ -101,6 +102,9 @@ func (f HistoryFact) Validate(sessionID agent.SessionID) error {
 		count++
 	}
 	if f.ToolResult != nil {
+		count++
+	}
+	if f.Run != nil {
 		count++
 	}
 	if count != 1 {
@@ -119,6 +123,47 @@ func (f HistoryFact) Validate(sessionID agent.SessionID) error {
 		if err := f.ToolResult.Validate(); err != nil {
 			return err
 		}
+	case f.Run != nil:
+		if err := f.Run.Validate(sessionID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RunFactKind is the finite lifecycle vocabulary recorded in canonical
+// History. Run facts are auditable execution facts, not model-facing messages.
+type RunFactKind string
+
+const (
+	RunStarted     RunFactKind = "started"
+	RunCompleted   RunFactKind = "completed"
+	RunCanceled    RunFactKind = "canceled"
+	RunFailed      RunFactKind = "failed"
+	RunInterrupted RunFactKind = "interrupted"
+)
+
+func (k RunFactKind) Valid() bool {
+	return k == RunStarted || k == RunCompleted || k == RunCanceled || k == RunFailed || k == RunInterrupted
+}
+
+// RunFact records the exact model configuration frozen when a Run started and
+// repeats it on the terminal fact. ConfigRevision is the Session revision from
+// which the snapshot was taken; later model switches cannot rewrite it.
+type RunFact struct {
+	SessionID      agent.SessionID
+	RunID          agent.RunID
+	Kind           RunFactKind
+	ModelConfig    SessionModelConfig
+	ConfigRevision agent.Revision
+}
+
+func (f RunFact) Validate(sessionID agent.SessionID) error {
+	if f.SessionID != sessionID || !f.RunID.Valid() || !f.Kind.Valid() {
+		return fmt.Errorf("session: run fact containment is invalid")
+	}
+	if err := f.ModelConfig.Validate(); err != nil {
+		return fmt.Errorf("session: run fact model config is invalid: %w", err)
 	}
 	return nil
 }
@@ -340,6 +385,7 @@ const (
 	AppendMessage    ChangeKind = "append_message"
 	AppendToolCall   ChangeKind = "append_tool_call"
 	AppendToolResult ChangeKind = "append_tool_result"
+	AppendRunFact    ChangeKind = "append_run_fact"
 	EnqueueMessage   ChangeKind = "enqueue_message"
 	ClaimQueue       ChangeKind = "claim_queue"
 	ConsumeQueue     ChangeKind = "consume_queue"
@@ -359,6 +405,7 @@ type Change struct {
 	Message               *agent.Message
 	ToolCall              *agent.ToolCall
 	ToolResult            *tool.ToolResult
+	RunFact               *RunFact
 	QueueItem             *QueueItem
 	QueueClaim            *QueueClaim
 	QueueConsume          *QueueConsume
@@ -390,6 +437,13 @@ func (c Change) Validate(sessionID agent.SessionID) error {
 			return fmt.Errorf("session: appended tool result is missing")
 		}
 		if err := c.ToolResult.Validate(); err != nil {
+			return err
+		}
+	case AppendRunFact:
+		if c.RunFact == nil {
+			return fmt.Errorf("session: appended run fact is missing")
+		}
+		if err := c.RunFact.Validate(sessionID); err != nil {
 			return err
 		}
 	case EnqueueMessage:
@@ -450,6 +504,7 @@ func (c Change) payloadCount() int {
 		c.Message != nil,
 		c.ToolCall != nil,
 		c.ToolResult != nil,
+		c.RunFact != nil,
 		c.QueueItem != nil,
 		c.QueueClaim != nil,
 		c.QueueConsume != nil,
