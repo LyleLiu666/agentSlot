@@ -66,6 +66,40 @@ func TestAttemptAccountingKeysIncludeTheWholeRunIdentity(t *testing.T) {
 	}
 }
 
+func TestAttemptModuleUsesExplicitProductDefaultWhenModelOmitsMaxTokens(t *testing.T) {
+	ledger := &ledgerProbe{}
+	quota := &quotaProbe{}
+	module, err := billing.NewAttemptModuleWithOptions("billing.attempt", billing.AttemptModuleOptions{
+		Subjects: billing.SubjectResolverFunc(func(context.Context, model.AttemptIdentity) (billing.Subject, error) {
+			return billing.Subject{Kind: "account", ID: "account-1"}, nil
+		}),
+		DefaultRequestedTokens: 77,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observer := buildAttemptObserverWithModule(t, ledger, quota, nil, module)
+	identity := billingAttemptIdentity("session-1", "attempt-1")
+	identity.Config.Parameters.MaxTokens = nil
+	if err := observer.AttemptStarted(context.Background(), model.AttemptStarted{Identity: identity}); err != nil {
+		t.Fatal(err)
+	}
+	if quota.lastCheck.RequestedTokens != 77 {
+		t.Fatalf("requested tokens = %d, want explicit product default", quota.lastCheck.RequestedTokens)
+	}
+}
+
+func TestAttemptModuleRejectsNegativeProductDefault(t *testing.T) {
+	if _, err := billing.NewAttemptModuleWithOptions("billing.attempt", billing.AttemptModuleOptions{
+		Subjects: billing.SubjectResolverFunc(func(context.Context, model.AttemptIdentity) (billing.Subject, error) {
+			return billing.Subject{Kind: "account", ID: "account-1"}, nil
+		}),
+		DefaultRequestedTokens: -1,
+	}); err == nil {
+		t.Fatal("negative default requested tokens were accepted")
+	}
+}
+
 func TestAttemptFinishRetryReusesTheExactLedgerFact(t *testing.T) {
 	ledger := &ledgerProbe{}
 	quota := &quotaProbe{commitFailures: 1}
@@ -91,19 +125,24 @@ func TestAttemptFinishRetryReusesTheExactLedgerFact(t *testing.T) {
 
 func buildAttemptObserver(t *testing.T, ledger billing.BillingLedger, quota billing.QuotaGuard, price billing.PriceResolver) model.AttemptObserver {
 	t.Helper()
-	modules := []agentslot.Module{oneModule[billing.BillingLedger]{id: "ledger", slot: billing.LedgerSlot, value: ledger}}
-	if quota != nil {
-		modules = append(modules, oneModule[billing.QuotaGuard]{id: "quota", slot: billing.QuotaGuardSlot, value: quota})
-	}
-	if price != nil {
-		modules = append(modules, oneModule[billing.PriceResolver]{id: "price", slot: billing.PriceResolverSlot, value: price})
-	}
 	module, err := billing.NewAttemptModule("billing.attempt", billing.SubjectResolverFunc(
 		func(context.Context, model.AttemptIdentity) (billing.Subject, error) {
 			return billing.Subject{Kind: "account", ID: "account-1"}, nil
 		}))
 	if err != nil {
 		t.Fatal(err)
+	}
+	return buildAttemptObserverWithModule(t, ledger, quota, price, module)
+}
+
+func buildAttemptObserverWithModule(t *testing.T, ledger billing.BillingLedger, quota billing.QuotaGuard, price billing.PriceResolver, module agentslot.Module) model.AttemptObserver {
+	t.Helper()
+	modules := []agentslot.Module{oneModule[billing.BillingLedger]{id: "ledger", slot: billing.LedgerSlot, value: ledger}}
+	if quota != nil {
+		modules = append(modules, oneModule[billing.QuotaGuard]{id: "quota", slot: billing.QuotaGuardSlot, value: quota})
+	}
+	if price != nil {
+		modules = append(modules, oneModule[billing.PriceResolver]{id: "price", slot: billing.PriceResolverSlot, value: price})
 	}
 	modules = append(modules, module)
 	app := agentslot.NewApplication("billing", modules, agentslot.RequireChain(model.AttemptObserverSlot, 1))
@@ -162,10 +201,12 @@ type quotaProbe struct {
 	commit         billing.QuotaCommit
 	releaseReason  string
 	commitFailures int
+	lastCheck      billing.QuotaCheck
 }
 
-func (p *quotaProbe) Check(context.Context, billing.QuotaCheck) (billing.QuotaDecision, error) {
+func (p *quotaProbe) Check(_ context.Context, check billing.QuotaCheck) (billing.QuotaDecision, error) {
 	p.events = append(p.events, "quota.check")
+	p.lastCheck = check
 	return billing.QuotaDecision{Allowed: true}, nil
 }
 func (p *quotaProbe) Reserve(_ context.Context, check billing.QuotaCheck) (billing.QuotaReservation, error) {

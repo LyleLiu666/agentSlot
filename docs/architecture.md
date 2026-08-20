@@ -290,6 +290,11 @@ facts. Account ownership, plans, provider credentials, durable storage engines,
 child-agent implementations, and product UI remain explicit replaceable
 components or product configuration.
 
+Quota reservation size is also product policy. `AttemptModuleOptions` may
+provide an explicit positive default when a model Config omits `max_tokens`;
+otherwise the omission remains visible to the selected QuotaGuard. AgentSlot
+does not infer a limit from a model name or silently reserve one token.
+
 Replaceable behavior, policy, storage, transport, and provider implementation
 remain Slot components. Stable semantics are not made configurable merely to
 avoid making an architectural decision; volatile implementation details are

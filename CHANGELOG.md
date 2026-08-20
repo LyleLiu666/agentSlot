@@ -19,6 +19,8 @@ when real consumers expose a flawed boundary.
   Attempt Observer used for pre-dispatch quota and durable accounting intent.
 - Model configuration on the completion Hook view so consumers receive the
   frozen provider-neutral Run selection without reading product configuration.
+- `AttemptModuleOptions` for a host-supplied default quota reservation size
+  when the selected model Config intentionally omits `max_tokens`.
 
 ### Safety
 

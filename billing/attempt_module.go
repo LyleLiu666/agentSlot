@@ -16,15 +16,32 @@ import (
 // to the synchronous physical-attempt boundary. It contains no account or plan
 // policy; the caller supplies that through SubjectResolver and components.
 func NewAttemptModule(id string, subjects SubjectResolver) (agentslot.Module, error) {
-	if id == "" || subjects == nil {
+	return NewAttemptModuleWithOptions(id, AttemptModuleOptions{Subjects: subjects})
+}
+
+// AttemptModuleOptions contains product policy that cannot be inferred from a
+// provider-neutral model Config. DefaultRequestedTokens is used only when the
+// selected Config omits max_tokens; zero keeps the omission visible to the
+// installed QuotaGuard instead of inventing a reservation size.
+type AttemptModuleOptions struct {
+	Subjects               SubjectResolver
+	DefaultRequestedTokens int64
+}
+
+func NewAttemptModuleWithOptions(id string, options AttemptModuleOptions) (agentslot.Module, error) {
+	if id == "" || options.Subjects == nil {
 		return nil, errors.New("billing: attempt module requires ID and subject resolver")
 	}
-	return &attemptModule{id: id, subjects: subjects}, nil
+	if options.DefaultRequestedTokens < 0 {
+		return nil, errors.New("billing: default requested tokens cannot be negative")
+	}
+	return &attemptModule{id: id, subjects: options.Subjects, defaultRequestedTokens: options.DefaultRequestedTokens}, nil
 }
 
 type attemptModule struct {
-	id       string
-	subjects SubjectResolver
+	id                     string
+	subjects               SubjectResolver
+	defaultRequestedTokens int64
 }
 
 func (m *attemptModule) ID() string { return m.id }
@@ -54,7 +71,8 @@ func (m *attemptModule) Register(reg agentslot.Registrar) error {
 			}
 			return &attemptAccounting{
 				subjects: m.subjects, ledger: ledger, prices: prices, quota: quota,
-				started: make(map[attemptKey]*attemptAccountingState),
+				defaultRequestedTokens: m.defaultRequestedTokens,
+				started:                make(map[attemptKey]*attemptAccountingState),
 			}, nil
 		}))
 }
@@ -83,10 +101,11 @@ func keyForAttempt(identity model.AttemptIdentity) attemptKey {
 }
 
 type attemptAccounting struct {
-	subjects SubjectResolver
-	ledger   BillingLedger
-	prices   PriceResolver
-	quota    QuotaGuard
+	subjects               SubjectResolver
+	ledger                 BillingLedger
+	prices                 PriceResolver
+	quota                  QuotaGuard
+	defaultRequestedTokens int64
 
 	mu      sync.Mutex
 	started map[attemptKey]*attemptAccountingState
@@ -121,7 +140,7 @@ func (a *attemptAccounting) AttemptStarted(ctx context.Context, event model.Atte
 	if !subject.Valid() {
 		return errors.New("billing: subject resolver returned invalid subject")
 	}
-	check := QuotaCheck{Subject: subject, Attempt: event.Identity}
+	check := QuotaCheck{Subject: subject, Attempt: event.Identity, RequestedTokens: a.defaultRequestedTokens}
 	if max := event.Identity.Config.Parameters.MaxTokens; max != nil {
 		check.RequestedTokens = int64(*max)
 	}
