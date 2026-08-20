@@ -7,6 +7,7 @@ import (
 
 	agentslot "github.com/LyleLiu666/agentSlot"
 	agent "github.com/LyleLiu666/agentSlot/agent"
+	"github.com/LyleLiu666/agentSlot/model"
 )
 
 // HookSlot is the ordered, optional AgentHook ecosystem.
@@ -24,7 +25,10 @@ type RunCompleteView struct {
 	SessionID agent.SessionID
 	RunID     agent.RunID
 	Revision  agent.Revision
-	Messages  []agent.Message
+	// ModelConfig is the provider-neutral selection frozen when this Run
+	// started. It contains no credentials or provider-specific configuration.
+	ModelConfig model.Config
+	Messages    []agent.Message
 }
 
 // FollowOnProposal contains only additional input; it cannot directly mutate

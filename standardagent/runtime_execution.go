@@ -8,6 +8,7 @@ import (
 	"time"
 
 	agent "github.com/LyleLiu666/agentSlot/agent"
+	"github.com/LyleLiu666/agentSlot/goal"
 	"github.com/LyleLiu666/agentSlot/hook"
 	"github.com/LyleLiu666/agentSlot/interaction"
 	"github.com/LyleLiu666/agentSlot/model"
@@ -271,29 +272,52 @@ type runtimeAttemptRecorder struct {
 	step    agent.StepID
 }
 
-func (a *runtimeAttemptRecorder) Started(_ context.Context, started model.AttemptStart) error {
+func (a *runtimeAttemptRecorder) Started(ctx context.Context, started model.AttemptStart) error {
 	if err := started.Validate(); err != nil {
 		return err
 	}
 	r := a.runtime
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.active != a.run || r.closing {
+		r.mu.Unlock()
 		return context.Canceled
 	}
 	if started.ProviderKey != a.run.config.ProviderKey || started.ModelID != a.run.config.ModelID {
+		r.mu.Unlock()
 		return agent.NewError(agent.ErrorInvalidInput, "standardagent.model_attempt", "Executor attempt does not match the frozen Run model", nil)
+	}
+	identity := model.AttemptIdentity{
+		SessionID: r.id(), RunID: a.run.id, StepID: a.step, AttemptID: started.AttemptID,
+		ConfigRevision: a.run.configRevision, Config: cloneRuntimeConfig(a.run.config),
+	}
+	r.mu.Unlock()
+	event := model.AttemptStarted{Identity: identity}
+	accepted := make([]model.AttemptObserver, 0, len(r.components.attemptObservers))
+	for _, observer := range r.components.attemptObservers {
+		if err := observer.AttemptStarted(ctx, event); err != nil {
+			return compensateAttemptStart(ctx, identity, accepted,
+				fmt.Errorf("standardagent: record model attempt start: %w", err))
+		}
+		accepted = append(accepted, observer)
+	}
+
+	r.mu.Lock()
+	if r.active != a.run || r.closing || a.run.cancelRequested {
+		r.mu.Unlock()
+		return compensateAttemptStart(ctx, identity, accepted, context.Canceled)
 	}
 	snapshot, err := r.viewLocked(context.Background())
 	if err != nil {
-		return err
+		r.mu.Unlock()
+		return compensateAttemptStart(ctx, identity, accepted, err)
 	}
 	fact := session.ModelAttemptFact{
 		AttemptID: started.AttemptID, RunID: a.run.id, StepID: a.step, Kind: session.AttemptStarted,
 		ProviderKey: started.ProviderKey, ModelID: started.ModelID,
 	}
 	if _, err := r.commitLocked(context.Background(), snapshot.Revision, "attempt-start", []session.Change{{Kind: session.AppendModelAttempt, ModelAttempt: &fact}}); err != nil {
-		return err
+		r.mu.Unlock()
+		return compensateAttemptStart(ctx, identity, accepted, err)
 	}
 	a.run.signalPrepared(r.revision())
 	r.observeModelAttempt(observe.TraceModelAttemptStarted, a.run, a.step, started.AttemptID)
@@ -305,14 +329,48 @@ func (a *runtimeAttemptRecorder) Started(_ context.Context, started model.Attemp
 		},
 		Attributes: map[string]string{"provider": a.run.config.ProviderKey, "model": a.run.config.ModelID},
 	})
+	r.mu.Unlock()
 	return nil
 }
 
-func (a *runtimeAttemptRecorder) Finished(_ context.Context, finished model.AttemptFinish) error {
+func compensateAttemptStart(ctx context.Context, identity model.AttemptIdentity, accepted []model.AttemptObserver, cause error) error {
+	compensation := model.AttemptFinished{
+		Identity: identity, Outcome: model.AttemptCanceled, ErrorCode: "attempt_start_rejected",
+	}
+	for index := len(accepted) - 1; index >= 0; index-- {
+		if err := accepted[index].AttemptFinished(context.WithoutCancel(ctx), compensation); err != nil {
+			cause = errors.Join(cause, fmt.Errorf("standardagent: compensate accepted attempt observer: %w", err))
+		}
+	}
+	return cause
+}
+
+func (a *runtimeAttemptRecorder) Finished(ctx context.Context, finished model.AttemptFinish) error {
 	if err := finished.Validate(); err != nil {
 		return err
 	}
 	r := a.runtime
+	r.mu.Lock()
+	if r.active != a.run {
+		r.mu.Unlock()
+		return context.Canceled
+	}
+	identity := model.AttemptIdentity{
+		SessionID: r.id(), RunID: a.run.id, StepID: a.step, AttemptID: finished.AttemptID,
+		ConfigRevision: a.run.configRevision, Config: cloneRuntimeConfig(a.run.config),
+	}
+	r.mu.Unlock()
+	event := model.AttemptFinished{
+		Identity: identity, Outcome: finished.Outcome, ProviderRequestID: finished.ProviderRequestID,
+		Usage: finished.Usage, ErrorCode: finished.ErrorCode,
+	}
+	var observerErr error
+	for _, observer := range r.components.attemptObservers {
+		if err := observer.AttemptFinished(ctx, event); err != nil {
+			observerErr = errors.Join(observerErr, fmt.Errorf("standardagent: record model attempt finish: %w", err))
+		}
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.active != a.run {
@@ -328,7 +386,7 @@ func (a *runtimeAttemptRecorder) Finished(_ context.Context, finished model.Atte
 	}
 	snapshot, err := r.viewLocked(context.Background())
 	if err != nil {
-		return err
+		return errors.Join(observerErr, err)
 	}
 	fact := session.ModelAttemptFact{
 		AttemptID: finished.AttemptID, RunID: a.run.id, StepID: a.step, Kind: kind,
@@ -336,7 +394,7 @@ func (a *runtimeAttemptRecorder) Finished(_ context.Context, finished model.Atte
 		ProviderRequestID: finished.ProviderRequestID, Usage: finished.Usage, ErrorCode: finished.ErrorCode,
 	}
 	if _, err := r.commitLocked(context.Background(), snapshot.Revision, "attempt-finish", []session.Change{{Kind: session.AppendModelAttempt, ModelAttempt: &fact}}); err != nil {
-		return err
+		return errors.Join(observerErr, err)
 	}
 	a.run.usedTokens += finished.Usage.TotalTokens
 	r.observeModelAttempt(trace, a.run, a.step, finished.AttemptID)
@@ -352,7 +410,7 @@ func (a *runtimeAttemptRecorder) Finished(_ context.Context, finished model.Atte
 		ReasoningTokens: finished.Usage.ReasoningTokens, TotalTokens: finished.Usage.TotalTokens,
 		Estimated: finished.Usage.Estimated, EstimateSource: finished.Usage.EstimateSource,
 	})
-	return nil
+	return observerErr
 }
 
 func (a *runtimeAttemptRecorder) Budget() model.TokenBudget { return a.runtime.runBudget(a.run) }
@@ -430,17 +488,30 @@ func (r *runtimeInstance) continueAfterCompletion(run *activeRun) (agent.StepID,
 		return "", false, errors.Is(err, context.Canceled), err
 	}
 	proposals := make([]agent.MessageInput, 0)
-	view := hook.RunCompleteView{SessionID: r.id(), RunID: run.id, Revision: snapshot.Revision, Messages: cloneHookMessages(snapshot.History)}
-	for _, candidate := range r.components.hooks {
-		candidateView := view
-		candidateView.Messages = cloneAgentMessages(view.Messages)
-		proposal, hookErr := candidate.BeforeRunComplete(run.ctx, candidateView)
-		if hookErr != nil {
-			continue
+	steers := pendingByDelivery(snapshot.Queue, session.DeliverySteer)
+	if len(steers) == 0 {
+		goalProposals, goalHandled, goalErr := r.evaluateGoalCompletion(run, snapshot)
+		if goalErr != nil {
+			return "", false, false, goalErr
 		}
-		for _, input := range proposal.Messages {
-			if input.Valid() {
-				proposals = append(proposals, agent.MessageInput{Parts: cloneRuntimeParts(input.Parts)})
+		proposals = append(proposals, goalProposals...)
+		if !goalHandled {
+			view := hook.RunCompleteView{
+				SessionID: r.id(), RunID: run.id, Revision: snapshot.Revision,
+				ModelConfig: cloneRuntimeConfig(run.config), Messages: cloneHookMessages(snapshot.History),
+			}
+			for _, candidate := range r.components.hooks {
+				candidateView := view
+				candidateView.Messages = cloneAgentMessages(view.Messages)
+				proposal, hookErr := candidate.BeforeRunComplete(run.ctx, candidateView)
+				if hookErr != nil {
+					continue
+				}
+				for _, input := range proposal.Messages {
+					if input.Valid() {
+						proposals = append(proposals, agent.MessageInput{Parts: cloneRuntimeParts(input.Parts)})
+					}
+				}
 			}
 		}
 	}
@@ -454,7 +525,12 @@ func (r *runtimeInstance) continueAfterCompletion(run *activeRun) (agent.StepID,
 	if err != nil {
 		return "", false, false, err
 	}
-	steers := pendingByDelivery(snapshot.Queue, session.DeliverySteer)
+	steers = pendingByDelivery(snapshot.Queue, session.DeliverySteer)
+	if len(steers) > 0 {
+		// A user steer arriving during Goal/Hook evaluation takes precedence over
+		// autonomous continuation proposed from an older Session revision.
+		proposals = nil
+	}
 	if len(steers) == 0 && len(proposals) == 0 {
 		return "", false, false, nil
 	}
@@ -474,6 +550,67 @@ func (r *runtimeInstance) continueAfterCompletion(run *activeRun) (agent.StepID,
 	}
 	_, err = r.commitLocked(context.Background(), snapshot.Revision, "follow-on", changes)
 	return nextStep, err == nil, false, err
+}
+
+func (r *runtimeInstance) evaluateGoalCompletion(run *activeRun, snapshot session.Snapshot) ([]agent.MessageInput, bool, error) {
+	if r.components.goalStore == nil || r.components.goalEvaluator == nil {
+		return nil, false, nil
+	}
+	current, ok, err := r.components.goalStore.Current(run.ctx, r.id())
+	if err != nil {
+		return nil, true, fmt.Errorf("standardagent: load current goal: %w", err)
+	}
+	if !ok || current.Status != goal.StatusActive {
+		return nil, false, nil
+	}
+	evaluationStep := goalEvaluationStep(snapshot, run.id)
+	record := goal.DecisionRecord{
+		ID:     fmt.Sprintf("goal-decision-%s-%s-%d", run.id, evaluationStep, current.Version),
+		GoalID: current.ID, SessionID: r.id(), RunID: run.id,
+		StepID: evaluationStep, ExpectedVersion: current.Version, RecordedAt: time.Now().UTC(),
+	}
+	if current.FollowOns >= current.MaxFollowOns {
+		record.Evaluation = goal.Evaluation{Decision: goal.DecisionBlocked, Reason: goal.ReasonFollowOnLimit}
+	} else {
+		recorder := &runtimeAttemptRecorder{runtime: r, run: run, step: record.StepID}
+		record.Evaluation, err = r.components.goalEvaluator.Evaluate(run.ctx, goal.EvaluationRequest{
+			Goal: current, RunID: run.id, StepID: record.StepID, Revision: snapshot.Revision,
+			ModelConfig: cloneRuntimeConfig(run.config), Messages: cloneHookMessages(snapshot.History),
+		}, recorder)
+		if err != nil || record.Evaluation.Validate() != nil {
+			record.Evaluation = goal.Evaluation{Decision: goal.DecisionBlocked, Reason: goal.ReasonEvaluatorFailure}
+		}
+	}
+	latest, err := r.session.View(run.ctx)
+	if err != nil {
+		return nil, true, fmt.Errorf("standardagent: verify goal decision revision: %w", err)
+	}
+	if len(pendingByDelivery(latest.Queue, session.DeliverySteer)) > 0 {
+		// This View is the linearization point for completion evaluation. A user
+		// steer already accepted while the Evaluator was running invalidates the
+		// stale decision; the caller will consume that steer as the next step.
+		return nil, true, nil
+	}
+	if _, err := r.components.goalStore.RecordDecision(context.WithoutCancel(run.ctx), record); err != nil {
+		if errors.Is(err, goal.ErrVersionConflict) {
+			return nil, true, nil
+		}
+		return nil, true, fmt.Errorf("standardagent: record goal decision: %w", err)
+	}
+	if record.Evaluation.Decision != goal.DecisionContinue {
+		return nil, true, nil
+	}
+	return []agent.MessageInput{{Parts: cloneRuntimeParts(record.Evaluation.NextInstruction.Parts)}}, true, nil
+}
+
+func goalEvaluationStep(snapshot session.Snapshot, runID agent.RunID) agent.StepID {
+	for index := len(snapshot.History) - 1; index >= 0; index-- {
+		fact := snapshot.History[index]
+		if fact.Message != nil && fact.Message.RunID == runID && fact.Message.StepID.Valid() {
+			return fact.Message.StepID
+		}
+	}
+	return agent.StepID("goal-evaluation")
 }
 
 func appendInputConsumption(changes []session.Change, item session.QueueItem, runID agent.RunID, stepID agent.StepID) []session.Change {

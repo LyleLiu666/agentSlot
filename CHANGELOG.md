@@ -4,6 +4,39 @@ This file records published AgentSlot releases. The project is pre-1.0: a
 validation release is usable through Go modules, but its public API may change
 when real consumers expose a flawed boundary.
 
+## Unreleased
+
+### Added
+
+- Goal Store and Evaluator contracts attached to the fixed Runtime completion
+  boundary, including structured continue/blocked/done decisions, bounded
+  follow-ons, CAS-protected state, and a strict model-backed evaluator.
+- Keyed long-term Memory Store plus optional recall/remember/forget tools and
+  a context source that recalls from the latest actual user intent.
+- Agent Provider, Scheduler, Job Store, and addressed append-only Mailbox
+  contracts, reference in-memory stores and scheduler, and optional agent tools.
+- Price Resolver, Quota Guard, Billing Ledger, and a synchronous physical-model
+  Attempt Observer used for pre-dispatch quota and durable accounting intent.
+- Model configuration on the completion Hook view so consumers receive the
+  frozen provider-neutral Run selection without reading product configuration.
+
+### Safety
+
+- A user steer accepted during Goal evaluation invalidates that stale decision.
+- Attempt-observer start rejection compensates earlier observers; finish
+  observer failure cannot erase the physical terminal Attempt fact.
+- Workflow shutdown waits for cancellation-aware providers and persists an
+  explicit cancellation reason. Model-facing Memory and Workflow errors do not
+  expose implementation error text.
+
+### Compatibility and maturity
+
+- The component map now contains 40 standard ecosystems and 27 public
+  AgentSlot-owned domain contracts.
+- The new rows remain `Contracted`; no row is promoted to `Conformant`,
+  `Proven`, or `Assembled` by this change alone.
+- No new release tag has been created.
+
 ## v0.0.2 - 2026-08-20
 
 `v0.0.2` is the first end-to-end framework validation release. It is intended
@@ -44,7 +77,7 @@ or ecosystem-maturity claim.
 ### Compatibility and maturity
 
 - Go 1.25 or newer is required.
-- The component map contains 37 standard ecosystems and 16 public AgentSlot
+- At the `v0.0.2` tag, the component map contained 37 standard ecosystems and 16 public AgentSlot
   domain contracts.
 - All 16 implemented contracts are `Contracted`; none are yet `Conformant` or
   `Proven`. Real-project validation and independent implementations are still

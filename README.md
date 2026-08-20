@@ -20,8 +20,9 @@ Typed component slots and deterministic composition for agent systems.
 The standard AgentRuntime and its model/tool loop are framework behavior, not a
 replaceable Slot. The replaceable parts are narrower: one SessionStore, one
 ModelExecutor, zero or more Tools, ordered Context and Hook
-components, one or more Entrypoints, optional keyed InteractionCommands,
-Policy/Approval, and passive observation chains.
+components, one or more GatewayChannels, optional keyed InteractionCommands,
+Goal completion evaluation, long-term Memory, multi-agent Workflow,
+Policy/Approval, synchronous usage/billing guards, and passive observation chains.
 AgentSlot makes those cardinalities explicit and validates the assembled system
 before startup.
 
@@ -42,6 +43,12 @@ based on integration feedback. The composition core works today; the standard
 component map is normative, while its ecosystems remain at their explicitly
 recorded maturity. Every published tag is immutable; later changes receive a
 new semantic version.
+
+The unreleased main branch also contains contracted Goal, Memory, Workflow,
+pricing, quota, billing-ledger, and physical-attempt observer boundaries. They
+are available to source consumers for integration validation, but remain
+`Contracted`, not `Conformant` or `Proven`; no new tag is implied by their
+presence on main.
 
 The project's architectural result is the quality of its component map, not a
 large interface count. Each accepted ecosystem must have a clear boundary,
