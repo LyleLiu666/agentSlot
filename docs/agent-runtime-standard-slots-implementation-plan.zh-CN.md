@@ -11,8 +11,8 @@
 - 本文记录二者差距以及关闭差距的顺序；
 - 不把上线部署、生产认证或 wire protocol 选择设为开发启动门禁。
 
-当前迁移状态：第 0～4 轮已经完成；第 5～6 轮尚待执行。这里的完成表示合同、实现、
-测试和当轮组件地图已经同步，不表示后续轮次可以省略。
+当前迁移状态：第 0～6 轮已经全部完成。合同、实现、测试、参考 Agent 和组件地图已经
+同步；本文继续保留轮次与验收边界，作为实现证据和后续回归依据。
 
 ## 2. 最终结构
 
@@ -321,7 +321,7 @@ sequenceDiagram
 ### 第 0 轮：权威文档基线
 
 - 把 D-001、D-002、P-001～P-009、历史 Fork 和 GatewayChannel 决策写入权威文档；
-- 明确目标架构与当前代码差距；迁移期间保留交接文档；
+- 明确目标架构与当时代码差距；在迁移期间保留临时交接清单，并在最终轮删除；
 - 不提前修改 Slot 成熟度。
 
 ### 第 1 轮：History 与 SessionStore v1
@@ -362,11 +362,11 @@ sequenceDiagram
 
 ### 第 6 轮：参考 Agent、全链路审查与文档收口
 
-- 参考 Agent 显式配置 ContextRetentionMode、MaxTokensPerRun、ToolKeys、Channel、ActorIdentity；
-- 跑通 FileStore、真实 Executor、Runtime、Channel、工具、Context、Attempt History 和分页 View；
-- 最终组件地图为 37 个生态位、16 个 Contracted，中英文一致；
-- 更新 README、ROADMAP 和实现状态；删除交接文档及链接；
-- 不创建 tag，不发布版本，不新增 `documentation_test.go`。
+- [x] 参考 Agent 显式配置 ContextRetentionMode、MaxTokensPerRun、ToolKeys、Channel、ActorIdentity；
+- [x] 跑通 FileStore、真实 Executor、Runtime、Channel、工具、Context、Attempt History 和分页 View；
+- [x] 最终组件地图为 37 个生态位、16 个 Contracted，中英文一致；
+- [x] 更新 README、ROADMAP 和实现状态；删除交接文档及链接；
+- [x] 不创建 tag，不发布版本，不新增 `documentation_test.go`。
 
 ## 13. 每轮验收
 

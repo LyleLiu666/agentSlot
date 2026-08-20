@@ -237,15 +237,17 @@ ToolKeys 是严格白名单。nil、空列表和未配置都表示不暴露工�
 
 开发者若需要完全不同的循环，可以直接使用通用 AgentSlot 核心定义项目本地 Profile，但不能把它称为标准 AgentRuntime 的替换实现。
 
-## 14. 当前代码与目标架构的差距
+## 14. 当前实现状态
 
-截至第 5 轮迁移完成，History/SessionStore v1、固定 Manager、历史 Fork、Model Attempt、
+第 0～6 轮迁移已经完成。History/SessionStore v1、固定 Manager、历史 Fork、Model Attempt、
 Context/Token Budget、GatewayChannel、严格 ExpectedRevision、SessionView、History 游标分页、
-单一职责 Hook、异步 SessionCommitObserver 和严格 ToolKeys 白名单已经落地。组件地图当前
-为 37 个标准生态位、16 个 Contracted。
+单一职责 Hook、异步 SessionCommitObserver 和严格 ToolKeys 白名单均已落地。参考 Agent
+通过 FileStore、真实 OpenAI-compatible Executor、固定 Runtime/Gateway、多个 Channel、
+Bash、完整 Context、Attempt History 和 Gateway 游标分页的全链路测试。组件地图当前为
+37 个标准生态位、16 个 Contracted。
 
-剩余差距只有参考 Agent 的最终显式配置、完整真实链路验收和文档交接清理。这是迁移
-任务，不是未决架构，也不能用上线前运维条件阻塞开发验证。
+Contracted 仍不等于 Conformant 或 Proven。共享一致性套件、第二个独立实现、生产认证、
+远程 wire protocol 和分布式 Session 所有权属于后续成熟度工作，不反向否定本轮架构完成。
 
 ## 15. 明确不作为开发门禁的事项
 

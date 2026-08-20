@@ -30,32 +30,74 @@ import (
 )
 
 type referenceConfig struct {
-	providerKey    string
-	providerURL    string
-	apiKey         string
-	modelID        string
-	workspace      string
-	sessionDir     string
-	httpHosts      []string
-	approveEffects bool
-	sessionID      agent.SessionID
-	input          io.ReadCloser
-	output         io.Writer
-	errorOutput    io.Writer
-	observationOut io.Writer
+	providerKey          string
+	providerURL          string
+	apiKey               string
+	modelID              string
+	workspace            string
+	sessionDir           string
+	httpHosts            []string
+	approveEffects       bool
+	sessionID            agent.SessionID
+	contextRetentionMode standardagent.ContextRetentionMode
+	maxTokensPerRun      int64
+	actor                agent.ActorIdentity
+	input                io.ReadCloser
+	output               io.Writer
+	errorOutput          io.Writer
+	observationOut       io.Writer
 }
 
 func buildReference(config referenceConfig) (*agentslot.Application, *cli.Channel, error) {
+	return buildReferenceWithChannels(config)
+}
+
+func buildReferenceWithChannels(config referenceConfig, additionalChannels ...agentslot.Module) (*agentslot.Application, *cli.Channel, error) {
+	agentID := agent.AgentID("reference-agent")
+	workspaceID := agent.WorkspaceID("local-workspace")
+	if config.sessionID.Valid() {
+		agentID, workspaceID = "", ""
+	}
+	cliConfig := cli.Config{
+		AgentID: agentID, WorkspaceID: workspaceID, SessionID: config.sessionID,
+		Actor: config.actor, Input: config.input, Output: config.output, ErrorOutput: config.errorOutput,
+	}
+	channel, err := cli.New(cliConfig)
+	if err != nil {
+		return nil, nil, err
+	}
+	channels := []agentslot.Module{standardagent.NewGatewayChannelModule("reference.channel.cli", "cli", channel)}
+	channels = append(channels, additionalChannels...)
+	application, err := buildReferenceApplication(config, channels...)
+	if err != nil {
+		return nil, nil, err
+	}
+	return application, channel, nil
+}
+
+func buildReferenceApplication(config referenceConfig, channels ...agentslot.Module) (*agentslot.Application, error) {
 	if config.providerKey == "" || config.providerURL == "" || config.modelID == "" {
-		return nil, nil, errors.New("reference: provider key, URL, and model ID are required")
+		return nil, errors.New("reference: provider key, URL, and model ID are required")
 	}
 	if pathWithin(config.sessionDir, config.workspace) {
-		return nil, nil, errors.New("reference: Session storage must be outside workspace tool access")
+		return nil, errors.New("reference: Session storage must be outside workspace tool access")
+	}
+	if !config.contextRetentionMode.Valid() {
+		return nil, errors.New("reference: ContextRetentionMode must be explicit and valid")
+	}
+	if config.maxTokensPerRun < 0 {
+		return nil, errors.New("reference: MaxTokensPerRun cannot be negative")
+	}
+	if !config.actor.Valid() {
+		return nil, errors.New("reference: ActorIdentity must be explicit and valid")
+	}
+	if len(channels) == 0 {
+		return nil, errors.New("reference: at least one GatewayChannel module is required")
 	}
 	defaultModel := model.Config{ProviderKey: config.providerKey, ModelID: config.modelID, Reasoning: model.ReasoningDefault}
 	sessions, err := session.NewFileModule(config.sessionDir)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	provider, err := openaicompat.NewModule(openaicompat.Config{
 		ProviderKey: config.providerKey, BaseURL: config.providerURL, APIKey: config.apiKey,
@@ -72,32 +114,32 @@ func buildReference(config referenceConfig) (*agentslot.Application, *cli.Channe
 		MaxAttempts: 3, RetryBackoff: 250 * time.Millisecond, RequestTimeout: 2 * time.Minute,
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	bashTool, err := bash.NewModule(bash.Config{
 		WorkingDirectory: config.workspace, Environment: map[string]string{"PATH": "/usr/bin:/bin", "LANG": "C"},
 		Timeout: 30 * time.Second, MaxStdoutBytes: 1 << 20, MaxStderrBytes: 1 << 20,
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	fileTools, err := files.NewModule(files.Config{RootDirectory: config.workspace, MaxReadBytes: 4 << 20, MaxWriteBytes: 4 << 20})
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	httpTool, err := httptool.NewModule(httptool.Config{
 		AllowedHosts: config.httpHosts, AllowedMethods: []string{http.MethodGet, http.MethodHead},
 		Timeout: 30 * time.Second, MaxRequestBytes: 64 << 10, MaxResponseBytes: 4 << 20,
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	guard, err := policy.NewToolRuleGuard(
 		policy.Decision{Effect: policy.RequireApproval, Reason: "tool can change workspace or external state"},
 		policy.ToolRule{ToolKey: files.ReadKey, Decision: policy.Decision{Effect: policy.Allow}},
 	)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	policyModule := referencePolicyModule{
 		guard: guard,
@@ -107,32 +149,24 @@ func buildReference(config referenceConfig) (*agentslot.Application, *cli.Channe
 	}
 	observations, err := jsonlines.NewModule("reference.observations", config.observationOut)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	cliConfig := cli.Config{
-		AgentID: "reference-agent", WorkspaceID: "local-workspace", SessionID: config.sessionID,
-		Input: config.input, Output: config.output, ErrorOutput: config.errorOutput,
+	modules := []agentslot.Module{
+		sessions, provider, bashTool, fileTools, httpTool, policyModule, observations,
+		interaction.NewModelCommandModule(),
 	}
-	if config.sessionID.Valid() {
-		cliConfig.AgentID, cliConfig.WorkspaceID = "", ""
-	}
-	channel, err := cli.New(cliConfig)
-	if err != nil {
-		return nil, nil, err
-	}
+	modules = append(modules, channels...)
 	application := standardagent.NewApplication(standardagent.ApplicationSpec{
 		Name: "reference-agent", DefaultModelConfig: defaultModel,
 		RuntimeConfig: standardagent.AgentRuntimeConfig{
-			SystemPrompt: "You are a careful coding agent. Use installed tools only when they materially help the user.",
-			ToolKeys:     []string{bash.Key, files.ReadKey, files.WriteKey, files.EditKey, httptool.Key},
+			SystemPrompt:         "You are a careful coding agent. Use installed tools only when they materially help the user.",
+			ToolKeys:             []string{bash.Key, files.ReadKey, files.WriteKey, files.EditKey, httptool.Key},
+			ContextRetentionMode: config.contextRetentionMode,
+			MaxTokensPerRun:      config.maxTokensPerRun,
 		},
-		Modules: []agentslot.Module{
-			sessions, provider, bashTool, fileTools, httpTool, policyModule, observations,
-			interaction.NewModelCommandModule(),
-			standardagent.NewGatewayChannelModule("reference.channel.cli", "cli", channel),
-		},
+		Modules: modules,
 	})
-	return application, channel, nil
+	return application, nil
 }
 
 type referencePolicyModule struct {
@@ -164,6 +198,8 @@ func main() {
 		apiKey:      os.Getenv("AGENTSLOT_API_KEY"), modelID: environment("AGENTSLOT_MODEL", "gpt-4.1-mini"),
 		workspace: workspace, sessionDir: environment("AGENTSLOT_SESSION_DIR", filepath.Join(configDirectory, "agentslot", "reference", "sessions")),
 		httpHosts: hosts, approveEffects: environmentBoolean("AGENTSLOT_APPROVE_EFFECTS"),
+		contextRetentionMode: standardagent.ContextLatestOnly, maxTokensPerRun: 0,
+		actor: agent.ActorIdentity{Kind: agent.ActorLocalUser, ID: "reference-cli"},
 		input: os.Stdin, output: os.Stdout, errorOutput: os.Stderr, observationOut: os.Stderr,
 	}
 	application, channel, err := buildReference(config)

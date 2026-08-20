@@ -260,7 +260,9 @@ ToolKeys 的 nil、空列表和未配置统一表示不暴露工具。框架现�
 `model` 命令、函数式进程内 GatewayChannel、行式 CLI Channel、Gateway live event、非流式同 Run
 聚合、SessionView/revision 重连、OpenAI Chat Compatible Executor、FileSessionStore、
 JSON Lines 观察模块和无具体 Runtime 分支的参考 Agent。所有这些仍是开发与合同证据：
-尚无生态位达到 Conformant 或 Proven；下一步是共享 conformance suite、更多独立适配器
+参考 Agent 已用 FileStore、真实 OpenAI-compatible Executor、固定 Runtime/Gateway、
+CLI 与进程内 Channel、Bash、完整 Context、Attempt History 和游标分页完成全链路回归。
+第 0～6 轮架构迁移至此收口。尚无生态位达到 Conformant 或 Proven；下一步是共享 conformance suite、更多独立适配器
 与跨进程 Gateway 能力，不把完整生产部署条件错误设成开发门禁。
 
 ## 9. 参考实现分三层

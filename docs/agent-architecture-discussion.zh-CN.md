@@ -14,9 +14,8 @@
 [AgentRuntime 与标准 Slot 实施计划](agent-runtime-standard-slots-implementation-plan.zh-CN.md)。
 完整对象所有权、Gateway 主链路、包依赖和部署边界见
 [AgentSlot 标准 Agent 框架全景架构](agent-framework-architecture.zh-CN.md)。
-2026-08-20 复核结论已经写入本文。迁移期间暂时保留
-[Agent 架构复核交接记录](agent-architecture-review-handoff.zh-CN.md)作为逐项核对清单；
-它不是第二份权威规范，代码和组件地图全部收口后删除。
+2026-08-20 复核结论已经写入本文并完成代码迁移；临时交接清单已经删除，本文是这些
+长期架构决策的唯一权威账本。
 
 ## 2. 总体对象关系
 
@@ -540,7 +539,7 @@ Run/Step。sub-agent 是独立执行参与者，必须拥有独立 Session，并
 
 ## 10. 2026-08-20 架构复核定案
 
-本节把交接记录中的 D-001、D-002 和 P-001～P-009 正式关闭。这里记录的是长期架构
+本节把外部复核提出的 D-001、D-002 和 P-001～P-009 正式关闭。这里记录的是长期架构
 决定，不是首版实现折中；详细不变量已经合并到前述 A 系列决策和全景架构。
 
 ### D-001 固定 SessionManager，可替换 SessionStore

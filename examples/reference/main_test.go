@@ -16,6 +16,10 @@ import (
 	"time"
 
 	agent "github.com/LyleLiu666/agentSlot/agent"
+	"github.com/LyleLiu666/agentSlot/interaction"
+	"github.com/LyleLiu666/agentSlot/interaction/inprocess"
+	"github.com/LyleLiu666/agentSlot/session"
+	"github.com/LyleLiu666/agentSlot/standardagent"
 )
 
 func TestReferenceAgentRunsRealProviderBashSessionGatewayAndRuntimeChain(t *testing.T) {
@@ -62,6 +66,8 @@ func TestReferenceAgentRunsRealProviderBashSessionGatewayAndRuntimeChain(t *test
 	config := referenceConfig{
 		providerKey: "test-provider", providerURL: server.URL, modelID: "test-model",
 		workspace: workspace, sessionDir: sessionDirectory, httpHosts: []string{parsed.Host}, approveEffects: true,
+		contextRetentionMode: standardagent.ContextLatestOnly, maxTokensPerRun: 0,
+		actor: agent.ActorIdentity{Kind: agent.ActorLocalUser, ID: "reference-test-user"},
 		input: io.NopCloser(strings.NewReader("run the check\n/quit\n")), output: &output, errorOutput: &errorOutput, observationOut: io.Discard,
 	}
 	application, channel, err := buildReference(config)
@@ -73,10 +79,11 @@ func TestReferenceAgentRunsRealProviderBashSessionGatewayAndRuntimeChain(t *test
 		t.Fatal(err)
 	}
 	waitReferenceCLI(t, channel.Done())
-	stopContext, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := running.Stop(stopContext); err != nil {
-		t.Fatal(err)
+	stopContext, stopCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	stopErr := running.Stop(stopContext)
+	stopCancel()
+	if stopErr != nil {
+		t.Fatal(stopErr)
 	}
 	if channel.Err() != nil || errorOutput.Len() != 0 {
 		t.Fatalf("CLI error=%v stderr=%q", channel.Err(), errorOutput.String())
@@ -94,18 +101,22 @@ func TestReferenceAgentRunsRealProviderBashSessionGatewayAndRuntimeChain(t *test
 	if len(fields) < 2 {
 		t.Fatalf("session header = %q", output.String())
 	}
-	sessionID := fields[1]
+	sessionID := agentSessionID(fields[1])
 	files, err := os.ReadDir(sessionDirectory)
 	if err != nil || len(files) != 1 {
 		t.Fatalf("persisted sessions = %d, %v", len(files), err)
 	}
+	assertReferenceSessionFacts(t, sessionDirectory, sessionID)
 
 	var resumed bytes.Buffer
-	config.sessionID = agentSessionID(sessionID)
+	config.sessionID = sessionID
 	config.input = io.NopCloser(strings.NewReader("/quit\n"))
 	config.output = &resumed
 	config.errorOutput = io.Discard
-	restarted, resumedCLI, err := buildReference(config)
+	probe := inprocess.New()
+	restarted, resumedCLI, err := buildReferenceWithChannels(config,
+		standardagent.NewGatewayChannelModule("reference.channel.inprocess-test", "in-process test", probe),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,11 +124,19 @@ func TestReferenceAgentRunsRealProviderBashSessionGatewayAndRuntimeChain(t *test
 	if err != nil {
 		t.Fatalf("resume persisted Session: %v", err)
 	}
-	waitReferenceCLI(t, resumedCLI.Done())
-	if err := runningAgain.Stop(stopContext); err != nil {
+	access, err := probe.Access()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(resumed.String(), "session "+sessionID+" revision") {
+	assertReferenceGatewayPagination(t, access, sessionID)
+	waitReferenceCLI(t, resumedCLI.Done())
+	resumeStopContext, resumeStopCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	resumeStopErr := runningAgain.Stop(resumeStopContext)
+	resumeStopCancel()
+	if resumeStopErr != nil {
+		t.Fatal(resumeStopErr)
+	}
+	if !strings.Contains(resumed.String(), "session "+string(sessionID)+" revision") {
 		t.Fatalf("resume output = %q", resumed.String())
 	}
 }
@@ -127,11 +146,134 @@ func TestReferenceAgentRejectsSessionStorageInsideToolWorkspace(t *testing.T) {
 	_, _, err := buildReference(referenceConfig{
 		providerKey: "provider", providerURL: "https://example.invalid", modelID: "model",
 		workspace: workspace, sessionDir: filepath.Join(workspace, ".agentslot", "sessions"),
-		httpHosts: []string{"example.invalid"}, input: io.NopCloser(strings.NewReader("")),
+		contextRetentionMode: standardagent.ContextLatestOnly,
+		actor:                agent.ActorIdentity{Kind: agent.ActorLocalUser, ID: "reference-test-user"},
+		httpHosts:            []string{"example.invalid"}, input: io.NopCloser(strings.NewReader("")),
 		output: io.Discard, errorOutput: io.Discard, observationOut: io.Discard,
 	})
 	if err == nil || !strings.Contains(err.Error(), "outside workspace") {
 		t.Fatalf("overlapping storage error = %v", err)
+	}
+}
+
+func TestReferenceAgentRequiresExplicitRuntimeBoundaryConfiguration(t *testing.T) {
+	base := referenceConfig{
+		providerKey: "provider", providerURL: "https://example.invalid", modelID: "model",
+		workspace: t.TempDir(), sessionDir: filepath.Join(t.TempDir(), "sessions"),
+		contextRetentionMode: standardagent.ContextLatestOnly,
+		actor:                agent.ActorIdentity{Kind: agent.ActorLocalUser, ID: "reference-test-user"},
+		httpHosts:            []string{"example.invalid"}, input: io.NopCloser(strings.NewReader("")),
+		output: io.Discard, errorOutput: io.Discard, observationOut: io.Discard,
+	}
+	tests := []struct {
+		name   string
+		mutate func(*referenceConfig)
+	}{
+		{name: "context retention", mutate: func(config *referenceConfig) { config.contextRetentionMode = "" }},
+		{name: "token budget", mutate: func(config *referenceConfig) { config.maxTokensPerRun = -1 }},
+		{name: "actor identity", mutate: func(config *referenceConfig) { config.actor = agent.ActorIdentity{} }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := base
+			test.mutate(&config)
+			if _, _, err := buildReference(config); err == nil {
+				t.Fatal("invalid reference Runtime boundary configuration was accepted")
+			}
+		})
+	}
+}
+
+func assertReferenceSessionFacts(t *testing.T, directory string, sessionID agent.SessionID) {
+	t.Helper()
+	store, err := session.NewFileStore(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Open(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := store.Close(context.Background()); err != nil {
+			t.Errorf("close inspected FileStore: %v", err)
+		}
+	}()
+	snapshot, err := store.Load(context.Background(), session.SessionRef{SessionID: sessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.ModelConfig.ProviderKey != "test-provider" || snapshot.ModelConfig.ModelID != "test-model" {
+		t.Fatalf("persisted model config = %#v", snapshot.ModelConfig)
+	}
+	request := snapshot.Context.Request
+	if snapshot.Context.Version != 2 || len(snapshot.RetainedContexts) != 0 || request.Config != snapshot.ModelConfig || len(request.Tools) != 5 ||
+		len(request.Inputs) == 0 || request.Inputs[0].SystemPrompt == nil {
+		t.Fatalf("latest complete Context = %#v", snapshot.Context)
+	}
+	attempts := make(map[agent.AttemptID][]session.ModelAttemptKind)
+	var calls, results int
+	var userActor agent.ActorIdentity
+	for _, fact := range snapshot.History {
+		switch {
+		case fact.ModelAttempt != nil:
+			attempts[fact.ModelAttempt.AttemptID] = append(attempts[fact.ModelAttempt.AttemptID], fact.ModelAttempt.Kind)
+		case fact.ToolCall != nil:
+			calls++
+		case fact.ToolResult != nil:
+			results++
+		case fact.Message != nil && fact.Message.Role == agent.RoleUser:
+			userActor = fact.Actor
+		}
+	}
+	if len(attempts) != 2 || calls != 1 || results != 1 {
+		t.Fatalf("History attempt/tool facts = attempts %#v, calls %d, results %d", attempts, calls, results)
+	}
+	for id, kinds := range attempts {
+		if len(kinds) != 2 || kinds[0] != session.AttemptStarted || kinds[1] != session.AttemptSucceeded {
+			t.Fatalf("Attempt %s facts = %#v", id, kinds)
+		}
+	}
+	if userActor != (agent.ActorIdentity{Kind: agent.ActorLocalUser, ID: "reference-test-user"}) {
+		t.Fatalf("durable user ActorIdentity = %#v", userActor)
+	}
+}
+
+func assertReferenceGatewayPagination(t *testing.T, access interaction.GatewayAccess, sessionID agent.SessionID) {
+	t.Helper()
+	view, err := access.View(context.Background(), interaction.SessionViewRequest{SessionID: sessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.SessionID != sessionID || view.Revision == 0 || view.RunState != session.RunIdle || len(view.RecentHistory) == 0 {
+		t.Fatalf("resumed SessionView = %#v", view)
+	}
+	latest, err := access.History(context.Background(), interaction.HistoryRequest{SessionID: sessionID, StepLimit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(latest.Facts) == 0 || !latest.HasMore {
+		t.Fatalf("latest History page = %#v", latest)
+	}
+	older, err := access.History(context.Background(), interaction.HistoryRequest{
+		SessionID: sessionID, BeforeHistorySequence: latest.Facts[0].Sequence, StepLimit: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(older.Facts) == 0 || older.Facts[len(older.Facts)-1].Sequence >= latest.Facts[0].Sequence {
+		t.Fatalf("older History page = %#v after %#v", older, latest)
+	}
+	if latest.Revision != view.Revision || older.Revision != view.Revision {
+		t.Fatalf("History page revisions = %d, %d; View revision = %d", latest.Revision, older.Revision, view.Revision)
+	}
+	seen := make(map[session.HistorySequence]bool, len(latest.Facts))
+	for _, fact := range latest.Facts {
+		seen[fact.Sequence] = true
+	}
+	for _, fact := range older.Facts {
+		if seen[fact.Sequence] {
+			t.Fatalf("History sequence %d appeared in both cursor pages", fact.Sequence)
+		}
 	}
 }
 

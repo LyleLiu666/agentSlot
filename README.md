@@ -348,7 +348,11 @@ registration or startup side effect.
 file-backed Sessions, the OpenAI-compatible Executor, fixed Runtime/Gateway,
 CLI, model command, Policy/Approval, Bash, file and HTTP tools, and JSON Lines
 observations. It never obtains an AgentRuntime or branches on a concrete
-component type.
+component type. Its Runtime explicitly selects `LatestOnly`, an unlimited
+per-Run token budget, a strict ToolKeys allowlist, and a local CLI ActorIdentity.
+The end-to-end test also attaches an in-process Channel to the same Gateway and
+verifies persisted Context, paired physical Attempts, tool facts, resume, View,
+and cursor-based History pagination.
 
 ```sh
 AGENTSLOT_API_KEY=... \
