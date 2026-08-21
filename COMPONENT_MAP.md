@@ -58,7 +58,7 @@ Its description uses `AssemblyDescription` and the `agentslot.assembly/v0` schem
 | Slot ID | Standard contract | Kind | Required cardinality | Responsibility |
 | --- | --- | --- | --- | --- |
 | `agent.loop` | `AgentLoop` | `One` | exactly 1 | Owns each durable Run's advance/continue/stop decision over the framework Step protocol. |
-| `session.store` | `SessionStore` | `One` | exactly 1 | Persists the Session aggregate—History, Context, Queue, RunJournal, SessionModelConfig, revisions, and atomic CAS transactions. |
+| `session.store` | `SessionStore` | `One` | exactly 1 | Persists the Session aggregate—History, Context, Queue, RunJournal, SessionModelConfig, revisions, and atomic CAS transactions—and lists resumable Sessions by Agent/Workspace. |
 | `model.executor` | `ModelExecutor` | `One` | exactly 1 | Executes one logical model call while containing provider-specific physical attempts, streaming recovery, and final failure semantics. |
 | `gateway.channel` | `GatewayChannel` | `Many` | at least 1 | Binds a TUI, Web, desktop, function, HTTP, ACP, or another caller-facing channel to the fixed Gateway. |
 
@@ -249,7 +249,7 @@ decisions must use policy/approval components rather than concrete UI checks.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `session.store` | `SessionStore` | `One` | globally required | Persists the whole Session aggregate, including SessionModelConfig, and its atomic revision/CAS transactions; History remains the unique append-only fact view inside that aggregate. | Contracted |
+| `session.store` | `SessionStore` | `One` | globally required | Persists the whole Session aggregate, including SessionModelConfig, and its atomic revision/CAS transactions; lists resumable Sessions ordered by update time within an Agent/Workspace scope; History remains the unique append-only fact view inside that aggregate. | Contracted |
 | `context.source` | `ContextSource` | `Chain` | optional | Contributes ordered context for a model turn. | Contracted |
 | `context.compactor` | `ContextCompactor` | `One` | optional | Replaces the current full Context with a smaller conversation-message projection without rewriting History; AgentRuntime reattaches fixed prompts/tools and validates protocol and hard token limits. | Contracted |
 | `memory.store` | `MemoryStore` | `Many` | optional | Recalls, remembers, and forgets governed long-term memory outside authoritative conversation History. | Contracted |

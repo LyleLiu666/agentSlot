@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	agentslot "github.com/LyleLiu666/agentSlot"
 	agent "github.com/LyleLiu666/agentSlot/agent"
@@ -71,6 +72,7 @@ type SessionSummary struct {
 	AgentID     agent.AgentID
 	WorkspaceID agent.WorkspaceID
 	Revision    agent.Revision
+	UpdatedAt   time.Time
 }
 
 type CreateSessionRequest struct {

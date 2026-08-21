@@ -40,6 +40,9 @@ func (store) Commit(context.Context, session.CommitRequest) (session.Commit, err
 func (store) HistoryPage(context.Context, session.HistoryPageRequest) (session.HistoryPage, error) {
 	return session.HistoryPage{}, nil
 }
+func (store) ListSessions(context.Context, session.ListRequest) (session.ListResult, error) {
+	return session.ListResult{}, nil
+}
 
 type module struct{}
 

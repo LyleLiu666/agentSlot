@@ -73,6 +73,34 @@ func TestGatewayViewReturnsCurrentAuthoritativeRevision(t *testing.T) {
 	}
 }
 
+func TestGatewayListsPersistedSessionsWithoutOpeningRuntimes(t *testing.T) {
+	store := newSeededStore()
+	entry := &captureChannel{}
+	application := NewApplication(ApplicationSpec{
+		Name: "list-agent", DefaultModelConfig: testDefaultModel(),
+		Modules: []agentslot.Module{
+			componentsModule{store: store},
+			NewGatewayChannelModule("entrypoint.test", "test", entry),
+		},
+	})
+	runtime, err := application.Start(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Stop(context.Background()) })
+
+	listed, err := entry.Access().ListSessions(context.Background(), interaction.ListSessionsRequest{AgentID: "agent-1", WorkspaceID: "workspace-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Sessions) != 2 || !listed.Sessions[0].SessionID.Valid() || listed.Sessions[0].UpdatedAt.IsZero() {
+		t.Fatalf("ListSessions() = %#v", listed.Sessions)
+	}
+	if store.RecoverCalls() != 0 {
+		t.Fatalf("ListSessions opened Session runtimes through Recover %d times", store.RecoverCalls())
+	}
+}
+
 func TestGatewayRejectsInvalidResumeBeforeCallingStore(t *testing.T) {
 	store := newSeededStore()
 	entry := &captureChannel{}
@@ -622,6 +650,9 @@ func (s *seededStore) Commit(ctx context.Context, request session.CommitRequest)
 }
 func (s *seededStore) HistoryPage(ctx context.Context, request session.HistoryPageRequest) (session.HistoryPage, error) {
 	return s.inner.HistoryPage(ctx, request)
+}
+func (s *seededStore) ListSessions(ctx context.Context, request session.ListRequest) (session.ListResult, error) {
+	return s.inner.ListSessions(ctx, request)
 }
 
 type fakeExecutor struct{}
