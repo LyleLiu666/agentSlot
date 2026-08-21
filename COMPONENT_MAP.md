@@ -26,13 +26,13 @@ Current repository reality:
 | --- | ---: |
 | Mapped standard component ecosystems | 41 |
 | Standardized domain vocabularies | 9 |
-| Contracted AgentSlot-owned domain interfaces | 28 |
+| Contracted AgentSlot-owned domain interfaces | 29 |
 | Conformant component ecosystems | 0 |
 | Proven component ecosystems | 0 |
 | Assembled standard component ecosystems | 0 |
 
 The generic composition protocol exports five Go interfaces: `Module`,
-`SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. Twenty-eight
+`SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. Twenty-nine
 domain contracts are now defined across the standard leaf packages; they are
 Contracted but not yet Conformant or Proven.
 
@@ -142,7 +142,7 @@ method-level contract is an engineering result.
 | **Proven** | At least two semantically independent implementations pass the conformance suite. Wrappers over the same implementation count once. |
 | **Assembled** | A reference application exchanges proven implementations through the Slot without concrete-type branches. |
 
-Twenty-eight domain rows are now **Contracted**: each has a public
+Twenty-nine domain rows are now **Contracted**: each has a public
 domain interface, typed Slot, and contract tests. The repository now contains
 independent memory and crash-safe file Session stores, deterministic Fake and
 OpenAI Chat Compatible executors, Bash/file/HTTP tools, in-process and CLI
@@ -284,7 +284,7 @@ memory into a second Session history or infer write scope from prompt text.
 | --- | --- | --- | --- | --- | --- |
 | `workspace.manager` | `WorkspaceManager` | `One` | optional | Defines the files, roots, isolation, and lifetime visible to an agent session or run. | Mapped |
 | `execution.environment` | `ExecutionEnvironment` | `Many` | optional | Executes commands or code in a named local, container, sandbox, or remote environment. | Mapped |
-| `artifact.store` | `ArtifactStore` | `One` | optional | Persists generated files and exposes stable metadata/references. | Mapped |
+| `artifact.store` | `ArtifactStore` | `One` | optional; required by components that consume attachments | Persists immutable inbound or generated content and resolves stable metadata/references without placing binary data or local paths in History. | Contracted |
 | `credential.resolver` | `CredentialResolver` | `One` | optional | Resolves scoped credentials without placing secret values in Assemblies or component descriptions. | Mapped |
 
 ### 6. Policy, authorization, and human approval

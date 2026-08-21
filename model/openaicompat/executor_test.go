@@ -1,8 +1,12 @@
 package openaicompat_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,10 +15,152 @@ import (
 	"testing"
 	"time"
 
+	agentslot "github.com/LyleLiu666/agentSlot"
 	agent "github.com/LyleLiu666/agentSlot/agent"
+	"github.com/LyleLiu666/agentSlot/artifact"
 	"github.com/LyleLiu666/agentSlot/model"
 	"github.com/LyleLiu666/agentSlot/model/openaicompat"
 )
+
+func TestExecutorProjectsImageAttachmentsIntoOpenAIContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		messages := body["messages"].([]any)
+		content := messages[0].(map[string]any)["content"].([]any)
+		if len(content) != 2 || content[0].(map[string]any)["text"] != "what is this?" {
+			t.Errorf("content = %#v", content)
+		}
+		image := content[1].(map[string]any)["image_url"].(map[string]any)
+		if image["url"] != "data:image/png;base64,iVBORw==" {
+			t.Errorf("image URL = %#v", image["url"])
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = writer.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"image\"},\"finish_reason\":\"stop\"}]}\n\n"))
+		_, _ = writer.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+	executor := newExecutorConfig(t, openaicompat.Config{
+		ProviderKey: "openai", BaseURL: server.URL, MaxAttempts: 1,
+		ArtifactStore: &fixtureArtifactStore{entries: map[string]fixtureArtifact{
+			"artifact-image": {metadata: artifact.Metadata{ID: "artifact-image", MediaType: "image/png", Name: "image.png", Size: 4}, body: []byte{0x89, 'P', 'N', 'G'}},
+		}},
+		Models: []openaicompat.Model{{ID: "vision", Title: "Vision", Capabilities: model.ExecutionCapabilities{
+			Media: model.Capabilities{
+				InputModalities:  []model.Modality{model.ModalityText, model.ModalityImage},
+				OutputModalities: []model.Modality{model.ModalityText},
+			},
+			Reasoning: []model.Reasoning{model.ReasoningDefault}, ContextWindowTokens: 100, MaxOutputTokens: 20,
+		}}},
+	})
+	request := requestWithUser("what is this?")
+	request.Config.ModelID = "vision"
+	request.Inputs[0].Message.Parts = append(request.Inputs[0].Message.Parts, agent.MessagePart{
+		Kind: agent.PartAttachment, AttachmentID: "artifact-image", MediaType: "image/png", Name: "image.png",
+	})
+	stream, err := executor.Execute(context.Background(), request, &attemptRecorder{})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	events := receiveUntilTerminal(t, stream)
+	if events[len(events)-1].Kind != model.EventComplete {
+		t.Fatalf("events = %#v", events)
+	}
+}
+
+func TestExecutorCountsImageSemanticsInsteadOfBase64PayloadBytes(t *testing.T) {
+	png, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlN8AAAAASUVORK5CYII=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	png = append(png, bytes.Repeat([]byte{0}, 100_000)...)
+	executor := newExecutorConfig(t, openaicompat.Config{
+		ProviderKey: "openai", BaseURL: "https://example.invalid", MaxAttempts: 1,
+		ArtifactStore: &fixtureArtifactStore{entries: map[string]fixtureArtifact{
+			"artifact-image": {metadata: artifact.Metadata{ID: "artifact-image", MediaType: "image/png", Name: "image.png", Size: int64(len(png))}, body: png},
+		}},
+		Models: []openaicompat.Model{{ID: "vision", Title: "Vision", Capabilities: model.ExecutionCapabilities{
+			Media:     model.Capabilities{InputModalities: []model.Modality{model.ModalityText, model.ModalityImage}, OutputModalities: []model.Modality{model.ModalityText}},
+			Reasoning: []model.Reasoning{model.ReasoningDefault}, ContextWindowTokens: 4_096, MaxOutputTokens: 512,
+		}}},
+	})
+	request := requestWithUser("describe")
+	request.Config.ModelID = "vision"
+	request.Inputs[0].Message.Parts = append(request.Inputs[0].Message.Parts, agent.MessagePart{
+		Kind: agent.PartAttachment, AttachmentID: "artifact-image", MediaType: "image/png", Name: "image.png",
+	})
+	tokens, err := executor.CountTokens(context.Background(), request)
+	if err != nil {
+		t.Fatalf("CountTokens: %v", err)
+	}
+	if tokens <= 0 || tokens >= 4_096 {
+		t.Fatalf("image token estimate = %d", tokens)
+	}
+}
+
+func TestImageCapableModuleRequiresArtifactStoreAtBuildTime(t *testing.T) {
+	config := openaicompat.Config{
+		ProviderKey: "openai", BaseURL: "https://example.invalid", Models: []openaicompat.Model{{
+			ID: "vision", Title: "Vision", Capabilities: model.ExecutionCapabilities{
+				Media:     model.Capabilities{InputModalities: []model.Modality{model.ModalityText, model.ModalityImage}, OutputModalities: []model.Modality{model.ModalityText}},
+				Reasoning: []model.Reasoning{model.ReasoningDefault}, ContextWindowTokens: 100, MaxOutputTokens: 20,
+			},
+		}},
+	}
+	provider, err := openaicompat.NewModule(config)
+	if err != nil {
+		t.Fatalf("NewModule: %v", err)
+	}
+	builder := agentslot.NewBuilder()
+	if err := builder.Install(provider); err != nil {
+		t.Fatalf("Install provider: %v", err)
+	}
+	if _, err := builder.Build(agentslot.RequireOne(model.ExecutorSlot)); !errors.Is(err, agentslot.ErrRequirementUnsatisfied) {
+		t.Fatalf("Build without artifact store = %v", err)
+	}
+
+	provider, err = openaicompat.NewModule(config)
+	if err != nil {
+		t.Fatalf("NewModule retry: %v", err)
+	}
+	storeModule, err := artifact.NewModule("artifact.fixture", &fixtureArtifactStore{})
+	if err != nil {
+		t.Fatalf("artifact module: %v", err)
+	}
+	builder = agentslot.NewBuilder()
+	if err := builder.Install(storeModule); err != nil {
+		t.Fatalf("Install store: %v", err)
+	}
+	if err := builder.Install(provider); err != nil {
+		t.Fatalf("Install provider: %v", err)
+	}
+	if _, err := builder.Build(agentslot.RequireOne(model.ExecutorSlot)); err != nil {
+		t.Fatalf("Build with artifact store: %v", err)
+	}
+}
+
+type fixtureArtifact struct {
+	metadata artifact.Metadata
+	body     []byte
+}
+
+type fixtureArtifactStore struct {
+	entries map[string]fixtureArtifact
+}
+
+func (*fixtureArtifactStore) Write(context.Context, artifact.WriteRequest) (artifact.Metadata, error) {
+	return artifact.Metadata{}, errors.New("not implemented")
+}
+
+func (s *fixtureArtifactStore) Open(_ context.Context, id string) (artifact.Content, error) {
+	entry, ok := s.entries[id]
+	if !ok {
+		return artifact.Content{}, artifact.ErrNotFound
+	}
+	return artifact.Content{Metadata: entry.metadata, Body: io.NopCloser(bytes.NewReader(entry.body))}, nil
+}
 
 func TestExecutorStreamsOpenAICompatibleCompletion(t *testing.T) {
 	recorder := &attemptRecorder{}

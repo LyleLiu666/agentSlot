@@ -239,7 +239,7 @@ ToolKeys 是严格白名单。nil、空列表和未配置都表示不暴露工�
 | 通用装配核心 | 否 | Application、Module、Slot、Assembly、Build/Start/Run、生命周期回滚 |
 | 标准固定层 | 否 | SessionManager、AgentRuntime、Gateway、Registry 和事务/状态不变量 |
 | 标准 Profile 必需 Slot | 是 | AgentLoop、SessionStore、ModelExecutor、GatewayChannel |
-| 可选 Slot | 是 | Provider、Tool、ContextSource、Compactor、Hook、CommitObserver、策略与运维组件 |
+| 可选 Slot | 是 | Provider、Tool、ContextSource、Compactor、Hook、CommitObserver、ArtifactStore、策略与运维组件 |
 | 产品配置 | 可配置 | Prompt、默认模型、ToolKeys、ContextRetentionMode、MaxTokensPerRun、Provider 地址引用 |
 | 内部端口 | 否 | ID 生成、Clock、锁、协调器；测试注入不使其成为公共 Slot |
 
@@ -252,8 +252,8 @@ Context/Token Budget、GatewayChannel、严格 ExpectedRevision、SessionView、
 单一职责 Hook、异步 SessionCommitObserver 和严格 ToolKeys 白名单均已落地。参考 Agent
 通过 FileStore、真实 OpenAI-compatible Executor、固定 Runtime/Gateway、多个 Channel、
 Bash、完整 Context、Attempt History 和 Gateway 游标分页的全链路测试。随后新增的 Goal、
-Memory、Workflow、Billing、同步模型 Attempt 与 AgentLoop 边界已把组件地图推进为 41 个标准生态位、
-28 个 Contracted；这些新增项仍需 LAS 与独立实现继续验证。
+Memory、Workflow、Billing、同步模型 Attempt、AgentLoop 与 ArtifactStore 边界已把组件地图推进为
+41 个标准生态位、29 个 Contracted；这些新增项仍需 LAS 与独立实现继续验证。
 
 Contracted 仍不等于 Conformant 或 Proven。共享一致性套件、第二个独立实现、生产认证、
 远程 wire protocol 和分布式 Session 所有权属于后续成熟度工作，不反向否定本轮架构完成。

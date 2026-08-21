@@ -6,6 +6,10 @@ when real consumers expose a flawed boundary.
 
 ## Unreleased
 
+No changes yet.
+
+## v0.0.3 - 2026-08-21
+
 ### Added
 
 - Goal Store and Evaluator contracts attached to the fixed Runtime completion
@@ -21,6 +25,12 @@ when real consumers expose a flawed boundary.
   frozen provider-neutral Run selection without reading product configuration.
 - `AttemptModuleOptions` for a host-supplied default quota reservation size
   when the selected model Config intentionally omits `max_tokens`.
+- An immutable `ArtifactStore` contract for writing content and resolving the
+  stable references kept in History, without exposing local paths or binary
+  data in provider-neutral messages.
+- Real image attachment projection in the OpenAI Chat Completions-compatible
+  Executor. Image-capable modules now declare `artifact.store` as a typed Build
+  dependency instead of silently converting attachments to placeholder text.
 
 ### Safety
 
@@ -33,11 +43,10 @@ when real consumers expose a flawed boundary.
 
 ### Compatibility and maturity
 
-- The component map now contains 40 standard ecosystems and 27 public
+- The component map now contains 41 standard ecosystems and 29 public
   AgentSlot-owned domain contracts.
 - The new rows remain `Contracted`; no row is promoted to `Conformant`,
   `Proven`, or `Assembled` by this change alone.
-- No new release tag has been created.
 
 ## v0.0.2 - 2026-08-20
 

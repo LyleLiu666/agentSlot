@@ -24,14 +24,14 @@
 | --- | ---: |
 | 已映射的标准组件生态位 | 41 |
 | 已标准化的领域词汇 | 9 |
-| 已定义契约的 AgentSlot 自有领域接口 | 28 |
+| 已定义契约的 AgentSlot 自有领域接口 | 29 |
 | 通过一致性验证的组件生态位 | 0 |
 | 已由独立实现证明的组件生态位 | 0 |
 | 已进入标准装配的组件生态位 | 0 |
 
 独立的组装协议目前导出了五个 Go 接口：`Module`、`SlotRequirer`、
 `Registrar`、`Contribution` 和 `Lifecycle`。它们是框架机制，不能代替
-地图中 41 个 Agent 领域组件生态位；其中 28 个已经具备公开合同。
+地图中 41 个 Agent 领域组件生态位；其中 29 个已经具备公开合同。
 
 表中 9 组有限领域词汇分别是：Agent Loop 结果、模型能力、工具调用、策略/审批、观察、
 Goal、Memory、Workflow 和 Billing。这个数字只统计为了互操作而固定的有限词汇和事实，不统计普通常量。
@@ -124,7 +124,7 @@ flowchart LR
 | **已证明（Proven）** | 至少两个语义上独立的实现通过一致性测试；同一实现的不同包装只能算一个。 |
 | **已装配（Assembled）** | 参考应用能够通过 Slot 替换已证明的实现，不包含具体类型分支。 |
 
-当前已有 28 个领域生态位进入**已定义契约（Contracted）**：它们拥有公开
+当前已有 29 个领域生态位进入**已定义契约（Contracted）**：它们拥有公开
 领域接口、typed Slot 和合同测试。仓库已经包含相互独立的内存/崩溃安全文件
 SessionStore、确定性 Fake/OpenAI Chat Compatible Executor、Bash/文件/HTTP 工具、
 进程内/CLI GatewayChannel、确定性的工具策略与审批组件，以及 JSON Lines 观察模块；固定
@@ -251,7 +251,7 @@ recall/remember/forget 工具和预召回 ContextSource。适配器可以把这�
 | --- | --- | --- | --- | --- | --- |
 | `workspace.manager` | `WorkspaceManager` | `One` | 可选 | 定义 Agent Session 或 Run 可见的文件、根目录、隔离和生命周期。 | 已映射 |
 | `execution.environment` | `ExecutionEnvironment` | `Many` | 可选 | 在具名的本地、容器、沙箱或远程环境中执行命令或代码。 | 已映射 |
-| `artifact.store` | `ArtifactStore` | `One` | 可选 | 持久化生成文件，并提供稳定的元数据和引用。 | 已映射 |
+| `artifact.store` | `ArtifactStore` | `One` | 可选；消费附件的组件必须依赖 | 持久化不可变的输入附件或生成内容，通过稳定元数据和引用读取；History 不保存二进制内容或本地路径。 | 已定义契约 |
 | `credential.resolver` | `CredentialResolver` | `One` | 可选 | 解析有作用域的凭证，不在 Assembly 或组件描述中放入密钥值。 | 已映射 |
 
 ### 6. 策略、授权与人工审批
