@@ -46,11 +46,24 @@ func withRuntime[T any](ctx context.Context, g *gateway, id agent.SessionID, ope
 }
 
 func (g *gateway) ListSessions(ctx context.Context, request interaction.ListSessionsRequest) (interaction.SessionList, error) {
-	return withCoordinator(ctx, g, func(context.Context, *runtimeCoordinator) (interaction.SessionList, error) {
-		// The authoritative list is a persisted Session query, not a projection
-		// of currently open Runtime entries. Session persistence arrives in the
-		// next implementation round, so this skeleton must not return a lie.
-		return interaction.SessionList{}, runtimeUnavailable("gateway.list_sessions")
+	return withCoordinator(ctx, g, func(operationCtx context.Context, coordinator *runtimeCoordinator) (interaction.SessionList, error) {
+		if !request.AgentID.Valid() || !request.WorkspaceID.Valid() {
+			return interaction.SessionList{}, invalidInput("gateway.list_sessions", "AgentID and WorkspaceID are required")
+		}
+		listed, err := coordinator.components.store.ListSessions(operationCtx, session.ListRequest{
+			AgentID: request.AgentID, WorkspaceID: request.WorkspaceID,
+		})
+		if err != nil {
+			return interaction.SessionList{}, err
+		}
+		result := interaction.SessionList{Sessions: make([]interaction.SessionSummary, len(listed.Sessions))}
+		for index, summary := range listed.Sessions {
+			result.Sessions[index] = interaction.SessionSummary{
+				SessionID: summary.SessionID, AgentID: summary.AgentID, WorkspaceID: summary.WorkspaceID,
+				Revision: summary.Revision, UpdatedAt: summary.UpdatedAt,
+			}
+		}
+		return result, nil
 	})
 }
 

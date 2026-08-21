@@ -569,6 +569,28 @@ type SessionStore interface {
 	Recover(context.Context, SessionRef) (Snapshot, error)
 	Commit(context.Context, CommitRequest) (Commit, error)
 	HistoryPage(context.Context, HistoryPageRequest) (HistoryPage, error)
+	ListSessions(context.Context, ListRequest) (ListResult, error)
+}
+
+// ListRequest selects persisted Sessions in one Agent/Workspace scope. The
+// store, rather than currently open runtimes, is the authority for this query.
+type ListRequest struct {
+	AgentID     agent.AgentID
+	WorkspaceID agent.WorkspaceID
+}
+
+// SessionSummary is the stable persisted projection used by entrypoints for
+// resume pickers. It contains no message content or product configuration.
+type SessionSummary struct {
+	SessionID   agent.SessionID
+	AgentID     agent.AgentID
+	WorkspaceID agent.WorkspaceID
+	Revision    agent.Revision
+	UpdatedAt   time.Time
+}
+
+type ListResult struct {
+	Sessions []SessionSummary
 }
 
 type HistoryPageRequest struct {

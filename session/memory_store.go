@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	agent "github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/model"
@@ -23,6 +24,7 @@ import (
 type memoryAggregate struct {
 	snapshot    Snapshot
 	idempotency map[string]memoryCommit
+	updatedAt   time.Time
 }
 
 type memoryCommit struct {
@@ -80,8 +82,32 @@ func (s *MemoryStore) Create(ctx context.Context, initial NewSession) (Snapshot,
 		Fork:        initial.Fork,
 	})
 	copy.Session.Revision = copy.Revision
-	s.sessions[copy.Session.ID] = &memoryAggregate{snapshot: copy, idempotency: make(map[string]memoryCommit)}
+	s.sessions[copy.Session.ID] = &memoryAggregate{snapshot: copy, idempotency: make(map[string]memoryCommit), updatedAt: time.Now().UTC()}
 	return cloneSnapshot(copy), nil
+}
+
+func (s *MemoryStore) ListSessions(ctx context.Context, request ListRequest) (ListResult, error) {
+	if err := contextErr(ctx, "session.list"); err != nil {
+		return ListResult{}, err
+	}
+	if !request.AgentID.Valid() || !request.WorkspaceID.Valid() {
+		return ListResult{}, invalid("session.list", "agent ID and workspace ID are required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := ListResult{Sessions: make([]SessionSummary, 0)}
+	for _, aggregate := range s.sessions {
+		current := aggregate.snapshot
+		if current.Session.AgentID != request.AgentID || current.Session.WorkspaceID != request.WorkspaceID {
+			continue
+		}
+		result.Sessions = append(result.Sessions, SessionSummary{
+			SessionID: current.Session.ID, AgentID: current.Session.AgentID, WorkspaceID: current.Session.WorkspaceID,
+			Revision: current.Revision, UpdatedAt: aggregate.updatedAt,
+		})
+	}
+	sortSessionSummaries(result.Sessions)
+	return result, nil
 }
 
 func (s *MemoryStore) HistoryPage(ctx context.Context, request HistoryPageRequest) (HistoryPage, error) {
@@ -139,6 +165,7 @@ func (s *MemoryStore) Recover(ctx context.Context, ref SessionRef) (Snapshot, er
 	if changed {
 		aggregate.snapshot.Revision++
 		aggregate.snapshot.Session.Revision = aggregate.snapshot.Revision
+		aggregate.updatedAt = time.Now().UTC()
 	}
 	return cloneSnapshot(aggregate.snapshot), nil
 }
@@ -179,6 +206,7 @@ func (s *MemoryStore) Commit(ctx context.Context, request CommitRequest) (Commit
 	working.Revision++
 	working.Session.Revision = working.Revision
 	aggregate.snapshot = working
+	aggregate.updatedAt = time.Now().UTC()
 	first, last := appendedHistoryRange(previousHistoryLength, len(working.History))
 	result := Commit{
 		SessionID: request.SessionID, Revision: working.Revision,

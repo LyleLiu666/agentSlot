@@ -10,7 +10,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	agentslot "github.com/LyleLiu666/agentSlot"
 	agent "github.com/LyleLiu666/agentSlot/agent"
@@ -113,7 +115,7 @@ func (s *FileStore) Create(ctx context.Context, initial NewSession) (Snapshot, e
 		Fork: initial.Fork,
 	})
 	snapshot.Session.Revision = snapshot.Revision
-	document := fileStoreDocument{Format: fileStoreFormat, Snapshot: snapshot, Idempotency: make(map[string]fileStoreCommit)}
+	document := fileStoreDocument{Format: fileStoreFormat, Snapshot: snapshot, UpdatedAt: time.Now().UTC(), Idempotency: make(map[string]fileStoreCommit)}
 	if err := s.persistLocked(ctx, path, document); err != nil {
 		return Snapshot{}, err
 	}
@@ -137,6 +139,48 @@ func (s *FileStore) HistoryPage(ctx context.Context, request HistoryPageRequest)
 		return HistoryPage{}, err
 	}
 	return historyPage(document.Snapshot.History, request)
+}
+
+func (s *FileStore) ListSessions(ctx context.Context, request ListRequest) (ListResult, error) {
+	if err := contextErr(ctx, "session.file_store.list"); err != nil {
+		return ListResult{}, err
+	}
+	if !request.AgentID.Valid() || !request.WorkspaceID.Valid() {
+		return ListResult{}, invalid("session.file_store.list", "agent ID and workspace ID are required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.ensureOpenLocked("session.file_store.list"); err != nil {
+		return ListResult{}, err
+	}
+	entries, err := os.ReadDir(s.directory)
+	if err != nil {
+		return ListResult{}, agent.NewError(agent.ErrorUnavailable, "session.file_store.list", "cannot read storage directory", err)
+	}
+	result := ListResult{Sessions: make([]SessionSummary, 0)}
+	for _, entry := range entries {
+		if err := contextErr(ctx, "session.file_store.list"); err != nil {
+			return ListResult{}, err
+		}
+		if !entry.Type().IsRegular() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(s.directory, entry.Name())
+		document, err := s.readDocumentLocked(path, "")
+		if err != nil {
+			return ListResult{}, err
+		}
+		current := document.Snapshot
+		if current.Session.AgentID != request.AgentID || current.Session.WorkspaceID != request.WorkspaceID {
+			continue
+		}
+		result.Sessions = append(result.Sessions, SessionSummary{
+			SessionID: current.Session.ID, AgentID: current.Session.AgentID, WorkspaceID: current.Session.WorkspaceID,
+			Revision: current.Revision, UpdatedAt: document.UpdatedAt,
+		})
+	}
+	sortSessionSummaries(result.Sessions)
+	return result, nil
 }
 
 func (s *FileStore) Load(ctx context.Context, ref SessionRef) (Snapshot, error) {
@@ -181,6 +225,7 @@ func (s *FileStore) Recover(ctx context.Context, ref SessionRef) (Snapshot, erro
 	if changed {
 		document.Snapshot.Revision++
 		document.Snapshot.Session.Revision = document.Snapshot.Revision
+		document.UpdatedAt = time.Now().UTC()
 		if err := s.persistLocked(ctx, s.path(ref.SessionID), document); err != nil {
 			return Snapshot{}, err
 		}
@@ -232,6 +277,7 @@ func (s *FileStore) Commit(ctx context.Context, request CommitRequest) (Commit, 
 		FirstHistorySequence: first, LastHistorySequence: last, Applied: true,
 	}
 	document.Snapshot = working
+	document.UpdatedAt = time.Now().UTC()
 	if document.Idempotency == nil {
 		document.Idempotency = make(map[string]fileStoreCommit)
 	}
@@ -245,6 +291,7 @@ func (s *FileStore) Commit(ctx context.Context, request CommitRequest) (Commit, 
 type fileStoreDocument struct {
 	Format      string                     `json:"format"`
 	Snapshot    Snapshot                   `json:"snapshot"`
+	UpdatedAt   time.Time                  `json:"updated_at,omitempty"`
 	Idempotency map[string]fileStoreCommit `json:"idempotency"`
 }
 
@@ -266,7 +313,11 @@ func (s *FileStore) path(id agent.SessionID) string {
 }
 
 func (s *FileStore) readLocked(id agent.SessionID) (fileStoreDocument, error) {
-	path := s.path(id)
+	return s.readDocumentLocked(s.path(id), id)
+}
+
+func (s *FileStore) readDocumentLocked(path string, expectedID agent.SessionID) (fileStoreDocument, error) {
+	id := expectedID
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return fileStoreDocument{}, agent.NewCodedError(agent.ErrorNotFound, agent.CodeSessionNotFound, "session.file_store.load", "session not found", nil)
@@ -294,6 +345,15 @@ func (s *FileStore) readLocked(id agent.SessionID) (fileStoreDocument, error) {
 	}
 	if info, err = file.Stat(); err != nil || info.Size() > maxFileStoreDocumentBytes {
 		return fileStoreDocument{}, unrecoverableFile(id, "session file changed or exceeded the safety limit while reading", err)
+	}
+	if !id.Valid() {
+		id = document.Snapshot.Session.ID
+	}
+	// Documents written before Session listing existed have no logical update
+	// timestamp. Their file modification time is a one-time migration fallback;
+	// all new writes persist the timestamp inside the crash-safe document.
+	if document.UpdatedAt.IsZero() {
+		document.UpdatedAt = info.ModTime().UTC()
 	}
 	if err := validateFileDocument(id, document); err != nil {
 		return fileStoreDocument{}, unrecoverableFile(id, "session file violates aggregate invariants", err)
