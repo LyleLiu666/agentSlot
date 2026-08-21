@@ -221,6 +221,10 @@ them: explicit `One` values win per Slot, explicit `Many` values win per key,
 and any explicit `Chain` replaces its default chain. Unresolved competing
 defaults fail instead of using installation order. Modules whose contributions
 are all overridden are excluded from construction and lifecycle.
+Reference packages keep explicit `New...Module` constructors and expose
+separate named `NewDefault...Module` wrappers where a standard profile needs a
+replaceable fallback; no package silently changes an existing module's
+selection semantics.
 
 Optional One dependencies use `ResolveOptionalOne`; optional Many and Chain
 dependencies use the same `ResolveMany` and `ResolveChain` calls and receive an

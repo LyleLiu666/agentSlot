@@ -21,17 +21,42 @@ func NewMemoryMailboxModule() agentslot.Module {
 	return memoryMailboxModule{mailbox: NewMemoryMailbox()}
 }
 
-type memoryJobStoreModule struct{ store *MemoryJobStore }
+// NewDefaultMemoryJobStoreModule contributes the in-memory JobStore only when
+// an application has not installed an explicit JobStore. The ordinary
+// NewMemoryJobStoreModule remains an explicit selection.
+func NewDefaultMemoryJobStoreModule() agentslot.Module {
+	return memoryJobStoreModule{store: NewMemoryJobStore(), conditional: true}
+}
+
+// NewDefaultMemoryMailboxModule contributes the in-memory Mailbox only when
+// an application has not installed an explicit Mailbox.
+func NewDefaultMemoryMailboxModule() agentslot.Module {
+	return memoryMailboxModule{mailbox: NewMemoryMailbox(), conditional: true}
+}
+
+type memoryJobStoreModule struct {
+	store       *MemoryJobStore
+	conditional bool
+}
 
 func (memoryJobStoreModule) ID() string { return "job.store.memory" }
 func (m memoryJobStoreModule) Register(reg agentslot.Registrar) error {
+	if m.conditional {
+		return reg.Contribute(agentslot.SetDefault(JobStoreSlot, JobStore(m.store)))
+	}
 	return reg.Contribute(agentslot.Set(JobStoreSlot, JobStore(m.store)))
 }
 
-type memoryMailboxModule struct{ mailbox *MemoryMailbox }
+type memoryMailboxModule struct {
+	mailbox     *MemoryMailbox
+	conditional bool
+}
 
 func (memoryMailboxModule) ID() string { return "mailbox.memory" }
 func (m memoryMailboxModule) Register(reg agentslot.Registrar) error {
+	if m.conditional {
+		return reg.Contribute(agentslot.SetDefault(MailboxSlot, Mailbox(m.mailbox)))
+	}
 	return reg.Contribute(agentslot.Set(MailboxSlot, Mailbox(m.mailbox)))
 }
 

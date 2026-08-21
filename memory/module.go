@@ -73,16 +73,29 @@ func ToolKeys() []string { return []string{ToolRecall, ToolRemember, ToolForget}
 // NewRuntimeModule contributes three standard memory tools and one pre-recall
 // ContextSource backed by the selected keyed MemoryStore.
 func NewRuntimeModule(id, storeKey string, scopes ScopeResolver) (agentslot.Module, error) {
+	return newRuntimeModule(id, storeKey, scopes, false)
+}
+
+// NewDefaultRuntimeModule always appends memory recall context, while each
+// standard memory Tool is contributed only when that Tool key has not been
+// installed explicitly. This lets products replace one Tool without copying
+// or disabling the rest of the memory runtime.
+func NewDefaultRuntimeModule(id, storeKey string, scopes ScopeResolver) (agentslot.Module, error) {
+	return newRuntimeModule(id, storeKey, scopes, true)
+}
+
+func newRuntimeModule(id, storeKey string, scopes ScopeResolver, conditionalTools bool) (agentslot.Module, error) {
 	if id == "" || storeKey == "" || scopes == nil {
 		return nil, errors.New("memory: runtime module requires ID, store key, and scope resolver")
 	}
-	return runtimeModule{id: id, storeKey: storeKey, scopes: scopes}, nil
+	return runtimeModule{id: id, storeKey: storeKey, scopes: scopes, conditionalTools: conditionalTools}, nil
 }
 
 type runtimeModule struct {
-	id       string
-	storeKey string
-	scopes   ScopeResolver
+	id               string
+	storeKey         string
+	scopes           ScopeResolver
+	conditionalTools bool
 }
 
 func (m runtimeModule) ID() string { return m.id }
@@ -101,13 +114,18 @@ func (m runtimeModule) Register(reg agentslot.Registrar) error {
 	}
 	for _, key := range ToolKeys() {
 		key := key
-		contributions = append(contributions, agentslot.AddWith(tool.ToolSlot, key, func(resolver agentslot.Resolver) (tool.Tool, error) {
+		constructor := func(resolver agentslot.Resolver) (tool.Tool, error) {
 			store, err := agentslot.ResolveKey(resolver, StoreSlot, m.storeKey)
 			if err != nil {
 				return nil, err
 			}
 			return newMemoryTool(key, store, m.scopes)
-		}))
+		}
+		if m.conditionalTools {
+			contributions = append(contributions, agentslot.AddDefaultWith(tool.ToolSlot, key, constructor))
+		} else {
+			contributions = append(contributions, agentslot.AddWith(tool.ToolSlot, key, constructor))
+		}
 	}
 	return reg.Contribute(contributions...)
 }
