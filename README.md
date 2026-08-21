@@ -112,6 +112,30 @@ func (m Bundle) Register(r agentslot.Registrar) error {
 }
 ```
 
+An application profile may also install an explicit fallback module without
+forcing every caller to remove that module before supplying a replacement:
+
+```go
+func (m DefaultGeneratorModule) Register(r agentslot.Registrar) error {
+	return r.Contribute(agentslot.SetDefault(GeneratorSlot, m.generator))
+}
+```
+
+Defaults are resolved from the complete module list during `Build`, so module
+installation order does not decide which implementation wins:
+
+- an explicit `One` contribution replaces all defaults for that slot;
+- an explicit `Many` contribution replaces defaults with the same key;
+- any explicit `Chain` contribution replaces the complete default chain;
+- multiple defaults for the same `One` or `Many` key still fail when no
+  explicit contribution resolves the ambiguity.
+
+`SetDefaultWith`, `AddDefaultWith`, and `AppendDefaultWith` provide the same
+behavior for build-time constructors. A fully overridden default module is
+absent from the final Assembly, its constructor is not called, and its
+lifecycle is not started. Defaults are never discovered or injected globally:
+the application must still list every fallback module explicitly.
+
 When one contribution must be constructed from other installed components,
 use a build-time constructor instead of manually assembling it before
 `Build`:
@@ -134,8 +158,8 @@ func (m CatalogModule) RequiredSlots() []agentslot.Requirement {
 }
 ```
 
-`SetWith`, `AddWith`, and `AppendWith` run only after requirements and cycles
-have been validated. Their resolver can read only the owning module's declared
+Build-time constructors run only after defaults, requirements, and cycles have
+been resolved. Their resolver can read only the owning module's declared
 requirements and closes when the constructor returns. Constructors prepare
 components; lifecycle resources still belong in `Start` and `Stop`.
 
@@ -187,11 +211,12 @@ func (m RunnerModule) RequiredSlots() []agentslot.Requirement {
 }
 ```
 
-`Build` validates these requirements, rejects dependency cycles, constructs
-deferred contributions in dependency order, and computes a stable lifecycle
-order. `assembly.Describe()` exposes that order, slot kinds, Go value types,
-contribution owners, keys, module requirements, and profile requirements
-without serializing component values.
+`Build` resolves explicit-over-default selection, validates requirements,
+rejects dependency cycles, constructs deferred contributions in dependency
+order, and computes a stable lifecycle order. `assembly.Describe()` exposes
+that order, slot kinds, Go value types, contribution owners, keys, whether each
+selected contribution was explicit or default, module requirements, and
+profile requirements without serializing component values.
 
 Optional component ecosystems are still declared dependencies rather than
 looked up dynamically. `OptionalOne`, `OptionalMany`, and `OptionalChain` add

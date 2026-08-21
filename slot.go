@@ -95,6 +95,7 @@ type contributionData struct {
 	key         string
 	value       any
 	constructor constructorFunc
+	defaulted   bool
 }
 
 func (c contributionData) contributionData() contributionData { return c }
@@ -114,6 +115,24 @@ func Append[T any](slot ChainSlot[T], value T) Contribution {
 	return contributionData{spec: slot.spec, value: value}
 }
 
+// SetDefault prepares a fallback OneSlot contribution. It is active only when
+// the final build contains no explicit contribution to the slot.
+func SetDefault[T any](slot OneSlot[T], value T) Contribution {
+	return contributionData{spec: slot.spec, value: value, defaulted: true}
+}
+
+// AddDefault prepares a fallback ManySlot contribution. It is active only
+// when the final build contains no explicit contribution with the same key.
+func AddDefault[T any](slot ManySlot[T], key string, value T) Contribution {
+	return contributionData{spec: slot.spec, key: key, value: value, defaulted: true}
+}
+
+// AppendDefault prepares a fallback ChainSlot contribution. Default chain
+// entries are active only when the final build contains no explicit entries.
+func AppendDefault[T any](slot ChainSlot[T], value T) Contribution {
+	return contributionData{spec: slot.spec, value: value, defaulted: true}
+}
+
 // SetWith prepares a OneSlot contribution whose value is constructed during
 // Build. The constructor can resolve only slots declared by its owning
 // module's RequiredSlots method.
@@ -131,6 +150,21 @@ func AddWith[T any](slot ManySlot[T], key string, constructor func(Resolver) (T,
 // during Build.
 func AppendWith[T any](slot ChainSlot[T], constructor func(Resolver) (T, error)) Contribution {
 	return contributionData{spec: slot.spec, constructor: wrapConstructor(constructor)}
+}
+
+// SetDefaultWith is SetDefault with build-time construction.
+func SetDefaultWith[T any](slot OneSlot[T], constructor func(Resolver) (T, error)) Contribution {
+	return contributionData{spec: slot.spec, constructor: wrapConstructor(constructor), defaulted: true}
+}
+
+// AddDefaultWith is AddDefault with build-time construction.
+func AddDefaultWith[T any](slot ManySlot[T], key string, constructor func(Resolver) (T, error)) Contribution {
+	return contributionData{spec: slot.spec, key: key, constructor: wrapConstructor(constructor), defaulted: true}
+}
+
+// AppendDefaultWith is AppendDefault with build-time construction.
+func AppendDefaultWith[T any](slot ChainSlot[T], constructor func(Resolver) (T, error)) Contribution {
+	return contributionData{spec: slot.spec, constructor: wrapConstructor(constructor), defaulted: true}
 }
 
 // Named is one keyed value resolved from a ManySlot.
