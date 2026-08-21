@@ -680,6 +680,7 @@ Run/Step。sub-agent 是独立执行参与者，必须拥有独立 Session，并
   AgentRuntime 位于同一进程，同一 SessionID 只有一个 Runtime；
 - RuntimeRegistry 由启动后的 Application Runtime 持有；Runtime.Stop 必须关闭并清空它；
 - Build 阶段只解析声明的 Slot 依赖并形成稳定依赖集合，运行时不使用服务定位；
+- 产品可以显式安装条件默认贡献：`One` 按 Slot、`Many` 按 key、`Chain` 按整条链由显式贡献覆盖；默认值不会被全局发现，未被采用的默认 Module 不构造也不进入生命周期；
 - 固定 Gateway 是所有用户交互入口的唯一后端边界，不是 Slot，也不是独立部署要求；
 - GatewayChannel 只能调用 GatewayAccess，不能取得 RuntimeAccess 或自行实现模型/工具循环；
 - InteractionCommand 只注册到 Gateway，并只提供 UI-neutral 描述和结构化执行；

@@ -118,3 +118,37 @@ func TestStopAttemptsEveryModuleAndJoinsErrors(t *testing.T) {
 		t.Fatalf("events = %#v, want %#v", events, want)
 	}
 }
+
+func TestOverriddenDefaultModuleDoesNotEnterLifecycle(t *testing.T) {
+	component := agentslot.One[string]("lifecycle.default")
+	var events []string
+	builder := agentslot.NewBuilder()
+	for _, module := range []*lifecycleModule{
+		{
+			testModule: testModule{id: "default", contributions: []agentslot.Contribution{agentslot.SetDefault(component, "default")}},
+			events:     &events,
+		},
+		{
+			testModule: testModule{id: "explicit", contributions: []agentslot.Contribution{agentslot.Set(component, "explicit")}},
+			events:     &events,
+		},
+	} {
+		if err := builder.Install(module); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assembly, err := builder.Build(agentslot.RequireOne(component))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := assembly.Start(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"start:explicit", "stop:explicit"}; !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %#v, want %#v", events, want)
+	}
+}

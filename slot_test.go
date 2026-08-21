@@ -201,3 +201,140 @@ func TestSuccessfulBuildFreezesBuilder(t *testing.T) {
 		t.Fatalf("late install error = %v, want ErrBuilderFrozen", err)
 	}
 }
+
+func TestExplicitOneContributionOverridesDefaultWithoutInstallOrderCoupling(t *testing.T) {
+	for _, modules := range [][]testModule{
+		{
+			{id: "loop.default", contributions: []agentslot.Contribution{agentslot.SetDefault(agentslot.One[string]("replaceable.loop"), "default")}},
+			{id: "loop.explicit", contributions: []agentslot.Contribution{agentslot.Set(agentslot.One[string]("replaceable.loop"), "explicit")}},
+		},
+		{
+			{id: "loop.explicit", contributions: []agentslot.Contribution{agentslot.Set(agentslot.One[string]("replaceable.loop"), "explicit")}},
+			{id: "loop.default", contributions: []agentslot.Contribution{agentslot.SetDefault(agentslot.One[string]("replaceable.loop"), "default")}},
+		},
+	} {
+		loop := agentslot.One[string]("replaceable.loop")
+		builder := agentslot.NewBuilder()
+		for _, module := range modules {
+			if err := builder.Install(module); err != nil {
+				t.Fatalf("install %s: %v", module.id, err)
+			}
+		}
+		assembly, err := builder.Build(agentslot.RequireOne(loop))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, ok := agentslot.Get(assembly, loop); !ok || got != "explicit" {
+			t.Fatalf("loop = %q, %v", got, ok)
+		}
+		description := assembly.Describe()
+		if len(description.Modules) != 1 || description.Modules[0].ID != "loop.explicit" {
+			t.Fatalf("active modules = %#v", description.Modules)
+		}
+		contribution := description.Slots[0].Contributions[0]
+		if contribution.Module != "loop.explicit" || contribution.Source != "explicit" {
+			t.Fatalf("contribution = %#v", contribution)
+		}
+	}
+}
+
+func TestDefaultContributionsResolveByCardinality(t *testing.T) {
+	tools := agentslot.Many[string]("replaceable.tool")
+	hooks := agentslot.Chain[string]("replaceable.hook")
+	builder := agentslot.NewBuilder()
+	for _, module := range []testModule{
+		{id: "defaults", contributions: []agentslot.Contribution{
+			agentslot.AddDefault(tools, "shell", "default-shell"),
+			agentslot.AddDefault(tools, "files", "default-files"),
+			agentslot.AppendDefault(hooks, "default-a"),
+			agentslot.AppendDefault(hooks, "default-b"),
+		}},
+		{id: "explicit", contributions: []agentslot.Contribution{
+			agentslot.Add(tools, "shell", "explicit-shell"),
+			agentslot.Append(hooks, "explicit-hook"),
+		}},
+	} {
+		if err := builder.Install(module); err != nil {
+			t.Fatalf("install %s: %v", module.id, err)
+		}
+	}
+	assembly, err := builder.Build(agentslot.RequireMany(tools, 2), agentslot.RequireChain(hooks, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := agentslot.Lookup(assembly, tools, "shell"); got != "explicit-shell" {
+		t.Fatalf("shell = %q", got)
+	}
+	if got, _ := agentslot.Lookup(assembly, tools, "files"); got != "default-files" {
+		t.Fatalf("files = %q", got)
+	}
+	if got := agentslot.Ordered(assembly, hooks); !reflect.DeepEqual(got, []string{"explicit-hook"}) {
+		t.Fatalf("hooks = %#v", got)
+	}
+	description := assembly.Describe()
+	for _, slot := range description.Slots {
+		if slot.ID != tools.ID() {
+			continue
+		}
+		if got := slot.Contributions; len(got) != 2 || got[0].Key != "files" || got[0].Source != "default" || got[1].Key != "shell" || got[1].Source != "explicit" {
+			t.Fatalf("tool description = %#v", got)
+		}
+	}
+}
+
+func TestAmbiguousDefaultsFailOnlyWhenNoExplicitContributionWins(t *testing.T) {
+	loop := agentslot.One[string]("ambiguous.loop")
+	builder := agentslot.NewBuilder()
+	for _, module := range []testModule{
+		{id: "default.one", contributions: []agentslot.Contribution{agentslot.SetDefault(loop, "one")}},
+		{id: "default.two", contributions: []agentslot.Contribution{agentslot.SetDefault(loop, "two")}},
+	} {
+		if err := builder.Install(module); err != nil {
+			t.Fatalf("install %s: %v", module.id, err)
+		}
+	}
+	if _, err := builder.Build(agentslot.RequireOne(loop)); !errors.Is(err, agentslot.ErrSlotOccupied) {
+		t.Fatalf("ambiguous defaults error = %v", err)
+	}
+	if err := builder.Install(testModule{id: "explicit", contributions: []agentslot.Contribution{agentslot.Set(loop, "explicit")}}); err != nil {
+		t.Fatal(err)
+	}
+	assembly, err := builder.Build(agentslot.RequireOne(loop))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := agentslot.Get(assembly, loop); got != "explicit" {
+		t.Fatalf("loop = %q", got)
+	}
+}
+
+func TestOverriddenDefaultConstructorIsNotBuilt(t *testing.T) {
+	loop := agentslot.One[string]("constructed.loop")
+	dependency := agentslot.One[string]("constructed.default-dependency")
+	called := false
+	builder := agentslot.NewBuilder()
+	if err := builder.Install(&dependentModule{
+		testModule: testModule{id: "default", contributions: []agentslot.Contribution{
+			agentslot.SetDefaultWith(loop, func(resolver agentslot.Resolver) (string, error) {
+				called = true
+				return agentslot.ResolveOne(resolver, dependency)
+			}),
+		}},
+		requirements: []agentslot.Requirement{agentslot.RequireOne(dependency)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := builder.Install(testModule{id: "explicit", contributions: []agentslot.Contribution{agentslot.Set(loop, "explicit")}}); err != nil {
+		t.Fatal(err)
+	}
+	assembly, err := builder.Build(agentslot.RequireOne(loop))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Fatal("overridden default constructor was called")
+	}
+	if got, _ := agentslot.Get(assembly, loop); got != "explicit" {
+		t.Fatalf("loop = %q", got)
+	}
+}

@@ -32,6 +32,7 @@ type SlotDescription struct {
 type ContributionDescription struct {
 	Module string `json:"module"`
 	Key    string `json:"key,omitempty"`
+	Source string `json:"source"`
 }
 
 // RequirementDescription identifies one profile constraint or module slot
@@ -77,9 +78,14 @@ func (a *Assembly) Describe() AssemblyDescription {
 			Contributions: make([]ContributionDescription, 0, len(record.values)),
 		}
 		for _, contribution := range record.values {
+			source := "explicit"
+			if contribution.defaulted {
+				source = "default"
+			}
 			slot.Contributions = append(slot.Contributions, ContributionDescription{
 				Module: contribution.owner,
 				Key:    contribution.key,
+				Source: source,
 			})
 		}
 		description.Slots = append(description.Slots, slot)

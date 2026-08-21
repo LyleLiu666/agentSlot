@@ -56,9 +56,9 @@ func TestAssemblyDescriptionIsDeterministicAndOmitsComponentValues(t *testing.T)
 			}},
 		},
 		Slots: []agentslot.SlotDescription{
-			{ID: "agent.hook", Kind: "chain", ValueType: "string", Contributions: []agentslot.ContributionDescription{{Module: "bundle"}}},
-			{ID: "example.loop", Kind: "one", ValueType: "string", Contributions: []agentslot.ContributionDescription{{Module: "bundle"}}},
-			{ID: "tool", Kind: "many", ValueType: "string", Contributions: []agentslot.ContributionDescription{{Module: "bundle", Key: "shell"}}},
+			{ID: "agent.hook", Kind: "chain", ValueType: "string", Contributions: []agentslot.ContributionDescription{{Module: "bundle", Source: "explicit"}}},
+			{ID: "example.loop", Kind: "one", ValueType: "string", Contributions: []agentslot.ContributionDescription{{Module: "bundle", Source: "explicit"}}},
+			{ID: "tool", Kind: "many", ValueType: "string", Contributions: []agentslot.ContributionDescription{{Module: "bundle", Key: "shell", Source: "explicit"}}},
 		},
 		Profile: []agentslot.RequirementDescription{
 			{Slot: "example.loop", Kind: "one", Minimum: 1},

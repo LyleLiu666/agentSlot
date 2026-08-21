@@ -145,7 +145,7 @@ func TestSchedulerRunsProviderAndPublishesDurableParentMailboxResult(t *testing.
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	terminal, err := scheduler.Wait(ctx, job.ID, job.Version)
+	terminal, err := workflow.WaitTerminal(ctx, scheduler, job.ID, job.Version)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestSchedulerContainsProviderPanicAsAFailedJob(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	terminal, err := scheduler.Wait(ctx, job.ID, job.Version)
+	terminal, err := workflow.WaitTerminal(ctx, scheduler, job.ID, job.Version)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -212,6 +212,14 @@ Modules optionally implement `SlotRequirer`. Requirements name slots, not provid
 
 Independent modules retain installation precedence. Missing providers, invalid requirements, and cycles fail during `Build`; no lifecycle method has run at that point.
 
+Profiles can explicitly install fallback contributions with `SetDefault`,
+`AddDefault`, and `AppendDefault`. They are conditional assembly inputs, not
+global framework choices. Build sees the complete module list before selecting
+them: explicit `One` values win per Slot, explicit `Many` values win per key,
+and any explicit `Chain` replaces its default chain. Unresolved competing
+defaults fail instead of using installation order. Modules whose contributions
+are all overridden are excluded from construction and lifecycle.
+
 Optional One dependencies use `ResolveOptionalOne`; optional Many and Chain
 dependencies use the same `ResolveMany` and `ResolveChain` calls and receive an
 empty slice when absent. Requirements do not silently inject fields. Ordinary Go constructors can
@@ -233,10 +241,11 @@ listeners, locks, and other non-repeatable resources belong to `Start` and
 The target `Assembly.Describe()` returns the versioned
 `agentslot.assembly/v0` description. It
 lists modules in lifecycle start order and slots in lexical ID order.
-Contributions contain only module ownership and optional keys. Component values
-and configuration are intentionally absent so the description can be logged or
-exported without serializing implementations or leaking credentials. The
-implementation exposes `Assembly.Describe()` and `agentslot.assembly/v0`.
+Contributions contain only module ownership, optional keys, and the selected
+source (`explicit` or `default`). Component values and configuration are
+intentionally absent so the description can be logged or exported without
+serializing implementations or leaking credentials. The implementation
+exposes `Assembly.Describe()` and `agentslot.assembly/v0`.
 
 ## Package layers
 

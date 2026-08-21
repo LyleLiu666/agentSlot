@@ -71,6 +71,7 @@ type registeredValue struct {
 	value       any
 	constructor constructorFunc
 	ordinal     uint64
+	defaulted   bool
 }
 
 type slotRecord struct {
@@ -102,6 +103,7 @@ type installedModule struct {
 	id           string
 	module       Module
 	requirements []Requirement
+	contributes  bool
 }
 
 // Builder transactionally installs modules and freezes them into an Assembly.
@@ -139,6 +141,7 @@ func (b *Builder) Install(module Module) error {
 	}
 
 	working := b.state.clone()
+	beforeOrdinal := working.nextOrdinal
 	registration := &registration{owner: id, state: &working, open: true}
 	registerErr := module.Register(registration)
 	registration.open = false
@@ -150,7 +153,7 @@ func (b *Builder) Install(module Module) error {
 	}
 
 	b.state = working
-	b.modules = append(b.modules, installedModule{id: id, module: module})
+	b.modules = append(b.modules, installedModule{id: id, module: module, contributes: working.nextOrdinal > beforeOrdinal})
 	return nil
 }
 
@@ -211,12 +214,14 @@ func (r *registration) apply(contribution Contribution) error {
 
 	switch data.spec.kind {
 	case oneKind:
-		if len(record.values) != 0 {
-			return fmt.Errorf("%w: slot %q is provided by module %q", ErrSlotOccupied, data.spec.id, record.values[0].owner)
+		for _, registered := range record.values {
+			if !registered.defaulted && !data.defaulted {
+				return fmt.Errorf("%w: slot %q is provided by module %q", ErrSlotOccupied, data.spec.id, registered.owner)
+			}
 		}
 	case manyKind:
 		for _, registered := range record.values {
-			if registered.key == data.key {
+			if registered.key == data.key && !registered.defaulted && !data.defaulted {
 				return fmt.Errorf("%w: slot %q key %q is provided by module %q", ErrDuplicateKey, data.spec.id, data.key, registered.owner)
 			}
 		}
@@ -233,6 +238,7 @@ func (r *registration) apply(contribution Contribution) error {
 		value:       data.value,
 		constructor: data.constructor,
 		ordinal:     r.state.nextOrdinal,
+		defaulted:   data.defaulted,
 	})
 	return nil
 }
@@ -316,17 +322,20 @@ func (b *Builder) Build(requirements ...Requirement) (*Assembly, error) {
 	if b.frozen {
 		return nil, ErrBuilderFrozen
 	}
-	profile := append([]Requirement(nil), requirements...)
-	for _, requirement := range profile {
-		if _, err := resolveRequirement(b.state, requirement); err != nil {
-			return nil, err
-		}
-	}
-	modules, err := orderModules(b.state, b.modules)
+	state, err := resolveDefaultContributions(b.state)
 	if err != nil {
 		return nil, err
 	}
-	state := b.state.clone()
+	profile := append([]Requirement(nil), requirements...)
+	for _, requirement := range profile {
+		if _, err := resolveRequirement(state, requirement); err != nil {
+			return nil, err
+		}
+	}
+	modules, err := orderModules(state, activeModules(state, b.modules))
+	if err != nil {
+		return nil, err
+	}
 	if err := materializeConstructors(&state, modules); err != nil {
 		return nil, err
 	}
