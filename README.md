@@ -42,19 +42,17 @@ never selects a Loop or any other domain component.
 
 ## Status
 
-AgentSlot is a pre-1.0 foundation. `v0.0.2` is the first validation release of
-the complete reference Agent path and is intended to be consumed by real Agent
-projects. It is not a stable-production claim, and public APIs may still change
-based on integration feedback. The composition core works today; the standard
+AgentSlot is a pre-1.0 foundation. `v0.0.3` is the current validation release
+and is intended to be consumed by real Agent projects. It adds the contracted
+Goal, Memory, Workflow, Billing, Agent Loop, and immutable Artifact Store
+boundaries developed after the first complete reference Agent path. It is not a
+stable-production claim, and public APIs may still change based on integration
+feedback. The composition core works today; the standard
 component map is normative, while its ecosystems remain at their explicitly
 recorded maturity. Every published tag is immutable; later changes receive a
 new semantic version.
 
-The unreleased main branch also contains contracted Goal, Memory, Workflow,
-pricing, quota, billing-ledger, and physical-attempt observer boundaries. They
-are available to source consumers for integration validation, but remain
-`Contracted`, not `Conformant` or `Proven`; no new tag is implied by their
-presence on main.
+These newer boundaries remain `Contracted`, not `Conformant` or `Proven`.
 
 The project's architectural result is the quality of its component map, not a
 large interface count. Each accepted ecosystem must have a clear boundary,
@@ -323,9 +321,9 @@ model-facing tool inputs use self-contained JSON Schema Draft 2020-12.
 Caller and Hook input uses `agent.MessageInput`, which carries content only;
 the fixed Runtime allocates MessageID, Session/Run/Step containment, role, and
 timestamp atomically when it creates a durable `agent.Message` fact.
-Twenty-eight standard component contracts are now available in the `loop`,
+Twenty-nine standard component contracts are now available in the `loop`,
 `session`, `model`, `tool`, `context`, `hook`, `interaction`, `policy`, `observe`,
-`goal`, `memory`, `workflow`, and `billing`
+`goal`, `memory`, `workflow`, `billing`, and `artifact`
 packages. They are Contracted, but no domain ecosystem is yet Conformant or
 Proven.
 
@@ -354,7 +352,10 @@ facts retain the frozen model configuration. The
 [`model/openaicompat`](model/openaicompat) provides a real streaming Chat
 Completions-compatible Executor with physical Attempt IDs, bounded output,
 retry/reset handling, durable started/terminal Attempt facts, Provider-reported
-token usage, and marked local estimates when a failed request has no usage. The fixed Runtime also
+token usage, and marked local estimates when a failed request has no usage. If a
+configured model declares image input, that module explicitly requires
+`artifact.store`; attachment references are opened through that contract and
+projected as real image content blocks rather than placeholder text. The fixed Runtime also
 owns ToolDispatcher semantics: call/pending and result/terminal commits,
 Serial/ParallelSafe batches, safe structured failures, and mandatory model
 continuation. [`tool/bash`](tool/bash) is the first explicitly installed
