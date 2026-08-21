@@ -10,12 +10,14 @@ import (
 
 	agentslot "github.com/LyleLiu666/agentSlot"
 	"github.com/LyleLiu666/agentSlot/interaction"
+	"github.com/LyleLiu666/agentSlot/loop"
 	"github.com/LyleLiu666/agentSlot/model"
 	"github.com/LyleLiu666/agentSlot/session"
 )
 
 // ApplicationSpec declares one standard Agent application. The standard
-// package adds its private Runtime/Gateway module; product modules remain
+// package adds its private Runtime/Gateway module and standard Loop fallback;
+// product modules remain
 // explicit and are mounted through the same generic Application lifecycle.
 type ApplicationSpec struct {
 	Name               string
@@ -53,11 +55,13 @@ type ContextConfig struct {
 // NewApplication returns the generic Application with the fixed standard
 // Agent module and profile mounted. It has no registration side effects.
 func NewApplication(spec ApplicationSpec) *agentslot.Application {
-	modules := make([]agentslot.Module, 0, len(spec.Modules)+2)
+	modules := make([]agentslot.Module, 0, len(spec.Modules)+3)
 	modules = append(modules, newRuntimeModule(spec.RuntimeConfig, spec.DefaultModelConfig))
+	modules = append(modules, standardLoopModule{})
 	modules = append(modules, spec.Modules...)
 	modules = append(modules, channelValidationModule{})
 	requirements := []agentslot.Requirement{
+		agentslot.RequireOne(loop.AgentLoopSlot),
 		agentslot.RequireOne(session.StoreSlot),
 		agentslot.RequireOne(model.ExecutorSlot),
 		agentslot.RequireMany(interaction.ChannelSlot, 1),

@@ -25,8 +25,8 @@ One module may provide a model provider, several tools, and a hook. Those contri
 The generic core stays product-neutral. A standard LLM Agent explicitly enters
 through the separate `standardagent.NewApplication` package. That constructor
 returns the same `*agentslot.Application` used by the generic core, while
-automatically mounting the fixed AgentRuntime/Gateway module and standard Agent
-profile. It does not infer an Agent profile from installed slots, and importing
+automatically mounting the fixed AgentRuntime/Gateway module, an inspectable
+standard AgentLoop default, and the standard Agent profile. It does not infer an Agent profile from installed slots, and importing
 the package has no registration side effect. Every standard Agent therefore
 keeps the same `Build`, `Start`, `Run`, and `Runtime.Stop` lifecycle.
 
@@ -56,7 +56,7 @@ rolls back only modules whose `Start` completed successfully.
 
 An Application Assembly is the application scope, not a Session scope. One Assembly can
 serve many Workspaces and Sessions. It owns the fixed SessionManager and shared
-components such as SessionStore, ModelExecutor, optional Provider adapters, Tools,
+components such as AgentLoop, SessionStore, ModelExecutor, optional Provider adapters, Tools,
 Context components, Hooks, InteractionCommands, and GatewayChannels. When the Assembly starts, the resulting application Runtime owns one
 process-local Session-to-AgentRuntime registry and one fixed in-process Gateway.
 A framework-internal Runtime coordinator operates the registry; the Gateway is
@@ -64,7 +64,9 @@ the sole user-interaction backend. None of these three framework objects is a
 replaceable component ecosystem. Hierarchical Workspace or Session inheritance
 is still deferred, but it must not be modelled as repeated Assemblies.
 
-`AgentRuntime` is fixed framework behavior below the started Assembly, not a Slot.
+`AgentRuntime` is fixed framework control-plane behavior below the started
+Assembly, not a Slot. It executes the selected `agent.loop` contribution while
+retaining Session, CAS, cancellation, recovery, and Gateway invariants.
 Explicitly creating or resuming a Session initializes one Runtime bound to that
 Session; listing or viewing Sessions does not. The Runtime remains resident
 while idle and is released only by explicit Close or application shutdown.
@@ -173,7 +175,7 @@ assembly before any lifecycle side effect begins.
 
 `One[T]` allows zero or one value. Optionality and uniqueness are separate rules: the slot enforces uniqueness, while the selected product profile decides whether the value is required.
 
-Use it for a selected SessionStore, ModelExecutor, policy
+Use it for a selected AgentLoop, SessionStore, ModelExecutor, policy
 arbiter, scheduler, or execution environment. Framework-owned AgentRuntime is
 not represented by `One[T]` because it is not replaceable.
 
@@ -254,7 +256,7 @@ The intended dependency direction is:
 ```text
              products and profiles
                 /          \
-fixed AgentRuntime/Gateway  entrypoints, adapters, implementations
+fixed AgentRuntime/Gateway  AgentLoop, entrypoints, adapters, implementations
                 \          /
           standard component contracts
                        |
@@ -266,8 +268,8 @@ The core must remain usable without an LLM SDK, tool SDK, database, UI framework
 The fixed Runtime/Gateway layer depends on standard contracts and the generic
 core; the generic core imports neither AgentRuntime nor Gateway. This preserves
 a product-neutral composition package while still giving conforming LLM Agent
-projects one loop, one interaction backend, one command vocabulary, and one set
-of transaction invariants.
+projects one selected AgentLoop, one interaction backend, one command vocabulary,
+and one fixed set of transaction invariants.
 
 Standard component contracts are introduced in AgentSlot-owned leaf packages
 after real implementations establish common behavior. An adapter may depend on
@@ -343,9 +345,10 @@ implementation format.
 
 ## Current implementation frontier
 
-The published foundation now includes sixteen standard domain contracts and
-typed Slots for Session management/storage, model execution/catalogs, tools,
-context, hooks, interaction, tool policy/approval, and passive observation.
+The published foundation now includes twenty-eight standard domain contracts
+and typed Slots for Agent Loop control, Session storage, model
+execution/catalogs, tools, context, hooks, interaction, policy/approval,
+observation, Goal, Memory, Workflow, and Billing.
 The `standardagent` package supplies the
 fixed Gateway, private RuntimeAccess binding, per-Session AgentRuntime state
 machine, ToolDispatcher, Context assembly, controlled Hook execution, and

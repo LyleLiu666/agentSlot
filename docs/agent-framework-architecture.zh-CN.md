@@ -12,7 +12,7 @@
 
 ## 2. 一句话架构
 
-AgentSlot 用通用装配核心选择并启动三个标准扩展面；标准 Agent 层固定实现 SessionManager、AgentRuntime 和 Gateway。每个显式创建或恢复的 Session 对应一个进程内 AgentRuntime；所有用户操作只能经 Gateway 进入；持久化、模型调用和用户接入分别由 `session.store`、`model.executor` 和 `gateway.channel` 替换。
+AgentSlot 用通用装配核心选择并启动四个标准必需扩展面；标准 Agent 层固定实现 SessionManager、AgentRuntime 和 Gateway。每个显式创建或恢复的 Session 对应一个进程内 AgentRuntime；所有用户操作只能经 Gateway 进入；Run 控制、持久化、模型调用和用户接入分别由 `agent.loop`、`session.store`、`model.executor` 和 `gateway.channel` 替换。
 
 ## 3. 全景与所有权
 
@@ -36,6 +36,7 @@ flowchart TB
         RT["固定 AgentRuntime"]
     end
     subgraph Replaceable["标准扩展面"]
+        LOOP["agent.loop : One"]
         SS["session.store : One"]
         ME["model.executor : One"]
         CH["gateway.channel : Many\n至少一个"]
@@ -56,6 +57,8 @@ flowchart TB
     AR --> GW
     SM --> SS
     REG --> RT
+    RT --> LOOP
+    LOOP -. "推进 Step" .-> RT
     RT --> Session
     RT --> ME
     RT --> OPTIONAL
@@ -75,7 +78,7 @@ flowchart TB
 
 ## 4. 统一构建与启动
 
-标准 Agent 显式使用 `standardagent.NewApplication`。它仍返回通用 `*agentslot.Application`，自动安装固定标准层和标准 Profile；产品不需要自己组装 Registry、Manager、Gateway 或 Agent loop。
+标准 Agent 显式使用 `standardagent.NewApplication`。它仍返回通用 `*agentslot.Application`，自动安装固定标准层、标准 AgentLoop 条件默认值和标准 Profile；产品不需要自己组装 Registry、Manager 或 Gateway，替换 Loop 时只安装显式 Module。
 
 ```text
 standardagent.NewApplication
@@ -88,11 +91,12 @@ standardagent.NewApplication
 
 | Slot | 基数 | 作用 |
 | --- | --- | --- |
+| `agent.loop` | `One` | 顺序推进 Run Step，并决定继续或以何种终态停止 |
 | `session.store` | `One` | 原子持久化完整 Session 聚合 |
 | `model.executor` | `One` | 完成一次逻辑模型调用及其物理 Attempt |
 | `gateway.channel` | `Many`，至少一个 | 把具体用户接入方式绑定到固定 Gateway |
 
-固定 SessionManager、AgentRuntime 和 Gateway 都不是 Slot。框架不新增 AgentHost、RunningApplication、公开 RuntimeFactory 或第二套启动容器。
+固定 SessionManager、AgentRuntime 和 Gateway 都不是 Slot；AgentLoop 是 Slot。框架不新增 AgentHost、RunningApplication、公开 RuntimeFactory 或第二套启动容器。
 
 ## 5. 对象生命周期
 
@@ -179,7 +183,7 @@ AgentRuntime 状态只有 `idle`、`running`、`closed`：
 - Close 释放内存 Runtime，不删除 Session；再次 Resume 可恢复；
 - 一个 Run 内冻结 SessionModelConfig，只允许在 Run 之间切换模型。
 
-固定循环顺序是：认领输入、建立 Run、贡献新 Step Context、装配模型请求、执行逻辑模型调用、提交完整结果、执行工具、继续模型，直到自然完成、取消、错误或 Token Budget 终止。Hook、Tool、Executor 和 Channel 都不能成为第二个状态控制者。
+固定 AgentRuntime 负责认领输入、建立 Run、Session 事务、取消和恢复；选中的 AgentLoop 顺序推进 Step。每个 Step 仍按固定协议贡献 Context、装配模型请求、提交完整结果并执行工具，返回 continue 或有限终态。标准 Loop 持续推进直到自然完成、取消、错误或 Token Budget 终止。Hook、Tool、Executor 和 Channel 都不能成为第二个状态所有者。
 
 ## 9. Context 与 Token Budget
 
@@ -232,12 +236,12 @@ ToolKeys 是严格白名单。nil、空列表和未配置都表示不暴露工�
 | --- | --- | --- |
 | 通用装配核心 | 否 | Application、Module、Slot、Assembly、Build/Start/Run、生命周期回滚 |
 | 标准固定层 | 否 | SessionManager、AgentRuntime、Gateway、Registry 和事务/状态不变量 |
-| 标准 Profile 必需 Slot | 是 | SessionStore、ModelExecutor、GatewayChannel |
+| 标准 Profile 必需 Slot | 是 | AgentLoop、SessionStore、ModelExecutor、GatewayChannel |
 | 可选 Slot | 是 | Provider、Tool、ContextSource、Compactor、Hook、CommitObserver、策略与运维组件 |
 | 产品配置 | 可配置 | Prompt、默认模型、ToolKeys、ContextRetentionMode、MaxTokensPerRun、Provider 地址引用 |
 | 内部端口 | 否 | ID 生成、Clock、锁、协调器；测试注入不使其成为公共 Slot |
 
-开发者若需要完全不同的循环，可以直接使用通用 AgentSlot 核心定义项目本地 Profile，但不能把它称为标准 AgentRuntime 的替换实现。
+开发者可以提供 `agent.loop` Module 替换标准 Loop；它改变 Run 推进策略，但不能重定义 Session 事务、Gateway 或 AgentRuntime 状态所有权。
 
 ## 14. 当前实现状态
 
@@ -246,8 +250,8 @@ Context/Token Budget、GatewayChannel、严格 ExpectedRevision、SessionView、
 单一职责 Hook、异步 SessionCommitObserver 和严格 ToolKeys 白名单均已落地。参考 Agent
 通过 FileStore、真实 OpenAI-compatible Executor、固定 Runtime/Gateway、多个 Channel、
 Bash、完整 Context、Attempt History 和 Gateway 游标分页的全链路测试。随后新增的 Goal、
-Memory、Workflow、Billing 与同步模型 Attempt 边界已把组件地图推进为 40 个标准生态位、
-27 个 Contracted；这些新增项仍需 LAS 与独立实现继续验证。
+Memory、Workflow、Billing、同步模型 Attempt 与 AgentLoop 边界已把组件地图推进为 41 个标准生态位、
+28 个 Contracted；这些新增项仍需 LAS 与独立实现继续验证。
 
 Contracted 仍不等于 Conformant 或 Proven。共享一致性套件、第二个独立实现、生产认证、
 远程 wire protocol 和分布式 Session 所有权属于后续成熟度工作，不反向否定本轮架构完成。

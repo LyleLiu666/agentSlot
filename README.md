@@ -17,8 +17,9 @@ Typed component slots and deterministic composition for agent systems.
 
 > A module unifies registration and lifecycle. A slot defines the component ecosystem, interface, cardinality, and ordering rule.
 
-The standard AgentRuntime and its model/tool loop are framework behavior, not a
-replaceable Slot. The replaceable parts are narrower: one SessionStore, one
+The standard AgentRuntime fixes Session ownership, CAS, cancellation, and
+Gateway control. Its Run-control policy is the unique replaceable `agent.loop`
+Slot. The other replaceable parts include one SessionStore, one
 ModelExecutor, zero or more Tools, ordered Context and Hook
 components, one or more GatewayChannels, optional keyed InteractionCommands,
 Goal completion evaluation, long-term Memory, multi-agent Workflow,
@@ -28,11 +29,16 @@ before startup.
 
 The generic core remains product-neutral. A standard LLM Agent explicitly uses
 `standardagent.NewApplication`, which returns the same `*agentslot.Application`
-and automatically mounts the fixed AgentRuntime/Gateway layer and standard Agent
-profile. It does not infer a profile from installed slots. All standard Agent
+and automatically mounts the fixed AgentRuntime/Gateway layer, an inspectable
+standard AgentLoop default, and the standard Agent profile. It does not infer a
+profile from installed slots. All standard Agent
 projects therefore keep the same `Build`, `Start`, `Run`, and `Runtime.Stop`
 entry points; only the declared modules, configuration, and application name
 vary.
+
+Calling `standardagent.NewApplication` is the explicit choice of that standard
+profile and its standard Loop fallback. The generic `agentslot.NewApplication`
+never selects a Loop or any other domain component.
 
 ## Status
 
@@ -251,10 +257,11 @@ for the agent architecture. It currently maps runtime, model, tools, context,
 history, memory, execution, policy, multi-agent workflow, gateway, billing, and
 operations ecosystems.
 
-A runnable standard LLM agent requires exactly one SessionStore, exactly one
-ModelExecutor, and at least one GatewayChannel. The fixed SessionManager,
-AgentRuntime, and in-process Gateway are supplied by the framework rather than
-selected through Slots.
+A runnable standard LLM agent requires exactly one AgentLoop, exactly one
+SessionStore, exactly one ModelExecutor, and at least one GatewayChannel. The
+fixed SessionManager, AgentRuntime, and in-process Gateway are supplied by the
+framework. The standard Loop is a conditional default: an explicit Loop Module
+replaces it without deleting or naming the default Module.
 Standard applications install each Channel with
 `standardagent.NewGatewayChannelModule`; Build rejects a raw GatewayChannel
 contribution that would bypass GatewayAccess binding or lifecycle ordering.
@@ -311,14 +318,16 @@ model-facing tool inputs use self-contained JSON Schema Draft 2020-12.
 Caller and Hook input uses `agent.MessageInput`, which carries content only;
 the fixed Runtime allocates MessageID, Session/Run/Step containment, role, and
 timestamp atomically when it creates a durable `agent.Message` fact.
-Sixteen standard component contracts are now available in the `session`,
-`model`, `tool`, `context`, `hook`, `interaction`, `policy`, and `observe`
+Twenty-eight standard component contracts are now available in the `loop`,
+`session`, `model`, `tool`, `context`, `hook`, `interaction`, `policy`, `observe`,
+`goal`, `memory`, `workflow`, and `billing`
 packages. They are Contracted, but no domain ecosystem is yet Conformant or
 Proven.
 
 The `standardagent` package implements the application-scoped Runtime registry,
-coordinator, fixed Gateway, GatewayAccess binding, GatewayChannel wrapper, automatic
-standard profile, and the fixed Session AgentRuntime state machine. Send,
+coordinator, fixed Gateway, GatewayAccess binding, GatewayChannel wrapper,
+automatic standard profile, the standard AgentLoop default, and the fixed
+Session AgentRuntime transaction state machine. Send,
 SendAndWait, Steer, RunPending, Cancel, WhenIdle, Close, Queue mutation, and
 model-config commands now execute through the Gateway. `Subscribe` publishes
 live chunk/reset events with Run, Step, and physical Attempt identity; temporary

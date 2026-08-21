@@ -70,14 +70,14 @@ Run/Step。sub-agent 是独立执行参与者，必须拥有独立 Session，并
 - **对接口、存储、Gateway 和实现的影响：** 公共 API 为 `Application.Build() -> *Assembly`、`Assembly.Start() -> *Runtime`、`Assembly.Describe()` 和 `Runtime.Assembly()`，描述格式为 `agentslot.assembly/v0`。不保留旧 `Plan`、`PlanDescription` 名称的长期兼容别名。Assembly 冻结 SessionStore、ModelExecutor、GatewayChannel 和可选组件选择；启动后的 Application Runtime 持有固定 Manager、Gateway、Registry 和 AgentRuntime。
 - **状态：** 已确定。
 
-### A-002 `AgentRuntime` 是框架固定对象，不是 Slot
+### A-002 `AgentRuntime` 固定控制面，`agent.loop` 是唯一运行控制 Slot
 
-- **问题 / 背景：** Slot 表示开发者能够独立实现和替换的边界；而标准循环的事务顺序和状态控制必须只有一个权威。
-- **最终决定：** `AgentRuntime` 及其内部循环由框架固定，不定义标准 `agent.loop` Slot，也不定义公共 `AgentLoopFactory` 或独立 `AgentLoop` 对象。
-- **必须满足的不变量：** 标准 Profile 只有一套循环不变量；Hook、Provider 或 GatewayChannel 都不能替代 Runtime 控制状态。
-- **否决的方案及原因：** 一边禁止替换循环、一边保留 `agent.loop` Slot 是自相矛盾的 API；共享全局 Loop 又会混合多个 Session 的状态。
-- **对接口、存储、Gateway 和实现的影响：** 组件地图删除 `agent.loop`。需要完全不同循环的项目可用通用装配核心定义本地 Slot，但不属于标准 LLM Agent Profile。
-- **状态：** 已确定。
+- **问题 / 背景：** Session 事务、CAS、取消、恢复和 Gateway 路由必须只有一个权威，但“Run 是否继续推进”本身是 Agent 开发者需要定制的架构能力。
+- **最终决定：** `AgentRuntime` 继续固定状态与事务不变量；标准 Profile 新增 `agent.loop: One[AgentLoop]`，由 Loop 顺序调用框架提供的 Run Step 协议并返回有限终态。标准 Loop 作为显式条件默认值安装，产品 Loop 可以只替换 Module。
+- **必须满足的不变量：** 同一 Run 的 Step 只能顺序推进；Loop 必须响应取消并返回合法终态；Loop 不取得 SessionStore、Gateway、RuntimeRegistry 或 Assembly 服务定位能力；Hook、Provider 和 Channel 不能成为第二个状态所有者。
+- **否决的方案及原因：** 把整个 AgentRuntime 暴露成 Slot 会产生多套 Session 事务语义；只给固定循环换名字则是假 Slot；共享有状态 Loop 会混合 Session。当前合同选择无 Session 可变状态的应用级 AgentLoop，并把每个 Run 的身份与推进能力作为受限参数传入。
+- **对接口、存储、Gateway 和实现的影响：** 组件地图恢复 `agent.loop`；`standardagent.NewApplication` 要求一个 Loop，并安装可被显式贡献覆盖的标准默认 Loop；`Assembly.Describe()` 标明 default/explicit 来源，Runtime 不按实现类型分支。
+- **状态：** 已实现首个合同与标准装配；仍需独立实现和共享 conformance suite 才能进入 Proven。
 
 ### A-003 启动后的 Application Runtime 持有进程内 RuntimeRegistry
 
@@ -399,7 +399,7 @@ Run/Step。sub-agent 是独立执行参与者，必须拥有独立 Session，并
 - **最终决定：** 工具结果进入 Context 后必须继续调用模型，直到自然完成、取消、错误或 MaxTokensPerRun 触发。
 - **必须满足的不变量：** Runtime 不能把“执行完工具”当作 Run 成功结束；每轮检查取消和剩余 Token Budget。
 - **否决的方案及原因：** 让实现自由决定是否继续会产生不可预测的半成品响应。
-- **对接口、存储、Gateway 和实现的影响：** 状态机固定 model -> tool -> model 循环；不定义 MaxStep、MaxToolCall 或 MaxRunDuration。
+- **对接口、存储、Gateway 和实现的影响：** 框架 Step 固定 model -> tool 的事务和协议不变量；选中的 AgentLoop 决定是否推进下一 Step；标准实现不定义 MaxStep、MaxToolCall 或 MaxRunDuration。
 - **状态：** 已确定。
 
 ### A-038 工具 call/result 在 History 中按事实先后追加
@@ -517,7 +517,7 @@ Run/Step。sub-agent 是独立执行参与者，必须拥有独立 Session，并
 - **否决的方案及原因：** 让通用 Application 根据 Slot 推断 Agent 会制造隐藏装配和产品
   差异；增加 AgentHost、RunningApplication 或公开 RuntimeFactory 会产生第二套启动入口。
 - **对接口、存储、Gateway 和实现的影响：** `standardagent` 只依赖通用核心和标准合同包；
-  固定 Runtime/Gateway 由内部 Module 自动挂载，Agent 项目不能替换整个循环或 Gateway。
+  固定 Runtime/Gateway 与标准 Loop 默认值由内部 Module 自动挂载；Agent 项目可以用显式 `agent.loop` Module 覆盖默认 Loop，但不能替换 Gateway 或 Session 事务控制面。
 - **状态：** 已确定。
 
 ### A-050 标准包依赖必须保持单向 DAG

@@ -22,27 +22,28 @@
 
 | 资产 | 数量 |
 | --- | ---: |
-| 已映射的标准组件生态位 | 40 |
-| 已标准化的领域词汇 | 8 |
-| 已定义契约的 AgentSlot 自有领域接口 | 27 |
+| 已映射的标准组件生态位 | 41 |
+| 已标准化的领域词汇 | 9 |
+| 已定义契约的 AgentSlot 自有领域接口 | 28 |
 | 通过一致性验证的组件生态位 | 0 |
 | 已由独立实现证明的组件生态位 | 0 |
 | 已进入标准装配的组件生态位 | 0 |
 
 独立的组装协议目前导出了五个 Go 接口：`Module`、`SlotRequirer`、
 `Registrar`、`Contribution` 和 `Lifecycle`。它们是框架机制，不能代替
-地图中 40 个 Agent 领域组件生态位；其中 27 个已经具备公开合同。
+地图中 41 个 Agent 领域组件生态位；其中 28 个已经具备公开合同。
 
-表中 8 组有限领域词汇分别是：模型能力、工具调用、策略/审批、观察、Goal、Memory、
-Workflow 和 Billing。这个数字只统计为了互操作而固定的有限词汇和事实，不统计普通常量。
+表中 9 组有限领域词汇分别是：Agent Loop 结果、模型能力、工具调用、策略/审批、观察、
+Goal、Memory、Workflow 和 Billing。这个数字只统计为了互操作而固定的有限词汇和事实，不统计普通常量。
 
 ## 可运行标准 Profile
 
 标准 Agent 必须通过 `standardagent.NewApplication` 显式启用标准 Profile。它返回通用
-`*agentslot.Application`，自动挂载固定 AgentRuntime/Gateway 层；通用
+`*agentslot.Application`，自动挂载固定 AgentRuntime/Gateway 层和可检查的标准
+AgentLoop 默认实现；通用
 `agentslot.NewApplication` 不会根据已安装 Slot 隐式推断标准 Agent。
 
-只有最终 Assembly（应用装配结果）同时包含以下三类组件时，一个 AgentSlot 应用才符合
+只有最终 Assembly（应用装配结果）同时包含以下四类组件时，一个 AgentSlot 应用才符合
 “可运行标准 Agent Profile”：
 
 `Assembly` 是当前 Go 实现导出的不可变 Build 结果。其描述对象为
@@ -50,12 +51,13 @@ Workflow 和 Billing。这个数字只统计为了互操作而固定的有限词
 
 | Slot ID | 标准契约 | 类型 | 必需基数 | 职责 |
 | --- | --- | --- | --- | --- |
+| `agent.loop` | `AgentLoop` | `One` | 恰好 1 个 | 通过框架 Step 协议决定每个持久 Run 如何推进、继续或停止。 |
 | `session.store` | `SessionStore` | `One` | 恰好 1 个 | 持久化 Session 聚合中的 History、Context、Queue、RunJournal、SessionModelConfig、revision 和原子 CAS 事务。 |
 | `model.executor` | `ModelExecutor` | `One` | 恰好 1 个 | 执行一次逻辑模型调用，并封装 Provider 专属的真实请求、流恢复和最终失败语义。 |
 | `gateway.channel` | `GatewayChannel` | `Many` | 至少 1 个 | 把 TUI、Web、桌面端、函数、HTTP、ACP 或其他调用 Channel 绑定到固定 Gateway。 |
 
-`AgentRuntime`、进程内 Gateway 及其控制链路是框架固定行为，不是 Slot，也不是
-可替换组件生态位。创建或显式恢复 Session 时初始化一个绑定该 Session 的 Runtime；仅列出或
+`AgentRuntime` 与进程内 Gateway 仍是框架固定的控制面，不是 Slot。选中的
+`AgentLoop` 负责 Run 推进，但不拥有 Session 真相、Gateway 路由或事务不变量。创建或显式恢复 Session 时初始化一个绑定该 Session 的 Runtime；仅列出或
 浏览 Session 不创建。一个启动后的应用级 Runtime 及其登记的全部 AgentRuntime 位于
 同一进程；同一 Session 在该注册表中只有一个 Runtime，idle 时继续驻留，只在显式
 Close 或应用停止时释放。GatewayChannel 只能调用固定 Gateway 的与传输协议无关接口，
@@ -97,6 +99,8 @@ flowchart LR
     RC --> SM["固定 SessionManager"]
     SM --> SS["SessionStore Slot（1）"]
     REG -->|"CreateSession / ResumeSession"| R["框架 AgentRuntime"]
+    R --> L["AgentLoop（1）"]
+    L -. "推进 Step" .-> R
     R --> ME["ModelExecutor（1）"]
     ME -. "可选依赖" .-> MP["ModelProvider（0..n）"]
     R -. "可选" .-> T["工具与技能"]
@@ -120,11 +124,11 @@ flowchart LR
 | **已证明（Proven）** | 至少两个语义上独立的实现通过一致性测试；同一实现的不同包装只能算一个。 |
 | **已装配（Assembled）** | 参考应用能够通过 Slot 替换已证明的实现，不包含具体类型分支。 |
 
-当前已有 27 个领域生态位进入**已定义契约（Contracted）**：它们拥有公开
+当前已有 28 个领域生态位进入**已定义契约（Contracted）**：它们拥有公开
 领域接口、typed Slot 和合同测试。仓库已经包含相互独立的内存/崩溃安全文件
 SessionStore、确定性 Fake/OpenAI Chat Compatible Executor、Bash/文件/HTTP 工具、
 进程内/CLI GatewayChannel、确定性的工具策略与审批组件，以及 JSON Lines 观察模块；固定
-Runtime 不按具体类型分支即可消费它们。由于尚未建立可复用的一致性测试套件，所有
+Runtime 与选中的 AgentLoop 不按具体类型分支即可消费它们。由于尚未建立可复用的一致性测试套件，所有
 这些生态位仍保持 Contracted，不能标为**已通过一致性验证**或**已证明**。其他生态位
 仍处于**已映射（Mapped）**阶段。
 
@@ -138,6 +142,7 @@ Runtime 不按具体类型分支即可消费它们。由于尚未建立可复用
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
+| `agent.loop` | `AgentLoop` | `One` | 全局恰好 1 个 | 顺序推进 Step，并返回有限的 Run 终态；标准 Loop 是显式安装的条件默认值。 | 已定义契约 |
 | `gateway.channel` | `GatewayChannel` | `Many` | 全局至少 1 个 | 把调用方协议、函数 API 或 UI 绑定到固定 Gateway，并且只能取得 `GatewayAccess`。 | 已定义契约 |
 | `interaction.command` | `InteractionCommand` | `Many` | 可选 | 向固定 Gateway 注册具名、UI-neutral 的结构化命令；Channel 把共享描述渲染为 Slash、菜单、按钮、表单或命令面板。 | 已定义契约 |
 | `agent.hook` | `AgentHook` | `Chain` | 可选 | 在 Run 完成前提出受控的后续输入；不能修改 Session 状态，也不能成为第二个 Runtime 控制者。 | 已定义契约 |
@@ -146,8 +151,8 @@ Runtime 不按具体类型分支即可消费它们。由于尚未建立可复用
 | `session.commit.observer` | `SessionCommitObserver` | `Chain` | 可选 | 异步观察已经生效的 Session revision 及其新增 History sequence 范围；错误和 panic 不能回滚提交。 | 已定义契约 |
 
 固定 AgentRuntime 和 Gateway 有意不出现在表中：组件地图只记录定制边界，不罗列
-全部框架对象。确实需要完全不同循环或交互后端的产品可以在通用装配核心上定义项目
-本地 Slot 和明确的非标准 Profile，但不能宣称符合标准 LLM Agent 应用。
+全部框架对象。AgentLoop 是标准定制边界，但不能替代 Runtime 对 Session、CAS、
+Gateway 路由、取消和 History 不变量的所有权。
 
 Goal 贴在固定完成边界上，而不是只做增删改查。存在 active Goal 时，assistant
 本来要停止之际必须评估：`continue` 产生一条无身份的后续输入，`blocked` 暂停目标，

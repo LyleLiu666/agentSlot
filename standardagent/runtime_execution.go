@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	agent "github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/goal"
 	"github.com/LyleLiu666/agentSlot/hook"
 	"github.com/LyleLiu666/agentSlot/interaction"
+	agentloop "github.com/LyleLiu666/agentSlot/loop"
 	"github.com/LyleLiu666/agentSlot/model"
 	"github.com/LyleLiu666/agentSlot/observe"
 	"github.com/LyleLiu666/agentSlot/session"
@@ -129,16 +131,96 @@ func (r *runtimeInstance) nextID(kind string) string {
 }
 func (r *runtimeInstance) runLoop(run *activeRun, step agent.StepID) {
 	for {
-		outcome, nextStep := r.executeStep(run, step)
-		if outcome == stepContinue {
-			step = nextStep
-			continue
+		driver := &runtimeLoopRun{runtime: r, run: run, step: step}
+		outcome, err := invokeAgentLoop(r.components.agentLoop, run.ctx, driver)
+		run.signalPrepared(r.revision())
+		if err != nil {
+			if errors.Is(err, context.Canceled) || run.ctx.Err() != nil {
+				outcome = agentloop.OutcomeCanceled
+			} else {
+				outcome = agentloop.OutcomeFailed
+			}
 		}
-		nextRun, firstStep := r.finishRun(run, outcome)
+		if !outcome.Terminal() || (driver.terminal && driver.outcome != outcome) {
+			outcome = agentloop.OutcomeFailed
+		}
+		nextRun, firstStep := r.finishRun(run, stepOutcomeFromLoop(outcome))
 		if nextRun == nil {
 			return
 		}
 		run, step = nextRun, firstStep
+	}
+}
+
+type runtimeLoopRun struct {
+	runtime  *runtimeInstance
+	run      *activeRun
+	step     agent.StepID
+	stepping atomic.Bool
+	terminal bool
+	outcome  agentloop.Outcome
+}
+
+func (r *runtimeLoopRun) SessionID() agent.SessionID { return r.runtime.id() }
+func (r *runtimeLoopRun) RunID() agent.RunID         { return r.run.id }
+
+func (r *runtimeLoopRun) Step(ctx context.Context) (agentloop.Outcome, error) {
+	if err := ctx.Err(); err != nil {
+		return agentloop.OutcomeCanceled, err
+	}
+	if !r.stepping.CompareAndSwap(false, true) {
+		return agentloop.OutcomeFailed, errors.New("standardagent: AgentLoop called Run.Step concurrently")
+	}
+	defer r.stepping.Store(false)
+	if r.terminal {
+		return agentloop.OutcomeFailed, errors.New("standardagent: AgentLoop called Run.Step after a terminal outcome")
+	}
+	outcome, next := r.runtime.executeStep(r.run, r.step)
+	mapped := loopOutcomeFromStep(outcome)
+	if mapped == agentloop.OutcomeContinue {
+		r.step = next
+	} else {
+		r.terminal = true
+		r.outcome = mapped
+	}
+	return mapped, nil
+}
+
+func invokeAgentLoop(component agentloop.AgentLoop, ctx context.Context, run agentloop.Run) (outcome agentloop.Outcome, err error) {
+	defer func() {
+		if recover() != nil {
+			outcome = agentloop.OutcomeFailed
+			err = errors.New("standardagent: AgentLoop panicked")
+		}
+	}()
+	return component.Run(ctx, run)
+}
+
+func loopOutcomeFromStep(outcome stepOutcome) agentloop.Outcome {
+	switch outcome {
+	case stepContinue:
+		return agentloop.OutcomeContinue
+	case stepNatural:
+		return agentloop.OutcomeCompleted
+	case stepCanceled:
+		return agentloop.OutcomeCanceled
+	case stepBudgetExceeded:
+		return agentloop.OutcomeBudgetExceeded
+	default:
+		return agentloop.OutcomeFailed
+	}
+}
+
+func stepOutcomeFromLoop(outcome agentloop.Outcome) stepOutcome {
+	switch outcome {
+	case agentloop.OutcomeCompleted:
+		return stepNatural
+	case agentloop.OutcomeCanceled:
+		return stepCanceled
+	case agentloop.OutcomeBudgetExceeded:
+		return stepBudgetExceeded
+	default:
+		return stepFailed
 	}
 }
 
