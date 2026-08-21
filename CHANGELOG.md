@@ -8,6 +8,14 @@ when real consumers expose a flawed boundary.
 
 No changes yet.
 
+## v0.0.4 - 2026-08-21
+
+### Fixed
+
+- OpenAI Chat Compatible fallback usage now applies the same semantic image
+  estimate as `CountTokens`; it no longer bills base64 transport bytes as input
+  tokens when a Provider omits usage.
+
 ## v0.0.3 - 2026-08-21
 
 ### Added

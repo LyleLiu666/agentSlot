@@ -19,18 +19,19 @@ import (
 )
 
 type eventStream struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	events   chan model.ModelEvent
-	done     chan struct{}
-	once     sync.Once
-	request  model.ModelRequest
-	recorder model.AttemptRecorder
+	ctx                context.Context
+	cancel             context.CancelFunc
+	events             chan model.ModelEvent
+	done               chan struct{}
+	once               sync.Once
+	request            model.ModelRequest
+	recorder           model.AttemptRecorder
+	inputTokenEstimate int
 }
 
-func newStream(parent context.Context, executor *Executor, request model.ModelRequest, payload []byte, recorder model.AttemptRecorder) *eventStream {
+func newStream(parent context.Context, executor *Executor, request model.ModelRequest, payload []byte, inputTokenEstimate int, recorder model.AttemptRecorder) *eventStream {
 	ctx, cancel := context.WithCancel(parent)
-	stream := &eventStream{ctx: ctx, cancel: cancel, events: make(chan model.ModelEvent, 16), done: make(chan struct{}), request: request, recorder: recorder}
+	stream := &eventStream{ctx: ctx, cancel: cancel, events: make(chan model.ModelEvent, 16), done: make(chan struct{}), request: request, recorder: recorder, inputTokenEstimate: inputTokenEstimate}
 	go stream.run(executor, append([]byte(nil), payload...))
 	return stream
 }
@@ -72,10 +73,11 @@ func (s *eventStream) run(executor *Executor, payload []byte) {
 		usage := result.usage
 		if usage == (model.TokenUsage{}) {
 			outputTokens := int64((result.outputBytes + 3) / 4)
+			inputTokens := int64(s.inputTokenEstimate)
 			usage = model.TokenUsage{
-				InputTokens: int64(len(payload)), OutputTokens: outputTokens,
-				TotalTokens: int64(len(payload)) + outputTokens,
-				Estimated:   true, EstimateSource: "openaicompat.local_byte_estimate",
+				InputTokens: inputTokens, OutputTokens: outputTokens,
+				TotalTokens: inputTokens + outputTokens,
+				Estimated:   true, EstimateSource: "openaicompat.local_semantic_estimate",
 			}
 		}
 		outcome := model.AttemptFailed
