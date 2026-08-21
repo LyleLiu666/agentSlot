@@ -12,8 +12,9 @@ import (
 )
 
 func (r *runtimeInstance) send(ctx context.Context, request interaction.SendRequest) (interaction.EnqueueReceipt, error) {
-	if request.SessionID != r.id() || !request.Input.Valid() {
-		return interaction.EnqueueReceipt{}, invalidInput("gateway.send", "SessionID and message input are required")
+	if request.SessionID != r.id() || !request.Input.Valid() ||
+		(request.ClientMessageID != "" && !request.ClientMessageID.Valid()) {
+		return interaction.EnqueueReceipt{}, invalidInput("gateway.send", "SessionID, valid optional ClientMessageID, and message input are required")
 	}
 	r.mu.Lock()
 	if err := r.ensureOpenLocked("gateway.send"); err != nil {
@@ -26,7 +27,7 @@ func (r *runtimeInstance) send(ctx context.Context, request interaction.SendRequ
 		return interaction.EnqueueReceipt{}, err
 	}
 	message := agent.Message{
-		ID: agent.MessageID(r.nextID("message")), SessionID: r.id(), Role: agent.RoleUser,
+		ID: agent.MessageID(r.nextID("message")), ClientMessageID: request.ClientMessageID, SessionID: r.id(), Role: agent.RoleUser,
 		Parts: cloneRuntimeParts(request.Input.Parts), CreatedAt: time.Now().UTC(),
 	}
 	item := session.QueueItem{Message: message, Delivery: session.DeliveryNormal}
@@ -57,8 +58,9 @@ func (r *runtimeInstance) send(ctx context.Context, request interaction.SendRequ
 }
 
 func (r *runtimeInstance) steer(ctx context.Context, request interaction.SteerRequest) (interaction.EnqueueReceipt, error) {
-	if request.SessionID != r.id() || !request.Input.Valid() {
-		return interaction.EnqueueReceipt{}, invalidInput("gateway.steer", "SessionID and message input are required")
+	if request.SessionID != r.id() || !request.Input.Valid() ||
+		(request.ClientMessageID != "" && !request.ClientMessageID.Valid()) {
+		return interaction.EnqueueReceipt{}, invalidInput("gateway.steer", "SessionID, valid optional ClientMessageID, and message input are required")
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -69,7 +71,7 @@ func (r *runtimeInstance) steer(ctx context.Context, request interaction.SteerRe
 		return interaction.EnqueueReceipt{}, agent.NewCodedError(agent.ErrorConflict, agent.CodeNoActiveRun, "gateway.steer", "session has no active Run", nil)
 	}
 	message := agent.Message{
-		ID: agent.MessageID(r.nextID("message")), SessionID: r.id(), Role: agent.RoleUser,
+		ID: agent.MessageID(r.nextID("message")), ClientMessageID: request.ClientMessageID, SessionID: r.id(), Role: agent.RoleUser,
 		Parts: cloneRuntimeParts(request.Input.Parts), CreatedAt: time.Now().UTC(),
 	}
 	item := session.QueueItem{Message: message, Delivery: session.DeliverySteer}

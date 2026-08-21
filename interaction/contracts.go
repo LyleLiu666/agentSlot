@@ -110,13 +110,17 @@ type SendRequest struct {
 	SessionID        agent.SessionID
 	ExpectedRevision agent.Revision
 	Actor            agent.ActorIdentity
-	Input            agent.MessageInput
+	// ClientMessageID is an optional caller identity copied to the durable
+	// user Message so clients can reconcile optimistic and canonical views.
+	ClientMessageID agent.ClientMessageID
+	Input           agent.MessageInput
 }
 
 type SteerRequest struct {
 	SessionID        agent.SessionID
 	ExpectedRevision agent.Revision
 	Actor            agent.ActorIdentity
+	ClientMessageID  agent.ClientMessageID
 	Input            agent.MessageInput
 }
 
@@ -372,6 +376,7 @@ type CommandActions interface {
 type ActionRequest struct {
 	Kind                    ActionKind
 	ExpectedRevision        agent.Revision
+	ClientMessageID         agent.ClientMessageID
 	Input                   agent.MessageInput
 	Config                  session.SessionModelConfig
 	AcceptCompatibilityLoss bool

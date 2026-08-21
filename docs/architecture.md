@@ -126,6 +126,13 @@ The runtime boundary below the Assembly is explicit:
    Disconnect and stream overflow do not cancel the Run. Non-streaming calls
    aggregate the same durable Run facts rather than invoking a second path.
 
+`SendRequest` and `SteerRequest` may carry a caller-generated
+`ClientMessageID`. The fixed Runtime copies it to the durable user `Message`
+while still allocating the authoritative `MessageID`. This correlation lets a
+TUI, Web, desktop, or ACP client replace its optimistic local echo with the
+canonical Gateway fact without matching natural-language content. It carries
+no authorization and cannot replace `ExpectedRevision` or Store idempotency.
+
 ## Application host
 
 `Application` is deliberately a thin owner of module selection, build, and

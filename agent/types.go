@@ -23,20 +23,25 @@ type (
 	RunID       string
 	StepID      string
 	MessageID   string
-	ToolCallID  string
-	FactID      string
-	AttemptID   string
+	// ClientMessageID is an optional caller-generated correlation identity for
+	// reconciling an optimistic submission with the Runtime-assigned MessageID.
+	// It is not a substitute for the durable MessageID.
+	ClientMessageID string
+	ToolCallID      string
+	FactID          string
+	AttemptID       string
 )
 
-func (id AgentID) Valid() bool     { return validID(string(id)) }
-func (id WorkspaceID) Valid() bool { return validID(string(id)) }
-func (id SessionID) Valid() bool   { return validID(string(id)) }
-func (id RunID) Valid() bool       { return validID(string(id)) }
-func (id StepID) Valid() bool      { return validID(string(id)) }
-func (id MessageID) Valid() bool   { return validID(string(id)) }
-func (id ToolCallID) Valid() bool  { return validID(string(id)) }
-func (id FactID) Valid() bool      { return validID(string(id)) }
-func (id AttemptID) Valid() bool   { return validID(string(id)) }
+func (id AgentID) Valid() bool         { return validID(string(id)) }
+func (id WorkspaceID) Valid() bool     { return validID(string(id)) }
+func (id SessionID) Valid() bool       { return validID(string(id)) }
+func (id RunID) Valid() bool           { return validID(string(id)) }
+func (id StepID) Valid() bool          { return validID(string(id)) }
+func (id MessageID) Valid() bool       { return validID(string(id)) }
+func (id ClientMessageID) Valid() bool { return validID(string(id)) }
+func (id ToolCallID) Valid() bool      { return validID(string(id)) }
+func (id FactID) Valid() bool          { return validID(string(id)) }
+func (id AttemptID) Valid() bool       { return validID(string(id)) }
 
 func validID(value string) bool {
 	return value != "" && strings.TrimSpace(value) == value
@@ -92,20 +97,22 @@ func (r Role) Valid() bool {
 // represented here; Context is responsible for projecting facts into a
 // provider's legal request format.
 type Message struct {
-	ID        MessageID
-	SessionID SessionID
-	RunID     RunID
-	StepID    StepID
-	Role      Role
-	Parts     []MessagePart
-	CreatedAt time.Time
+	ID              MessageID
+	ClientMessageID ClientMessageID
+	SessionID       SessionID
+	RunID           RunID
+	StepID          StepID
+	Role            Role
+	Parts           []MessagePart
+	CreatedAt       time.Time
 }
 
 // Valid reports whether a durable message has stable identity and a known
 // role. A contained assistant message may be content-empty only so it can own
 // tool calls; SessionStore must require those calls in the same transaction.
 func (m Message) Valid() bool {
-	if !m.ID.Valid() || !m.SessionID.Valid() || !m.Role.Valid() {
+	if !m.ID.Valid() || !m.SessionID.Valid() || !m.Role.Valid() ||
+		(m.ClientMessageID != "" && !m.ClientMessageID.Valid()) {
 		return false
 	}
 	if len(m.Parts) == 0 {
