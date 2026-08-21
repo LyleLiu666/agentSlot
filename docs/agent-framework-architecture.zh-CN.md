@@ -196,13 +196,15 @@ Agent 启动配置提供：
 - `LatestOnly`：默认，只保存最新完整 Context；
 - `RetainAll`：调试模式，保存每个 Step 的完整逻辑模型请求。
 
-完整 Context 包含当时的 SystemPrompt、模型输入、Tool definitions、ModelConfig 和附件投影，但不保存凭据或网络 Header。Compactor 可以替换；Runtime 固定验证协议完整性和硬 Token 上限。
+完整 Context 包含当时的 SystemPrompt、模型输入、Tool definitions、ModelConfig、附件投影，以及模型返回并要求后续原样回传的不透明续传状态，但不保存凭据或网络 Header。续传状态绑定产生它的 ProviderKey/ModelID，不作为 MessagePart 展示或解释，也不能交给另一模型。Compactor 可以替换，但必须原样复制保留的续传状态；Runtime 固定验证协议完整性和硬 Token 上限。
 
 只提供 `MaxTokensPerRun`，默认 `0` 表示无限。预算统计成功与失败 Attempt；达到预算且任务未完成时追加 `RunBudgetExceeded`，结束当前 Run 并回到 idle。用户显式发送“继续”会创建新 Run。框架不定义 MaxStep、MaxToolCall、MaxRunDuration 或 Queue 数量限制。
 
 ## 10. ModelExecutor 与物理 Attempt
 
 AgentRuntime 发起一次逻辑模型调用；ModelExecutor 可以在内部执行多个物理 Provider Attempt，并自行决定重试、原生续传或终止。Runtime 不猜测 Provider 恢复方式。
+
+如果一次完整模型结果包含 Provider 私有续传数据，`Completion.Continuation` 只承载一份合法 JSON 值。Runtime 将它包装为带 ProviderKey/ModelID 所有权的 `ModelContinuation`，随 assistant Message 严格追加；固定 Runtime、SessionStore 和 Context 只能做防御性复制与持久化，不能理解其内部字段。
 
 Executor 获得受限 `AttemptRecorder`：
 

@@ -1,7 +1,9 @@
 package session_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync"
@@ -11,6 +13,44 @@ import (
 	"github.com/LyleLiu666/agentSlot/model"
 	"github.com/LyleLiu666/agentSlot/session"
 )
+
+func TestFileStorePersistsOpaqueModelContinuationExactly(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "sessions")
+	store := openFileStore(t, directory)
+	created, err := store.Create(context.Background(), session.NewSession{
+		Session:     agent.Session{ID: "session-continuation", AgentID: "agent-1", WorkspaceID: "workspace-1"},
+		ModelConfig: model.Config{ProviderKey: "provider", ModelID: "model", Reasoning: model.ReasoningDefault},
+		RunState:    session.RunIdle,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := json.RawMessage(`[{"type":"thinking","signature":"opaque-provider-value"}]`)
+	message := agent.Message{
+		ID: "message-continuation", SessionID: created.Session.ID, RunID: "run-1", StepID: "step-1", Role: agent.RoleAssistant,
+		Parts:             []agent.MessagePart{{Kind: agent.PartText, Text: "calling a tool"}},
+		ModelContinuation: &agent.ModelContinuation{ProviderKey: "provider", ModelID: "model", State: state},
+	}
+	if _, err := store.Commit(context.Background(), session.CommitRequest{
+		SessionID: created.Session.ID, ExpectedRevision: created.Revision, IdempotencyKey: "append-continuation",
+		Changes: []session.Change{{Kind: session.AppendMessage, Message: &message}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	reopened := openFileStore(t, directory)
+	t.Cleanup(func() { _ = reopened.Close(context.Background()) })
+	loaded, err := reopened.Load(context.Background(), session.SessionRef{SessionID: created.Session.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := loaded.History[0].Message.ModelContinuation
+	if got == nil || got.ProviderKey != "provider" || got.ModelID != "model" || !bytes.Equal(got.State, state) {
+		t.Fatalf("continuation = %#v", got)
+	}
+}
 
 func TestFileStorePersistsSnapshotAndIdempotencyAcrossReopen(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "sessions")

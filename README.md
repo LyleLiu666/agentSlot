@@ -42,7 +42,7 @@ never selects a Loop or any other domain component.
 
 ## Status
 
-AgentSlot is a pre-1.0 foundation. `v0.0.4` is the current validation release
+AgentSlot is a pre-1.0 foundation. `v0.0.5` is the current validation release
 and is intended to be consumed by real Agent projects. It adds the contracted
 Goal, Memory, Workflow, Billing, Agent Loop, and immutable Artifact Store
 boundaries developed after the first complete reference Agent path. It is not a
@@ -355,8 +355,14 @@ retry/reset handling, durable started/terminal Attempt facts, Provider-reported
 token usage, and marked local estimates when a failed request has no usage. If a
 configured model declares image input, that module explicitly requires
 `artifact.store`; attachment references are opened through that contract and
-projected as real image content blocks rather than placeholder text. The fixed Runtime also
-owns ToolDispatcher semantics: call/pending and result/terminal commits,
+projected as real image content blocks rather than placeholder text. The fixed
+Runtime also preserves optional opaque JSON continuation state returned by a
+ModelExecutor. Runtime binds that state to the selected Provider/model on the durable
+assistant Message and carries it unchanged through later Context projection
+without rendering or interpreting it. Protocol adapters can therefore resume a
+tool turn without adding their private wire vocabulary to the standard
+interfaces. The fixed Runtime also owns ToolDispatcher semantics: call/pending
+and result/terminal commits,
 Serial/ParallelSafe batches, safe structured failures, and mandatory model
 continuation. [`tool/bash`](tool/bash) is the first explicitly installed
 built-in Tool; it fixes working directory, explicit environment, timeout,

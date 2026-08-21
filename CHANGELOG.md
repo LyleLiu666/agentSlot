@@ -8,6 +8,21 @@ when real consumers expose a flawed boundary.
 
 No changes yet.
 
+## v0.0.5 - 2026-08-21
+
+### Added
+
+- Model completions may return one opaque JSON continuation owned by the
+  selected Provider/model. The fixed Runtime persists it on the durable
+  assistant Message, Context preserves it byte-for-byte through tool loops and
+  compaction, and adapters for other models can ignore it safely.
+
+### Safety
+
+- Opaque continuation state is never interpreted or rendered as message
+  content, cannot be attached to user messages, and carries its Provider/model
+  ownership so another selected model must not consume it.
+
 ## v0.0.4 - 2026-08-21
 
 ### Fixed

@@ -377,9 +377,9 @@ Run/Step。sub-agent 是独立执行参与者，必须拥有独立 Session，并
 
 - **问题 / 背景：** Provider 协议转换和瞬时网络故障不应散落在 Runtime 状态机中。
 - **最终决定：** AgentRuntime 发起一次逻辑模型调用；`model.executor` 是公共 `One` Slot，负责背后一次或多次真实 Provider 请求、Provider 适配，以及重试、原生续传或终止决定。
-- **必须满足的不变量：** Runtime 只消费临时输出、`reset`、完整结果和最终失败，不理解 Provider 差异；每次真实请求有唯一 AttemptID；Executor 必须在请求前通过受限 AttemptRecorder 持久化 started，在重试或返回前持久化 terminal。
+- **必须满足的不变量：** Runtime 只消费临时输出、`reset`、完整结果和最终失败，不理解 Provider 差异；每次真实请求有唯一 AttemptID；Executor 必须在请求前通过受限 AttemptRecorder 持久化 started，在重试或返回前持久化 terminal。若 Provider 协议要求后续请求原样回传私有响应块，Executor 可在完整结果中返回一份不透明 JSON 续传状态；Runtime 只按当时的 ProviderKey/ModelID 绑定、持久化和复制，不能解释、展示、修改或交给另一模型。
 - **否决的方案及原因：** Runtime 自己适配 Provider 会复制协议逻辑并产生不同重试语义；把 `model.provider` 全局设为必需会排斥不通过本地 Provider 注册表实现的 Executor。
-- **对接口、存储、Gateway 和实现的影响：** 标准 Profile 必需一个 ModelExecutor；每个 Attempt 的 started/terminal 都进入完整 Session History。TokenUsage 区分 input、output、cached-input、cache-write、reasoning 和 total；失败且无 usage 时由适配器本地估算并标记来源。
+- **对接口、存储、Gateway 和实现的影响：** 标准 Profile 必需一个 ModelExecutor；每个 Attempt 的 started/terminal 都进入完整 Session History。可选续传状态随 assistant Message 严格追加，并在 Context 压缩和工具循环中保持字节不变，但不属于用户可见 MessagePart。TokenUsage 区分 input、output、cached-input、cache-write、reasoning 和 total；失败且无 usage 时由适配器本地估算并标记来源。
 - **状态：** 已确定；重试次数与退避是具体 Executor 的受测配置，不是标准架构参数。
 
 ### A-036 半流失败由 ModelExecutor 恢复

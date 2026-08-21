@@ -93,18 +93,34 @@ func (r Role) Valid() bool {
 	return r == RoleUser || r == RoleAssistant || r == RoleTool
 }
 
-// Message is a durable message fact. Provider-specific wire blocks are not
-// represented here; Context is responsible for projecting facts into a
-// provider's legal request format.
+// ModelContinuation is provider-owned protocol state that must survive an
+// interrupted model turn unchanged. Runtime and Context may copy and persist
+// it, but must never inspect, render, edit, or send it to a different selected
+// model. State contains one syntactically valid JSON value defined by the
+// ModelExecutor implementation.
+type ModelContinuation struct {
+	ProviderKey string
+	ModelID     string
+	State       json.RawMessage
+}
+
+func (c ModelContinuation) Valid() bool {
+	return c.ModelID != "" && len(c.State) > 0 && json.Valid(c.State)
+}
+
+// Message is a durable message fact. Provider-neutral content stays in Parts;
+// an optional opaque continuation preserves provider protocol state without
+// pretending that state is user-visible message content.
 type Message struct {
-	ID              MessageID
-	ClientMessageID ClientMessageID
-	SessionID       SessionID
-	RunID           RunID
-	StepID          StepID
-	Role            Role
-	Parts           []MessagePart
-	CreatedAt       time.Time
+	ID                MessageID
+	ClientMessageID   ClientMessageID
+	SessionID         SessionID
+	RunID             RunID
+	StepID            StepID
+	Role              Role
+	Parts             []MessagePart
+	ModelContinuation *ModelContinuation
+	CreatedAt         time.Time
 }
 
 // Valid reports whether a durable message has stable identity and a known
@@ -113,6 +129,9 @@ type Message struct {
 func (m Message) Valid() bool {
 	if !m.ID.Valid() || !m.SessionID.Valid() || !m.Role.Valid() ||
 		(m.ClientMessageID != "" && !m.ClientMessageID.Valid()) {
+		return false
+	}
+	if m.ModelContinuation != nil && (m.Role != RoleAssistant || !m.RunID.Valid() || !m.StepID.Valid() || !m.ModelContinuation.Valid()) {
 		return false
 	}
 	if len(m.Parts) == 0 {

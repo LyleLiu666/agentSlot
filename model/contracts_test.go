@@ -2,6 +2,7 @@ package model_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"testing"
@@ -137,6 +138,20 @@ func TestCompletionAllowsIdentityFreeToolOnlyResult(t *testing.T) {
 	}
 	if (model.Completion{ToolCalls: []model.ToolCallRequest{{Name: "lookup", Arguments: []byte(`not-json`)}}}).Valid() {
 		t.Fatal("tool request with invalid JSON accepted")
+	}
+}
+
+func TestCompletionCarriesOpaqueModelContinuationWithoutInterpretingIt(t *testing.T) {
+	completion := model.Completion{
+		ToolCalls:    []model.ToolCallRequest{{Name: "lookup", Arguments: []byte(`{"q":"x"}`)}},
+		Continuation: json.RawMessage(`[{"type":"opaque","signature":"provider-owned"}]`),
+	}
+	if !completion.Valid() {
+		t.Fatal("valid opaque continuation was rejected")
+	}
+	completion.Continuation = json.RawMessage(`not-json`)
+	if completion.Valid() {
+		t.Fatal("invalid opaque continuation was accepted")
 	}
 }
 

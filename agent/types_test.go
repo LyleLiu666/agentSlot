@@ -1,6 +1,7 @@
 package agent_test
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -73,6 +74,30 @@ func TestMessageAndToolCallKeepStableContainment(t *testing.T) {
 	}
 	if call.MessageID != message.ID || call.SessionID != message.SessionID || call.RunID != message.RunID || call.StepID != message.StepID {
 		t.Fatalf("tool call containment = %#v, want message containment", call)
+	}
+}
+
+func TestOpaqueModelContinuationBelongsOnlyToAnAssistantMessage(t *testing.T) {
+	continuation := &agent.ModelContinuation{
+		ProviderKey: "provider", ModelID: "model",
+		State: json.RawMessage(`[{"type":"opaque","signature":"provider-owned"}]`),
+	}
+	message := agent.Message{
+		ID: "message-1", SessionID: "session-1", RunID: "run-1", StepID: "step-1",
+		Role: agent.RoleAssistant, Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "done"}},
+		ModelContinuation: continuation,
+	}
+	if !message.Valid() {
+		t.Fatalf("assistant continuation was rejected: %#v", message)
+	}
+	message.Role = agent.RoleUser
+	if message.Valid() {
+		t.Fatal("user message accepted provider-owned continuation")
+	}
+	message.Role = agent.RoleAssistant
+	message.ModelContinuation.State = json.RawMessage(`not-json`)
+	if message.Valid() {
+		t.Fatal("message accepted malformed continuation state")
 	}
 }
 

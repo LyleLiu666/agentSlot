@@ -2,6 +2,7 @@ package standardagent
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"testing"
 
@@ -10,6 +11,39 @@ import (
 	"github.com/LyleLiu666/agentSlot/model"
 	"github.com/LyleLiu666/agentSlot/session"
 )
+
+func TestContextCannotInventDropOrModifyOpaqueModelContinuation(t *testing.T) {
+	state := json.RawMessage(`[{"signature":"provider-owned"}]`)
+	message := &agent.Message{
+		ID: "assistant-1", SessionID: "session-1", RunID: "run-1", StepID: "step-1", Role: agent.RoleAssistant,
+		ModelContinuation: &agent.ModelContinuation{ProviderKey: "provider", ModelID: "model", State: state},
+	}
+	history := []session.HistoryFact{{Message: message}}
+	unchanged := cloneRuntimeMessage(*message)
+	if err := validateModelContinuations(history, []model.Input{{Message: &unchanged}}, "run-1"); err != nil {
+		t.Fatalf("unchanged continuation was rejected: %v", err)
+	}
+	dropped := cloneRuntimeMessage(*message)
+	dropped.ModelContinuation = nil
+	if err := validateModelContinuations(history, []model.Input{{Message: &dropped}}, "run-1"); err == nil {
+		t.Fatal("dropped continuation was accepted")
+	}
+	modified := cloneRuntimeMessage(*message)
+	modified.ModelContinuation.State = json.RawMessage(`[{"signature":"changed"}]`)
+	if err := validateModelContinuations(history, []model.Input{{Message: &modified}}, "run-1"); err == nil {
+		t.Fatal("modified continuation was accepted")
+	}
+	invented := &agent.Message{
+		ID: "source-1", SessionID: "session-1", RunID: "run-1", StepID: "step-1", Role: agent.RoleAssistant,
+		ModelContinuation: &agent.ModelContinuation{ProviderKey: "provider", ModelID: "model", State: state},
+	}
+	if err := validateModelContinuations(history, []model.Input{{Message: invented}}, "run-1"); err == nil {
+		t.Fatal("context-invented continuation was accepted")
+	}
+	if err := validateModelContinuations(history, nil, "run-1"); err == nil {
+		t.Fatal("active continuation message was dropped as a whole")
+	}
+}
 
 func TestModelAttemptIsDurableBeforeFakeProviderProducesOutput(t *testing.T) {
 	block := make(chan struct{})

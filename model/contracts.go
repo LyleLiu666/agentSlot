@@ -397,8 +397,9 @@ type ModelEvent struct {
 // not an Executor or Provider adapter, allocates durable Message containment.
 // Tool-call requests extend this value in the ToolDispatcher round.
 type Completion struct {
-	Parts     []agent.MessagePart
-	ToolCalls []ToolCallRequest
+	Parts        []agent.MessagePart
+	ToolCalls    []ToolCallRequest
+	Continuation json.RawMessage
 }
 
 // Valid reports whether the completed content can become a durable message.
@@ -415,6 +416,9 @@ func (c Completion) Valid() bool {
 		if !call.Valid() {
 			return false
 		}
+	}
+	if len(c.Continuation) > 0 && !json.Valid(c.Continuation) {
+		return false
 	}
 	return true
 }

@@ -2,6 +2,7 @@ package context
 
 import (
 	stdcontext "context"
+	"encoding/json"
 	"errors"
 
 	agent "github.com/LyleLiu666/agentSlot/agent"
@@ -72,6 +73,11 @@ func cloneInputs(source []model.Input) []model.Input {
 		if input.Message != nil {
 			value := *input.Message
 			value.Parts = append([]agent.MessagePart(nil), input.Message.Parts...)
+			if input.Message.ModelContinuation != nil {
+				continuation := *input.Message.ModelContinuation
+				continuation.State = append(json.RawMessage(nil), input.Message.ModelContinuation.State...)
+				value.ModelContinuation = &continuation
+			}
 			result[index].Message = &value
 		}
 		if input.ToolCall != nil {

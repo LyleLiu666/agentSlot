@@ -1,7 +1,9 @@
 package context_test
 
 import (
+	"bytes"
 	stdcontext "context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -92,7 +94,10 @@ func TestTailCompactorKeepsToolProtocolGroupAndDoesNotMutateInput(t *testing.T) 
 		t.Fatal(err)
 	}
 	user := &agent.Message{ID: "user-1", SessionID: "session-1", RunID: "run-1", StepID: "step-1", Role: agent.RoleUser, Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "old"}}}
-	assistant := &agent.Message{ID: "assistant-1", SessionID: "session-1", RunID: "run-1", StepID: "step-2", Role: agent.RoleAssistant}
+	assistant := &agent.Message{
+		ID: "assistant-1", SessionID: "session-1", RunID: "run-1", StepID: "step-2", Role: agent.RoleAssistant,
+		ModelContinuation: &agent.ModelContinuation{ProviderKey: "provider", ModelID: "model", State: json.RawMessage(`[{"signature":"sealed"}]`)},
+	}
 	call := &agent.ToolCall{ID: "call-1", MessageID: assistant.ID, SessionID: "session-1", RunID: "run-1", StepID: "step-2", Name: "lookup", Arguments: []byte(`{}`)}
 	result := &tool.ToolResult{CallID: call.ID, Status: tool.ResultSucceeded}
 	inputs := []model.Input{{Message: user}, {Message: assistant}, {ToolCall: call}, {ToolResult: result}}
@@ -104,7 +109,11 @@ func TestTailCompactorKeepsToolProtocolGroupAndDoesNotMutateInput(t *testing.T) 
 		t.Fatalf("compacted output = %#v", output)
 	}
 	output.Inputs[0].Message.Role = agent.RoleUser
+	output.Inputs[0].Message.ModelContinuation.State[0] = '{' + 1
 	if assistant.Role != agent.RoleAssistant {
 		t.Fatal("compactor output aliases input")
+	}
+	if !bytes.Equal(assistant.ModelContinuation.State, json.RawMessage(`[{"signature":"sealed"}]`)) {
+		t.Fatal("compactor output aliases opaque continuation state")
 	}
 }

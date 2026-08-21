@@ -1,6 +1,7 @@
 package standardagent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -266,9 +267,11 @@ func TestRuntimeSteerContinuesSameRunWithFrozenModelConfig(t *testing.T) {
 
 func TestRuntimeCommitsToolCallAndResultThenContinuesModel(t *testing.T) {
 	installed := &countingTool{definition: testToolDefinition(t, "echo")}
+	continuation := json.RawMessage(`[{"type":"opaque","signature":"provider-owned"}]`)
 	fake := model.NewFakeModelExecutor(
 		model.FakeExecution{Events: []model.ModelEvent{{Kind: model.EventComplete, Output: &model.Completion{
-			ToolCalls: []model.ToolCallRequest{{CorrelationID: "provider-call-1", Name: "echo", Arguments: []byte(`{"value":"hello"}`)}},
+			ToolCalls:    []model.ToolCallRequest{{CorrelationID: "provider-call-1", Name: "echo", Arguments: []byte(`{"value":"hello"}`)}},
+			Continuation: continuation,
 		}}}},
 		model.FakeExecution{Events: []model.ModelEvent{complete("after tool")}},
 	)
@@ -292,6 +295,13 @@ func TestRuntimeCommitsToolCallAndResultThenContinuesModel(t *testing.T) {
 	}
 	if len(requests[1].Inputs) < 4 || requests[1].Inputs[len(requests[1].Inputs)-2].ToolCall == nil || requests[1].Inputs[len(requests[1].Inputs)-2].ToolCall.CorrelationID != "provider-call-1" || requests[1].Inputs[len(requests[1].Inputs)-1].ToolResult == nil {
 		t.Fatalf("second request lacks tool exchange: %#v", requests[1].Inputs)
+	}
+	assistant := requests[1].Inputs[len(requests[1].Inputs)-3].Message
+	if assistant == nil || assistant.ModelContinuation == nil ||
+		assistant.ModelContinuation.ProviderKey != requests[0].Config.ProviderKey ||
+		assistant.ModelContinuation.ModelID != requests[0].Config.ModelID ||
+		!bytes.Equal(assistant.ModelContinuation.State, continuation) {
+		t.Fatalf("second request lost provider-owned continuation: %#v", assistant)
 	}
 	snapshot, err := access.View(ctx, interaction.SessionViewRequest{SessionID: opened.SessionID})
 	if err != nil || len(snapshot.RecentHistory) < 6 {

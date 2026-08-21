@@ -59,7 +59,7 @@ Its description uses `AssemblyDescription` and the `agentslot.assembly/v0` schem
 | --- | --- | --- | --- | --- |
 | `agent.loop` | `AgentLoop` | `One` | exactly 1 | Owns each durable Run's advance/continue/stop decision over the framework Step protocol. |
 | `session.store` | `SessionStore` | `One` | exactly 1 | Persists the Session aggregate—History, Context, Queue, RunJournal, SessionModelConfig, revisions, and atomic CAS transactions—and lists resumable Sessions by Agent/Workspace. |
-| `model.executor` | `ModelExecutor` | `One` | exactly 1 | Executes one logical model call while containing provider-specific physical attempts, streaming recovery, and final failure semantics. |
+| `model.executor` | `ModelExecutor` | `One` | exactly 1 | Executes one logical model call while containing provider-specific physical attempts, streaming recovery, opaque continuation state, and final failure semantics. |
 | `gateway.channel` | `GatewayChannel` | `Many` | at least 1 | Binds a TUI, Web, desktop, function, HTTP, ACP, or another caller-facing channel to the fixed Gateway. |
 
 `AgentRuntime` and the in-process Gateway remain framework control-plane
@@ -187,7 +187,7 @@ evaluation takes precedence. Goal state remains outside conversation History.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `model.executor` | `ModelExecutor` | `One` | globally required | Validates selected-model capabilities, counts complete requests, and executes one logical model call while durably recording each physical attempt through the restricted AttemptRecorder. | Contracted |
+| `model.executor` | `ModelExecutor` | `One` | globally required | Validates selected-model capabilities, counts complete requests, executes one logical model call, returns optional opaque continuation state, and durably records each physical attempt through the restricted AttemptRecorder. | Contracted |
 | `model.attempt.observer` | `AttemptObserver` | `Chain` | optional | Synchronously records or rejects one physical provider attempt before dispatch and after completion; unlike passive telemetry it may fail closed. | Contracted |
 | `model.provider` | `ModelProvider` | `Many` | optional; required only by an Executor that declares it | Implements named provider access for Executors that compose local adapters. | Mapped |
 | `model.selector` | `ModelSelector` | `One` | optional; conditional for dynamic routing | Selects a provider/model using explicit request and policy inputs. | Mapped |
