@@ -169,7 +169,11 @@ func (e *Executor) Execute(ctx context.Context, request model.ModelRequest, reco
 	if err != nil {
 		return nil, agent.NewError(agent.ErrorInvalidInput, "openaicompat.execute", "invalid logical model request", err)
 	}
-	return newStream(ctx, e, request, payload, recorder), nil
+	inputTokenEstimate, err := e.CountTokens(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	return newStream(ctx, e, request, payload, inputTokenEstimate, recorder), nil
 }
 
 func (e *Executor) Inspect(ctx context.Context, config model.Config) (model.ExecutionCapabilities, error) {

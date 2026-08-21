@@ -100,6 +100,48 @@ func TestExecutorCountsImageSemanticsInsteadOfBase64PayloadBytes(t *testing.T) {
 	}
 }
 
+func TestExecutorFallbackUsageDoesNotBillBase64TransportAsTokens(t *testing.T) {
+	png, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlN8AAAAASUVORK5CYII=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	png = append(png, bytes.Repeat([]byte{0}, 100_000)...)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = writer.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n"))
+		_, _ = writer.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+	executor := newExecutorConfig(t, openaicompat.Config{
+		ProviderKey: "openai", BaseURL: server.URL, MaxAttempts: 1,
+		ArtifactStore: &fixtureArtifactStore{entries: map[string]fixtureArtifact{
+			"artifact-image": {metadata: artifact.Metadata{ID: "artifact-image", MediaType: "image/png", Name: "image.png", Size: int64(len(png))}, body: png},
+		}},
+		Models: []openaicompat.Model{{ID: "vision", Title: "Vision", Capabilities: model.ExecutionCapabilities{
+			Media:     model.Capabilities{InputModalities: []model.Modality{model.ModalityText, model.ModalityImage}, OutputModalities: []model.Modality{model.ModalityText}},
+			Reasoning: []model.Reasoning{model.ReasoningDefault}, ContextWindowTokens: 4_096, MaxOutputTokens: 512,
+		}}},
+	})
+	request := requestWithUser("describe")
+	request.Config.ModelID = "vision"
+	request.Inputs[0].Message.Parts = append(request.Inputs[0].Message.Parts, agent.MessagePart{
+		Kind: agent.PartAttachment, AttachmentID: "artifact-image", MediaType: "image/png", Name: "image.png",
+	})
+	recorder := &attemptRecorder{}
+	stream, err := executor.Execute(context.Background(), request, recorder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := receiveUntilTerminal(t, stream)
+	if events[len(events)-1].Kind != model.EventComplete {
+		t.Fatalf("events = %#v", events)
+	}
+	_, finishes := recorder.records()
+	if len(finishes) != 1 || !finishes[0].Usage.Estimated || finishes[0].Usage.InputTokens >= 4_096 {
+		t.Fatalf("fallback usage = %#v", finishes)
+	}
+}
+
 func TestImageCapableModuleRequiresArtifactStoreAtBuildTime(t *testing.T) {
 	config := openaicompat.Config{
 		ProviderKey: "openai", BaseURL: "https://example.invalid", Models: []openaicompat.Model{{
