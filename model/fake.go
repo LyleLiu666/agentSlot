@@ -346,7 +346,10 @@ func cloneAttemptUsage(source map[agent.AttemptID]TokenUsage) map[agent.AttemptI
 func cloneModelEvent(source ModelEvent) ModelEvent {
 	copy := source
 	if source.Output != nil {
-		output := Completion{Parts: append([]agent.MessagePart(nil), source.Output.Parts...)}
+		output := Completion{
+			Parts:        append([]agent.MessagePart(nil), source.Output.Parts...),
+			Continuation: append(json.RawMessage(nil), source.Output.Continuation...),
+		}
 		output.ToolCalls = make([]ToolCallRequest, len(source.Output.ToolCalls))
 		for index, call := range source.Output.ToolCalls {
 			output.ToolCalls[index] = call
@@ -376,6 +379,11 @@ func cloneInput(source Input) Input {
 	if source.Message != nil {
 		message := *source.Message
 		message.Parts = append([]agent.MessagePart(nil), source.Message.Parts...)
+		if source.Message.ModelContinuation != nil {
+			continuation := *source.Message.ModelContinuation
+			continuation.State = append(json.RawMessage(nil), source.Message.ModelContinuation.State...)
+			message.ModelContinuation = &continuation
+		}
 		copy.Message = &message
 	}
 	if source.ToolCall != nil {

@@ -2,6 +2,7 @@ package standardagent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -545,6 +546,12 @@ func (r *runtimeInstance) commitCompletion(run *activeRun, step agent.StepID, ou
 		ID: agent.MessageID(r.nextID("message")), SessionID: r.id(), RunID: run.id, StepID: step,
 		Role: agent.RoleAssistant, Parts: cloneRuntimeParts(output.Parts), CreatedAt: time.Now().UTC(),
 	}
+	if len(output.Continuation) > 0 {
+		assistant.ModelContinuation = &agent.ModelContinuation{
+			ProviderKey: run.config.ProviderKey, ModelID: run.config.ModelID,
+			State: append(json.RawMessage(nil), output.Continuation...),
+		}
+	}
 	changes := []session.Change{{Kind: session.AppendMessage, Message: &assistant}}
 	calls := make([]agent.ToolCall, 0, len(output.ToolCalls))
 	for _, requested := range output.ToolCalls {
@@ -1022,8 +1029,7 @@ func historyInputs(history []session.HistoryFact) []model.Input {
 		input := model.Input{}
 		switch {
 		case fact.Message != nil:
-			message := *fact.Message
-			message.Parts = cloneRuntimeParts(message.Parts)
+			message := cloneRuntimeMessage(*fact.Message)
 			input.Message = &message
 		case fact.ToolCall != nil:
 			call := *fact.ToolCall
@@ -1042,6 +1048,17 @@ func historyInputs(history []session.HistoryFact) []model.Input {
 
 func cloneRuntimeParts(source []agent.MessagePart) []agent.MessagePart {
 	return append([]agent.MessagePart(nil), source...)
+}
+
+func cloneRuntimeMessage(source agent.Message) agent.Message {
+	copy := source
+	copy.Parts = cloneRuntimeParts(source.Parts)
+	if source.ModelContinuation != nil {
+		continuation := *source.ModelContinuation
+		continuation.State = append(json.RawMessage(nil), source.ModelContinuation.State...)
+		copy.ModelContinuation = &continuation
+	}
+	return copy
 }
 
 func cloneRuntimeConfig(source model.Config) model.Config {

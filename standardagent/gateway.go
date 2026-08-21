@@ -154,8 +154,7 @@ func aggregateRunResult(snapshot interaction.SessionView, inputID agent.MessageI
 	}
 	for _, fact := range snapshot.RecentHistory {
 		if fact.Message != nil && fact.Message.RunID == result.RunID && fact.Message.Role == agent.RoleAssistant && assistantHasText(*fact.Message) {
-			message := *fact.Message
-			message.Parts = cloneRuntimeParts(message.Parts)
+			message := cloneRuntimeMessage(*fact.Message)
 			result.AssistantMessages = append(result.AssistantMessages, message)
 		}
 		if fact.Run != nil && fact.Run.RunID == result.RunID && fact.Run.Kind != session.RunStarted {

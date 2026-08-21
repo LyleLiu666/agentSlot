@@ -356,14 +356,17 @@ implementation format.
 
 ## Current implementation frontier
 
-The published foundation now includes twenty-eight standard domain contracts
+The published foundation now includes twenty-nine standard domain contracts
 and typed Slots for Agent Loop control, Session storage, model
 execution/catalogs, tools, context, hooks, interaction, policy/approval,
 observation, Goal, Memory, Workflow, and Billing.
 The `standardagent` package supplies the
 fixed Gateway, private RuntimeAccess binding, per-Session AgentRuntime state
 machine, ToolDispatcher, Context assembly, controlled Hook execution, and
-idle-only model switching. Reference implementations currently include the
+idle-only model switching. A completed assistant Message may carry opaque JSON
+continuation state owned by its selected Provider/model; Runtime and Context
+preserve it unchanged but never inspect or render it, and another selected
+model must ignore it. Reference implementations currently include the
 in-memory and crash-safe file Session aggregates, deterministic and OpenAI Chat
 Compatible model executors, static model catalog, tail compactor, explicitly
 installed Bash/file/HTTP tools, the built-in `model` InteractionCommand,

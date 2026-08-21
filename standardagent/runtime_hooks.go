@@ -93,8 +93,7 @@ func cloneHookMessages(history []session.HistoryFact) []agent.Message {
 		if fact.Message == nil {
 			continue
 		}
-		message := *fact.Message
-		message.Parts = cloneRuntimeParts(message.Parts)
+		message := cloneRuntimeMessage(*fact.Message)
 		messages = append(messages, message)
 	}
 	return messages
@@ -104,7 +103,7 @@ func cloneAgentMessages(source []agent.Message) []agent.Message {
 	messages := make([]agent.Message, len(source))
 	for index, message := range source {
 		messages[index] = message
-		messages[index].Parts = cloneRuntimeParts(message.Parts)
+		messages[index] = cloneRuntimeMessage(message)
 	}
 	return messages
 }

@@ -151,6 +151,11 @@ func cloneJournalEntry(source JournalEntry) JournalEntry {
 func cloneMessage(source agent.Message) agent.Message {
 	copy := source
 	copy.Parts = cloneParts(source.Parts)
+	if source.ModelContinuation != nil {
+		continuation := *source.ModelContinuation
+		continuation.State = append(json.RawMessage(nil), source.ModelContinuation.State...)
+		copy.ModelContinuation = &continuation
+	}
 	return copy
 }
 

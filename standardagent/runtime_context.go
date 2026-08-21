@@ -1,6 +1,7 @@
 package standardagent
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -71,6 +72,9 @@ func (r *runtimeInstance) persistContextContributions(run *activeRun, step agent
 	if err := validateDynamicInputs(r.id(), dynamic); err != nil {
 		return session.Snapshot{}, nil, err
 	}
+	if err := validateModelContinuations(snapshot.History, dynamic, run.id); err != nil {
+		return session.Snapshot{}, nil, err
+	}
 	for _, source := range r.components.sources {
 		for {
 			contribution, err := source.Contribute(run.ctx, agentcontext.ContextInput{
@@ -81,6 +85,9 @@ func (r *runtimeInstance) persistContextContributions(run *activeRun, step agent
 			}
 			candidate := append(cloneRuntimeInputs(dynamic), cloneRuntimeInputs(contribution)...)
 			if err := validateDynamicInputs(r.id(), candidate); err != nil {
+				return session.Snapshot{}, nil, err
+			}
+			if err := validateModelContinuations(snapshot.History, candidate, run.id); err != nil {
 				return session.Snapshot{}, nil, err
 			}
 			r.mu.Lock()
@@ -130,6 +137,9 @@ func (r *runtimeInstance) buildContextCandidate(run *activeRun, step agent.StepI
 	if err := validateDynamicInputs(r.id(), dynamic); err != nil {
 		return model.ModelRequest{}, nil, 0, err
 	}
+	if err := validateModelContinuations(snapshot.History, dynamic, run.id); err != nil {
+		return model.ModelRequest{}, nil, 0, err
+	}
 	dynamic = projectUnsupportedAttachments(dynamic, capabilities.Media)
 	if err := validateDynamicInputs(r.id(), dynamic); err != nil {
 		return model.ModelRequest{}, nil, 0, err
@@ -164,6 +174,9 @@ func (r *runtimeInstance) buildContextCandidate(run *activeRun, step agent.StepI
 	}
 	dynamic = cloneRuntimeInputs(compacted.Inputs)
 	if err := validateDynamicInputs(r.id(), dynamic); err != nil {
+		return model.ModelRequest{}, nil, 0, err
+	}
+	if err := validateModelContinuations(snapshot.History, dynamic, run.id); err != nil {
 		return model.ModelRequest{}, nil, 0, err
 	}
 	dynamic = projectUnsupportedAttachments(dynamic, capabilities.Media)
@@ -244,6 +257,46 @@ func validateDynamicInputs(sessionID agent.SessionID, inputs []model.Input) erro
 	return nil
 }
 
+func validateModelContinuations(history []session.HistoryFact, inputs []model.Input, activeRunID agent.RunID) error {
+	durable := make(map[agent.MessageID]*agent.ModelContinuation)
+	required := make(map[agent.MessageID]bool)
+	for _, fact := range history {
+		if fact.Message != nil {
+			durable[fact.Message.ID] = fact.Message.ModelContinuation
+			if fact.Message.ModelContinuation != nil && fact.Message.RunID == activeRunID {
+				required[fact.Message.ID] = true
+			}
+		}
+	}
+	for _, input := range inputs {
+		if input.Message == nil {
+			continue
+		}
+		expected, exists := durable[input.Message.ID]
+		actual := input.Message.ModelContinuation
+		delete(required, input.Message.ID)
+		if !exists {
+			if actual != nil {
+				return agent.NewError(agent.ErrorInvalidInput, "standardagent.context", "Context component invented opaque model continuation state", nil)
+			}
+			continue
+		}
+		if expected == nil || actual == nil {
+			if expected != nil || actual != nil {
+				return agent.NewError(agent.ErrorInvalidInput, "standardagent.context", "Context component removed opaque model continuation state", nil)
+			}
+			continue
+		}
+		if expected.ProviderKey != actual.ProviderKey || expected.ModelID != actual.ModelID || !bytes.Equal(expected.State, actual.State) {
+			return agent.NewError(agent.ErrorInvalidInput, "standardagent.context", "Context component modified opaque model continuation state", nil)
+		}
+	}
+	if len(required) > 0 {
+		return agent.NewError(agent.ErrorInvalidInput, "standardagent.context", "Context component removed active opaque model continuation state", nil)
+	}
+	return nil
+}
+
 func projectUnsupportedAttachments(inputs []model.Input, capabilities model.Capabilities) []model.Input {
 	projected := cloneRuntimeInputs(inputs)
 	for index := range projected {
@@ -290,8 +343,7 @@ func cloneRuntimeInputs(source []model.Input) []model.Input {
 			result[index].SystemPrompt = &value
 		}
 		if input.Message != nil {
-			value := *input.Message
-			value.Parts = cloneRuntimeParts(input.Message.Parts)
+			value := cloneRuntimeMessage(*input.Message)
 			result[index].Message = &value
 		}
 		if input.ToolCall != nil {

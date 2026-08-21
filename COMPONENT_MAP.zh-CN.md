@@ -53,7 +53,7 @@ AgentLoop 默认实现；通用
 | --- | --- | --- | --- | --- |
 | `agent.loop` | `AgentLoop` | `One` | 恰好 1 个 | 通过框架 Step 协议决定每个持久 Run 如何推进、继续或停止。 |
 | `session.store` | `SessionStore` | `One` | 恰好 1 个 | 持久化 Session 聚合中的 History、Context、Queue、RunJournal、SessionModelConfig、revision 和原子 CAS 事务，并按 Agent/Workspace 列出可恢复 Session。 |
-| `model.executor` | `ModelExecutor` | `One` | 恰好 1 个 | 执行一次逻辑模型调用，并封装 Provider 专属的真实请求、流恢复和最终失败语义。 |
+| `model.executor` | `ModelExecutor` | `One` | 恰好 1 个 | 执行一次逻辑模型调用，并封装 Provider 专属的真实请求、流恢复、不透明续传状态和最终失败语义。 |
 | `gateway.channel` | `GatewayChannel` | `Many` | 至少 1 个 | 把 TUI、Web、桌面端、函数、HTTP、ACP 或其他调用 Channel 绑定到固定 Gateway。 |
 
 `AgentRuntime` 与进程内 Gateway 仍是框架固定的控制面，不是 Slot。选中的
@@ -164,7 +164,7 @@ Goal 状态不写进会话 History。
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `model.executor` | `ModelExecutor` | `One` | 全局必需 | 校验所选模型能力、计量完整请求并执行一次逻辑模型调用；通过受限 AttemptRecorder 持久记录每次真实请求。 | 已定义契约 |
+| `model.executor` | `ModelExecutor` | `One` | 全局必需 | 校验所选模型能力、计量完整请求并执行一次逻辑模型调用，可返回不透明续传状态；通过受限 AttemptRecorder 持久记录每次真实请求。 | 已定义契约 |
 | `model.attempt.observer` | `AttemptObserver` | `Chain` | 可选 | 在每次真实 Provider 请求发送前和结束后同步记录或拒绝；与被动遥测不同，它可以 fail closed。 | 已定义契约 |
 | `model.provider` | `ModelProvider` | `Many` | 可选；仅由声明依赖的 Executor 要求 | 为组合本地适配器的 Executor 提供具名 Provider 访问。 | 已映射 |
 | `model.selector` | `ModelSelector` | `One` | 可选；动态路由时按条件要求 | 根据明确的请求和策略输入选择 Provider/模型。 | 已映射 |
