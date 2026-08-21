@@ -332,12 +332,14 @@ func (a *commandActions) Apply(ctx context.Context, request interaction.ActionRe
 	switch request.Kind {
 	case interaction.ActionSend:
 		receipt, err := runtime.send(ctx, interaction.SendRequest{
-			SessionID: a.scope.SessionID, ExpectedRevision: request.ExpectedRevision, Actor: a.actor, Input: request.Input,
+			SessionID: a.scope.SessionID, ExpectedRevision: request.ExpectedRevision, Actor: a.actor,
+			ClientMessageID: request.ClientMessageID, Input: request.Input,
 		})
 		return interaction.ActionResult{Revision: receipt.Revision, MessageID: receipt.MessageID}, err
 	case interaction.ActionSteer:
 		receipt, err := runtime.steer(ctx, interaction.SteerRequest{
-			SessionID: a.scope.SessionID, ExpectedRevision: request.ExpectedRevision, Actor: a.actor, Input: request.Input,
+			SessionID: a.scope.SessionID, ExpectedRevision: request.ExpectedRevision, Actor: a.actor,
+			ClientMessageID: request.ClientMessageID, Input: request.Input,
 		})
 		return interaction.ActionResult{Revision: receipt.Revision, MessageID: receipt.MessageID}, err
 	case interaction.ActionRunPending:

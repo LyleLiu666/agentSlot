@@ -25,7 +25,7 @@ func TestFileStorePersistsSnapshotAndIdempotencyAcrossReopen(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	message := agent.Message{
-		ID: "message-1", SessionID: created.Session.ID, Role: agent.RoleUser,
+		ID: "message-1", ClientMessageID: "client-message-1", SessionID: created.Session.ID, Role: agent.RoleUser,
 		Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "persist me"}},
 	}
 	request := session.CommitRequest{
@@ -46,7 +46,8 @@ func TestFileStorePersistsSnapshotAndIdempotencyAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load after reopen: %v", err)
 	}
-	if loaded.Revision != committed.Revision || len(loaded.History) != 1 || loaded.History[0].Message.Parts[0].Text != "persist me" {
+	if loaded.Revision != committed.Revision || len(loaded.History) != 1 || loaded.History[0].Message.Parts[0].Text != "persist me" ||
+		loaded.History[0].Message.ClientMessageID != "client-message-1" {
 		t.Fatalf("loaded snapshot = %#v", loaded)
 	}
 	replayed, err := reopened.Commit(context.Background(), request)

@@ -27,7 +27,8 @@ func TestRuntimeSendCommitsOnlyCompleteModelOutput(t *testing.T) {
 	defer stop()
 	opened := createRuntimeTestSession(t, access)
 	receipt, err := access.Send(context.Background(), interaction.SendRequest{
-		SessionID: opened.SessionID, ExpectedRevision: opened.Revision, Input: textInput("hello"),
+		SessionID: opened.SessionID, ExpectedRevision: opened.Revision,
+		ClientMessageID: "client-user-1", Input: textInput("hello"),
 	})
 	if err != nil || !receipt.MessageID.Valid() {
 		t.Fatalf("Send = %#v, %v", receipt, err)
@@ -49,6 +50,9 @@ func TestRuntimeSendCommitsOnlyCompleteModelOutput(t *testing.T) {
 	if messages[1].ID == "" || messages[1].Role != agent.RoleAssistant {
 		t.Fatalf("assistant identity was not allocated by Runtime: %#v", messages[1])
 	}
+	if messages[0].ClientMessageID != "client-user-1" {
+		t.Fatalf("user ClientMessageID = %q, want durable client correlation", messages[0].ClientMessageID)
+	}
 	runs := historyRunFacts(snapshot.RecentHistory)
 	if len(runs) != 2 || runs[0].Kind != session.RunStarted || runs[1].Kind != session.RunCompleted || runs[0].ModelConfig.ModelID != "default" {
 		t.Fatalf("run facts = %#v", runs)
@@ -56,6 +60,19 @@ func TestRuntimeSendCommitsOnlyCompleteModelOutput(t *testing.T) {
 	requests := fake.Requests()
 	if len(requests) != 1 || requests[0].Inputs[0].Message.ID != receipt.MessageID || requests[0].Inputs[0].Message.Parts[0].Text != "hello" {
 		t.Fatalf("model requests = %#v", requests)
+	}
+}
+
+func TestRuntimeRejectsAnInvalidOptionalClientMessageID(t *testing.T) {
+	access, stop := startRuntimeTestApplication(t, model.NewFakeModelExecutor(model.FakeExecution{Events: []model.ModelEvent{complete("unused")}}))
+	defer stop()
+	opened := createRuntimeTestSession(t, access)
+	_, err := access.Send(context.Background(), interaction.SendRequest{
+		SessionID: opened.SessionID, ExpectedRevision: opened.Revision,
+		ClientMessageID: " invalid ", Input: textInput("hello"),
+	})
+	if !agent.IsKind(err, agent.ErrorInvalidInput) {
+		t.Fatalf("Send() error = %v, want invalid input", err)
 	}
 }
 

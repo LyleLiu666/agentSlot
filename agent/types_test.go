@@ -18,6 +18,7 @@ func TestStableIdentityTypesValidateNonEmptyTrimmedValues(t *testing.T) {
 		{"run", agent.RunID("run-1").Valid},
 		{"step", agent.StepID("step-1").Valid},
 		{"message", agent.MessageID("message-1").Valid},
+		{"client message", agent.ClientMessageID("client-message-1").Valid},
 		{"tool call", agent.ToolCallID("call-1").Valid},
 		{"fact", agent.FactID("fact-1").Valid},
 		{"attempt", agent.AttemptID("attempt-1").Valid},
@@ -46,15 +47,17 @@ func TestActorIdentityUsesFiniteOriginVocabulary(t *testing.T) {
 
 func TestMessageAndToolCallKeepStableContainment(t *testing.T) {
 	message := agent.Message{
-		ID:        "message-1",
-		SessionID: "session-1",
-		RunID:     "run-1",
-		StepID:    "step-1",
-		Role:      agent.RoleAssistant,
-		Parts:     []agent.MessagePart{{Kind: agent.PartText, Text: "done"}},
+		ID: "message-1", ClientMessageID: "client-message-1",
+		SessionID: "session-1", RunID: "run-1", StepID: "step-1", Role: agent.RoleAssistant,
+		Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "done"}},
 	}
 	if !message.Valid() {
 		t.Fatalf("message reported invalid: %#v", message)
+	}
+	invalidClient := message
+	invalidClient.ClientMessageID = " invalid "
+	if invalidClient.Valid() {
+		t.Fatal("message accepted an invalid optional client correlation identity")
 	}
 	call := agent.ToolCall{
 		ID:        "call-1",

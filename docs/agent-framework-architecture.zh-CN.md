@@ -129,6 +129,8 @@ type GatewayChannel interface {
 
 Channel 的 Module 负责自身 Start/Stop。TUI、Web、飞书、Mattermost、RPC 和函数调用分别实现 Channel；需要网络时，监听、协议、远程认证授权、路由、输出和限流都属于该 Channel。Gateway 只提供与载体无关的结构化命令、查询、临时流和持久 revision 通知。
 
+`SendRequest` 与 `SteerRequest` 可以携带调用方生成的 `ClientMessageID`。固定 Runtime 仍然分配权威 `MessageID`，同时把客户端关联身份写入持久用户消息。TUI、Web、桌面或 ACP 因而能把本地乐观消息与 Gateway 最终事实准确合并，不需要按文本内容猜测。该字段不携带权限，也不能替代 `ExpectedRevision` 或 Store 幂等键。
+
 不存在标准 `interaction.entrypoint`、`gateway.transport`、`gateway.identity`、`gateway.route` 或 `gateway.delivery` Slot。这些职责不能被拆成能够绕过固定 Gateway 的第二套访问路径。
 
 ### 6.1 严格 Revision
