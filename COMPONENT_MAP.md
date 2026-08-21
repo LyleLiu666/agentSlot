@@ -24,44 +24,47 @@ Current repository reality:
 
 | Inventory | Count |
 | --- | ---: |
-| Mapped standard component ecosystems | 40 |
-| Standardized domain vocabularies | 8 |
-| Contracted AgentSlot-owned domain interfaces | 27 |
+| Mapped standard component ecosystems | 41 |
+| Standardized domain vocabularies | 9 |
+| Contracted AgentSlot-owned domain interfaces | 28 |
 | Conformant component ecosystems | 0 |
 | Proven component ecosystems | 0 |
 | Assembled standard component ecosystems | 0 |
 
 The generic composition protocol exports five Go interfaces: `Module`,
-`SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. Twenty-seven
+`SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. Twenty-eight
 domain contracts are now defined across the standard leaf packages; they are
 Contracted but not yet Conformant or Proven.
 
-The eight counted vocabulary families are model capability, tool calls,
-policy/approval, observation, Goal, Memory, Workflow, and Billing. This count
+The nine counted vocabulary families are Agent Loop outcomes, model capability,
+tool calls, policy/approval, observation, Goal, Memory, Workflow, and Billing. This count
 tracks finite interoperable words and facts, not arbitrary constants.
 
 ## Runnable standard profile
 
 A standard Agent explicitly enters through `standardagent.NewApplication`. It
 returns the same `*agentslot.Application` as the generic core and automatically
-mounts the fixed AgentRuntime/Gateway layer. The generic
+mounts the fixed AgentRuntime/Gateway layer and an inspectable standard AgentLoop
+default. The generic
 `agentslot.NewApplication` never infers a standard Agent profile from installed
 Slots.
 
 An AgentSlot application conforms to the runnable standard agent profile only
-when its Assembly contains all three of these component ecosystems:
+when its Assembly contains all four of these component ecosystems:
 
 `Assembly` is the immutable build result exposed by the current Go implementation.
 Its description uses `AssemblyDescription` and the `agentslot.assembly/v0` schema.
 
 | Slot ID | Standard contract | Kind | Required cardinality | Responsibility |
 | --- | --- | --- | --- | --- |
+| `agent.loop` | `AgentLoop` | `One` | exactly 1 | Owns each durable Run's advance/continue/stop decision over the framework Step protocol. |
 | `session.store` | `SessionStore` | `One` | exactly 1 | Persists the Session aggregate—History, Context, Queue, RunJournal, SessionModelConfig, revisions, and atomic CAS transactions. |
 | `model.executor` | `ModelExecutor` | `One` | exactly 1 | Executes one logical model call while containing provider-specific physical attempts, streaming recovery, and final failure semantics. |
 | `gateway.channel` | `GatewayChannel` | `Many` | at least 1 | Binds a TUI, Web, desktop, function, HTTP, ACP, or another caller-facing channel to the fixed Gateway. |
 
-`AgentRuntime`, the in-process Gateway, and their control path are framework
-behavior, not Slots or replaceable component ecosystems. Creating or explicitly resuming a Session
+`AgentRuntime` and the in-process Gateway remain framework control-plane
+behavior, not Slots. The selected `AgentLoop` controls Run progression without
+owning Session truth, Gateway routing, or transaction invariants. Creating or explicitly resuming a Session
 initializes one Runtime bound to that Session; listing or viewing Sessions does
 not. One started application Runtime and all AgentRuntimes registered beneath it
 live in one process. The same Session has one Runtime in that registry, that
@@ -113,6 +116,8 @@ flowchart LR
     RC --> SM["fixed SessionManager"]
     SM --> SS["SessionStore Slot (1)"]
     REG -->|"CreateSession / ResumeSession"| R["framework AgentRuntime"]
+    R --> L["AgentLoop (1)"]
+    L -. "advance Step" .-> R
     R --> ME["ModelExecutor (1)"]
     ME -. "optional dependency" .-> MP["ModelProvider (0..n)"]
     R -. "optional" .-> T["Tools and skills"]
@@ -137,12 +142,12 @@ method-level contract is an engineering result.
 | **Proven** | At least two semantically independent implementations pass the conformance suite. Wrappers over the same implementation count once. |
 | **Assembled** | A reference application exchanges proven implementations through the Slot without concrete-type branches. |
 
-Twenty-seven domain rows are now **Contracted**: each has a public
+Twenty-eight domain rows are now **Contracted**: each has a public
 domain interface, typed Slot, and contract tests. The repository now contains
 independent memory and crash-safe file Session stores, deterministic Fake and
 OpenAI Chat Compatible executors, Bash/file/HTTP tools, in-process and CLI
 Gateway channels, deterministic tool policy/approval components, and a JSON Lines
-observation module. The fixed Runtime consumes these components without
+observation module. The fixed Runtime and selected AgentLoop consume these components without
 concrete-type branches. No ecosystem yet has the reusable conformance suite
 required by the next maturity level, so all remain Contracted rather than
 Conformant or Proven. Every other domain row remains **Mapped**.
@@ -157,6 +162,7 @@ Slots, and several modules may contribute to one `Many` or `Chain` Slot.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
+| `agent.loop` | `AgentLoop` | `One` | globally requires exactly 1 | Controls sequential Step advancement and returns one finite terminal Run outcome; the standard Loop is an explicit conditional default. | Contracted |
 | `gateway.channel` | `GatewayChannel` | `Many` | globally requires at least 1 | Binds one caller-facing protocol, function API, or UI to the fixed Gateway and receives only `GatewayAccess`. | Contracted |
 | `interaction.command` | `InteractionCommand` | `Many` | optional | Registers a keyed UI-neutral command with the fixed Gateway; Channels render the shared descriptor as slash commands, menus, buttons, forms, or command palettes. | Contracted |
 | `agent.hook` | `AgentHook` | `Chain` | optional | Proposes controlled follow-on input before run completion; it cannot mutate Session state or become a second Runtime controller. | Contracted |
@@ -165,10 +171,9 @@ Slots, and several modules may contribute to one `Many` or `Chain` Slot.
 | `session.commit.observer` | `SessionCommitObserver` | `Chain` | optional | Asynchronously observes applied Session revisions and their appended History sequence ranges; failures and panics cannot roll back a commit. | Contracted |
 
 The fixed AgentRuntime and Gateway are deliberately absent from this table: the
-map records customization seams, not every framework object. A product that
-needs a wholly different loop or interaction backend may define a local Slot
-and explicit non-standard profile on the generic composition core, but it is
-not a conforming standard LLM Agent application.
+map records customization seams, not every framework object. AgentLoop is a
+standard seam, but it cannot replace the Runtime's Session ownership, CAS,
+Gateway routing, cancellation, or history invariants.
 
 Goal is deliberately attached to the fixed completion boundary rather than
 implemented as CRUD alone. An active Goal is evaluated after the assistant

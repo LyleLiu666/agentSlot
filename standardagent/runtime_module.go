@@ -9,6 +9,7 @@ import (
 	"github.com/LyleLiu666/agentSlot/goal"
 	"github.com/LyleLiu666/agentSlot/hook"
 	"github.com/LyleLiu666/agentSlot/interaction"
+	agentloop "github.com/LyleLiu666/agentSlot/loop"
 	"github.com/LyleLiu666/agentSlot/model"
 	"github.com/LyleLiu666/agentSlot/observe"
 	"github.com/LyleLiu666/agentSlot/policy"
@@ -50,6 +51,7 @@ func (m *runtimeModule) ID() string { return runtimeModuleID }
 
 func (m *runtimeModule) RequiredSlots() []agentslot.Requirement {
 	return []agentslot.Requirement{
+		agentslot.RequireOne(agentloop.AgentLoopSlot),
 		agentslot.RequireOne(session.StoreSlot),
 		agentslot.RequireOne(model.ExecutorSlot),
 		agentslot.OptionalMany(tool.ToolSlot),
@@ -83,6 +85,10 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 			}
 			if !m.config.ContextRetentionMode.Valid() {
 				return nil, fmt.Errorf("standardagent: invalid ContextRetentionMode %q", m.config.ContextRetentionMode)
+			}
+			selectedLoop, err := agentslot.ResolveOne(resolver, agentloop.AgentLoopSlot)
+			if err != nil {
+				return nil, err
 			}
 			store, err := agentslot.ResolveOne(resolver, session.StoreSlot)
 			if err != nil {
@@ -187,7 +193,8 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 				return nil, err
 			}
 			state := newApplicationRuntime(runtimeDependencies{
-				manager: manager, store: store, executor: executor, attemptObservers: attemptObservers,
+				agentLoop: selectedLoop,
+				manager:   manager, store: store, executor: executor, attemptObservers: attemptObservers,
 				commands: commands, commandDescriptors: commandDescriptors,
 				tools: selectedTools, dispatcher: dispatcher, catalogs: catalogs, config: cloneAgentRuntimeConfig(m.config), sources: sources,
 				compactor: compactor, hooks: hooks, goalStore: goalStore, goalEvaluator: goalEvaluator, commitObservers: commitObservers,
@@ -219,6 +226,7 @@ func (m *runtimeModule) Stop(ctx stdcontext.Context) error {
 }
 
 type runtimeDependencies struct {
+	agentLoop          agentloop.AgentLoop
 	manager            *session.Manager
 	store              session.SessionStore
 	executor           model.ModelExecutor
@@ -245,6 +253,7 @@ type runtimeDependencies struct {
 // by every Session Runtime. Runtime instances retain component references;
 // they do not copy tools, stores, executors, or clients per Session.
 type runtimeComponents struct {
+	agentLoop        agentloop.AgentLoop
 	store            session.SessionStore
 	executor         model.ModelExecutor
 	attemptObservers []model.AttemptObserver
@@ -264,6 +273,7 @@ type runtimeComponents struct {
 func (d runtimeDependencies) runtimeComponents(observations *observationHub) *runtimeComponents {
 	dispatcher := d.dispatcher.withObservations(observations)
 	return &runtimeComponents{
+		agentLoop:        d.agentLoop,
 		store:            d.store,
 		executor:         d.executor,
 		attemptObservers: append([]model.AttemptObserver(nil), d.attemptObservers...),
