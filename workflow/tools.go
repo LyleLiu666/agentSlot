@@ -24,13 +24,26 @@ func ToolKeys() []string {
 }
 
 func NewToolModule(id string) (agentslot.Module, error) {
+	return newToolModule(id, false)
+}
+
+// NewDefaultToolModule contributes each standard workflow Tool only when the
+// same Tool key has not been installed explicitly.
+func NewDefaultToolModule(id string) (agentslot.Module, error) {
+	return newToolModule(id, true)
+}
+
+func newToolModule(id string, conditional bool) (agentslot.Module, error) {
 	if id == "" {
 		return nil, errors.New("workflow: tool module ID is required")
 	}
-	return workflowToolModule{id: id}, nil
+	return workflowToolModule{id: id, conditional: conditional}, nil
 }
 
-type workflowToolModule struct{ id string }
+type workflowToolModule struct {
+	id          string
+	conditional bool
+}
 
 func (m workflowToolModule) ID() string { return m.id }
 func (m workflowToolModule) RequiredSlots() []agentslot.Requirement {
@@ -40,18 +53,22 @@ func (m workflowToolModule) Register(reg agentslot.Registrar) error {
 	contributions := make([]agentslot.Contribution, 0, len(ToolKeys()))
 	for _, key := range ToolKeys() {
 		key := key
-		contributions = append(contributions, agentslot.AddWith(tool.ToolSlot, key,
-			func(resolver agentslot.Resolver) (tool.Tool, error) {
-				scheduler, err := agentslot.ResolveOne(resolver, SchedulerSlot)
-				if err != nil {
-					return nil, err
-				}
-				mailbox, err := agentslot.ResolveOne(resolver, MailboxSlot)
-				if err != nil {
-					return nil, err
-				}
-				return newWorkflowTool(key, scheduler, mailbox)
-			}))
+		constructor := func(resolver agentslot.Resolver) (tool.Tool, error) {
+			scheduler, err := agentslot.ResolveOne(resolver, SchedulerSlot)
+			if err != nil {
+				return nil, err
+			}
+			mailbox, err := agentslot.ResolveOne(resolver, MailboxSlot)
+			if err != nil {
+				return nil, err
+			}
+			return newWorkflowTool(key, scheduler, mailbox)
+		}
+		if m.conditional {
+			contributions = append(contributions, agentslot.AddDefaultWith(tool.ToolSlot, key, constructor))
+		} else {
+			contributions = append(contributions, agentslot.AddWith(tool.ToolSlot, key, constructor))
+		}
 	}
 	return reg.Contribute(contributions...)
 }

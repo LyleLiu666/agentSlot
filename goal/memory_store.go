@@ -34,10 +34,22 @@ func NewMemoryStore() *MemoryStore {
 
 func NewMemoryModule() agentslot.Module { return memoryModule{store: NewMemoryStore()} }
 
-type memoryModule struct{ store *MemoryStore }
+// NewDefaultMemoryModule contributes the in-memory Goal Store only when an
+// application has not installed an explicit Store implementation.
+func NewDefaultMemoryModule() agentslot.Module {
+	return memoryModule{store: NewMemoryStore(), conditional: true}
+}
+
+type memoryModule struct {
+	store       *MemoryStore
+	conditional bool
+}
 
 func (memoryModule) ID() string { return "goal.store.memory" }
 func (m memoryModule) Register(reg agentslot.Registrar) error {
+	if m.conditional {
+		return reg.Contribute(agentslot.SetDefault(StoreSlot, Store(m.store)))
+	}
 	return reg.Contribute(agentslot.Set(StoreSlot, Store(m.store)))
 }
 

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	agentslot "github.com/LyleLiu666/agentSlot"
+	"github.com/LyleLiu666/agentSlot/tool"
 	"github.com/LyleLiu666/agentSlot/workflow"
 )
 
@@ -41,6 +42,42 @@ func TestSchedulerModuleStopWaitsForRunningProviders(t *testing.T) {
 	case <-provider.stopped:
 	default:
 		t.Fatal("Stop returned before provider observed cancellation")
+	}
+}
+
+func TestDefaultWorkflowModulesYieldToExplicitComponents(t *testing.T) {
+	store := workflow.NewMemoryJobStore()
+	mailbox := workflow.NewMemoryMailbox()
+	scheduler := &failingScheduler{}
+	toolModule, err := workflow.NewDefaultToolModule("workflow.tools.default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	schedulerModule, err := workflow.NewDefaultSchedulerModule("workflow.scheduler.default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := agentslot.NewApplication("workflow-default-replacement", []agentslot.Module{
+		workflow.NewDefaultMemoryJobStoreModule(), workflow.NewDefaultMemoryMailboxModule(), schedulerModule, toolModule,
+		workflowReplacementModule{store: store, mailbox: mailbox, scheduler: scheduler},
+	}, agentslot.RequireOne(workflow.JobStoreSlot), agentslot.RequireOne(workflow.MailboxSlot), agentslot.RequireOne(workflow.SchedulerSlot))
+	assembly, err := app.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actual, _ := agentslot.Get(assembly, workflow.JobStoreSlot); actual != store {
+		t.Fatal("explicit JobStore did not replace the default")
+	}
+	if actual, _ := agentslot.Get(assembly, workflow.MailboxSlot); actual != mailbox {
+		t.Fatal("explicit Mailbox did not replace the default")
+	}
+	if actual, _ := agentslot.Get(assembly, workflow.SchedulerSlot); actual != scheduler {
+		t.Fatal("explicit Scheduler did not replace the default")
+	}
+	for _, key := range workflow.ToolKeys() {
+		if _, ok := agentslot.Lookup(assembly, tool.ToolSlot, key); !ok {
+			t.Fatalf("default workflow Tool %q was not assembled", key)
+		}
 	}
 }
 
@@ -195,6 +232,21 @@ func TestSchedulerContainsProviderPanicAsAFailedJob(t *testing.T) {
 }
 
 type providerFunc func(context.Context, workflow.Task, workflow.Inbox) (workflow.Result, error)
+
+type workflowReplacementModule struct {
+	store     workflow.JobStore
+	mailbox   workflow.Mailbox
+	scheduler workflow.Scheduler
+}
+
+func (workflowReplacementModule) ID() string { return "workflow.explicit.replacements" }
+func (m workflowReplacementModule) Register(reg agentslot.Registrar) error {
+	return reg.Contribute(
+		agentslot.Set(workflow.JobStoreSlot, m.store),
+		agentslot.Set(workflow.MailboxSlot, m.mailbox),
+		agentslot.Set(workflow.SchedulerSlot, m.scheduler),
+	)
+}
 
 func (f providerFunc) Execute(ctx context.Context, task workflow.Task, inbox workflow.Inbox) (workflow.Result, error) {
 	return f(ctx, task, inbox)

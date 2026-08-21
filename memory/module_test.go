@@ -61,6 +61,36 @@ func TestMemoryRuntimeDoesNotExposeStoreErrorsToTheModel(t *testing.T) {
 	}
 }
 
+func TestDefaultMemoryRuntimeAllowsPerToolReplacement(t *testing.T) {
+	store := &memoryStoreProbe{}
+	runtime, err := memory.NewDefaultRuntimeModule("memory.runtime.default", "primary", testScopeResolver())
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := &memoryToolProbe{definition: tool.Definition{
+		Name: memory.ToolRecall, Description: "replacement recall", InputSchema: mustInputSchema(t, `{"type":"object","additionalProperties":false}`),
+	}}
+	app := agentslot.NewApplication("memory-default-replacement", []agentslot.Module{
+		memoryStoreModule{store: store}, runtime, memoryToolModule{key: memory.ToolRecall, value: replacement},
+	}, agentslot.RequireMany(tool.ToolSlot, 3), agentslot.RequireChain(agentcontext.SourceSlot, 1))
+	assembly, err := app.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual, ok := agentslot.Lookup(assembly, tool.ToolSlot, memory.ToolRecall)
+	if !ok || actual != replacement {
+		t.Fatal("explicit memory.recall Tool did not replace the default")
+	}
+	for _, key := range []string{memory.ToolRemember, memory.ToolForget} {
+		if _, ok := agentslot.Lookup(assembly, tool.ToolSlot, key); !ok {
+			t.Fatalf("default memory Tool %q was not assembled", key)
+		}
+	}
+	if sources := agentslot.Ordered(assembly, agentcontext.SourceSlot); len(sources) != 1 {
+		t.Fatalf("memory ContextSource count = %d", len(sources))
+	}
+}
+
 func TestMemoryItemRejectsNonFiniteScore(t *testing.T) {
 	item := memory.Item{
 		ID: "memory-1", Kind: memory.KindSemantic, Scope: memory.Scope{Kind: memory.ScopeUser, ID: "user-1"},
@@ -73,14 +103,7 @@ func TestMemoryItemRejectsNonFiniteScore(t *testing.T) {
 
 func buildMemoryRuntime(t *testing.T, store memory.MemoryStore) *agentslot.Assembly {
 	t.Helper()
-	runtime, err := memory.NewRuntimeModule("memory.runtime", "primary", memory.ScopeResolverFunc(
-		func(context.Context, agent.SessionID) (memory.RuntimeScope, error) {
-			return memory.RuntimeScope{
-				AgentID: "agent-1", WorkspaceID: "workspace-1",
-				Scopes:      []memory.Scope{{Kind: memory.ScopeWorkspace, ID: "workspace-1"}},
-				WriteScopes: []memory.ScopeKind{memory.ScopeWorkspace},
-			}, nil
-		}))
+	runtime, err := memory.NewRuntimeModule("memory.runtime", "primary", testScopeResolver())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,6 +114,43 @@ func buildMemoryRuntime(t *testing.T, store memory.MemoryStore) *agentslot.Assem
 		t.Fatal(err)
 	}
 	return assembly
+}
+
+func testScopeResolver() memory.ScopeResolver {
+	return memory.ScopeResolverFunc(func(context.Context, agent.SessionID) (memory.RuntimeScope, error) {
+		return memory.RuntimeScope{
+			AgentID: "agent-1", WorkspaceID: "workspace-1",
+			Scopes:      []memory.Scope{{Kind: memory.ScopeWorkspace, ID: "workspace-1"}},
+			WriteScopes: []memory.ScopeKind{memory.ScopeWorkspace},
+		}, nil
+	})
+}
+
+func mustInputSchema(t *testing.T, raw string) tool.InputSchema {
+	t.Helper()
+	schema, err := tool.ParseInputSchema([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return schema
+}
+
+type memoryToolModule struct {
+	key   string
+	value tool.Tool
+}
+
+func (memoryToolModule) ID() string { return "memory.tool.explicit" }
+func (m memoryToolModule) Register(reg agentslot.Registrar) error {
+	return reg.Contribute(agentslot.Add(tool.ToolSlot, m.key, m.value))
+}
+
+type memoryToolProbe struct{ definition tool.Definition }
+
+func (t *memoryToolProbe) Definition() tool.Definition       { return t.definition }
+func (*memoryToolProbe) ParallelSafety() tool.ParallelSafety { return tool.Serial }
+func (*memoryToolProbe) Invoke(context.Context, tool.ToolInvocation) tool.ToolResult {
+	return tool.ToolResult{Status: tool.ResultSucceeded}
 }
 
 type memoryStoreModule struct{ store memory.MemoryStore }

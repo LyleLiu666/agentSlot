@@ -6,9 +6,25 @@ import (
 	"testing"
 	"time"
 
+	agentslot "github.com/LyleLiu666/agentSlot"
 	"github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/goal"
 )
+
+func TestDefaultMemoryStoreYieldsToExplicitStore(t *testing.T) {
+	replacement := goal.NewMemoryStore()
+	app := agentslot.NewApplication("goal-default-replacement", []agentslot.Module{
+		goal.NewDefaultMemoryModule(), goalStoreModule{store: replacement},
+	}, agentslot.RequireOne(goal.StoreSlot))
+	assembly, err := app.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual, ok := agentslot.Get(assembly, goal.StoreSlot)
+	if !ok || actual != replacement {
+		t.Fatal("explicit Goal Store did not replace the default")
+	}
+}
 
 func TestMemoryStoreGoalDecisionIsCASProtectedAndIdempotent(t *testing.T) {
 	store := goal.NewMemoryStore()
@@ -46,6 +62,13 @@ func TestMemoryStoreGoalDecisionIsCASProtectedAndIdempotent(t *testing.T) {
 	if replay, err := store.RecordDecision(context.Background(), record); err != nil || replay != updated || replay == paused {
 		t.Fatalf("historical idempotent replay = %#v, want %#v: %v", replay, updated, err)
 	}
+}
+
+type goalStoreModule struct{ store goal.Store }
+
+func (goalStoreModule) ID() string { return "goal.store.explicit" }
+func (m goalStoreModule) Register(reg agentslot.Registrar) error {
+	return reg.Contribute(agentslot.Set(goal.StoreSlot, m.store))
 }
 
 func TestGoalStoreRejectsDecisionsOutsideActiveStateAndTerminalReopening(t *testing.T) {

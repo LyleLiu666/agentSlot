@@ -12,15 +12,26 @@ import (
 )
 
 func NewSchedulerModule(id string) (agentslot.Module, error) {
+	return newSchedulerModule(id, false)
+}
+
+// NewDefaultSchedulerModule installs the reference Scheduler only when the
+// application has not selected an explicit Scheduler implementation.
+func NewDefaultSchedulerModule(id string) (agentslot.Module, error) {
+	return newSchedulerModule(id, true)
+}
+
+func newSchedulerModule(id string, conditional bool) (agentslot.Module, error) {
 	if id == "" {
 		return nil, errors.New("workflow: scheduler module ID is required")
 	}
-	return &schedulerModule{id: id}, nil
+	return &schedulerModule{id: id, conditional: conditional}, nil
 }
 
 type schedulerModule struct {
-	id        string
-	scheduler *referenceScheduler
+	id          string
+	scheduler   *referenceScheduler
+	conditional bool
 }
 
 func (m *schedulerModule) ID() string { return m.id }
@@ -32,7 +43,7 @@ func (m *schedulerModule) RequiredSlots() []agentslot.Requirement {
 	}
 }
 func (m *schedulerModule) Register(reg agentslot.Registrar) error {
-	return reg.Contribute(agentslot.SetWith(SchedulerSlot, func(resolver agentslot.Resolver) (Scheduler, error) {
+	constructor := func(resolver agentslot.Resolver) (Scheduler, error) {
 		providers, err := agentslot.ResolveMany(resolver, AgentProviderSlot)
 		if err != nil {
 			return nil, err
@@ -58,7 +69,11 @@ func (m *schedulerModule) Register(reg agentslot.Registrar) error {
 		}
 		m.scheduler = created
 		return created, nil
-	}))
+	}
+	if m.conditional {
+		return reg.Contribute(agentslot.SetDefaultWith(SchedulerSlot, constructor))
+	}
+	return reg.Contribute(agentslot.SetWith(SchedulerSlot, constructor))
 }
 
 func (m *schedulerModule) Start(context.Context) error {

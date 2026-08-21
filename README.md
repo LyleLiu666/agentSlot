@@ -142,6 +142,11 @@ absent from the final Assembly, its constructor is not called, and its
 lifecycle is not started. Defaults are never discovered or injected globally:
 the application must still list every fallback module explicitly.
 
+Official reference packages expose this choice without changing their older
+explicit wrappers. For example, Goal, Memory, and Workflow provide named
+`NewDefault...Module` constructors for profiles that want replaceable reference
+defaults; `New...Module` continues to mean an explicit component selection.
+
 When one contribution must be constructed from other installed components,
 use a build-time constructor instead of manually assembling it before
 `Build`:
