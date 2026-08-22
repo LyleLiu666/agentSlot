@@ -24,14 +24,14 @@ Current repository reality:
 | Mapped standard component ecosystems | 41 |
 | Standardized domain vocabularies | 9 |
 | Contracted AgentSlot-owned domain interfaces | 29 |
-| Conformant component ecosystems | 0 |
+| Conformant component ecosystems | 1 |
 | Proven component ecosystems | 0 |
 | Assembled standard component ecosystems | 0 |
 
 The generic composition protocol exports five Go interfaces: `Module`,
 `SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. Twenty-nine
-domain contracts are now defined across the standard leaf packages; they are
-Contracted but not yet Conformant or Proven.
+domain contracts are now defined across the standard leaf packages; one is
+Conformant, the other twenty-eight remain Contracted, and none is Proven.
 
 The nine counted vocabulary families are Agent Loop outcomes, model capability,
 tool calls, policy/approval, observation, Goal, Memory, Workflow, and Billing. This count
@@ -147,18 +147,24 @@ method-level contract is an engineering result.
 | **Proven** | At least two semantically independent implementations pass the same suite version. Wrappers over the same implementation count once. |
 | **Assembled** | LAS or another approved real consumer exchanges proven implementations through the Slot without concrete-type branches. |
 
-Twenty-nine domain rows are now **Contracted**: each has a public
+Twenty-nine domain rows are now at least **Contracted**: each has a public
 domain interface, typed Slot, and contract tests. The repository now contains
-independent memory and crash-safe file Session stores, deterministic Fake and
+in-memory and crash-safe file Session stores, deterministic Fake and
 OpenAI Chat Compatible executors, Bash/file/HTTP tools, in-process and CLI
 Gateway channels, deterministic tool policy/approval components, and a JSON Lines
 observation module. The fixed Runtime and selected AgentLoop consume these components without
-concrete-type branches. No ecosystem yet has the reusable conformance suite
-required by the next maturity level, so all remain Contracted rather than
-Conformant or Proven. Every other domain row remains **Mapped**.
+concrete-type branches.
 
-Until exact evidence exists, the score remains 0 Conformant, 0 Proven, and
-0 Assembled.
+`session.store` is **Conformant**: the reusable `session.store/v1` black-box
+suite passed all required public behavior and durable-reopen scenarios against
+the exact AgentSlot `v0.0.10` commit
+`c6b42a767d5422464ebc2978bf408b7d15eb5125`, with no failures or skips.
+MemoryStore remains a process-lifetime reference check, and MemoryStore/FileStore
+share one implementation codebase, so this is one implementation result rather
+than Proven evidence. The other twenty-eight domain rows remain **Contracted**;
+every other row remains **Mapped**.
+
+The current score is 1 Conformant, 0 Proven, and 0 Assembled.
 
 The score is measured by proven component ecosystems, not by the number of
 modules, packages, or interface methods. One module may contribute to several
@@ -257,7 +263,7 @@ decisions must use policy/approval components rather than concrete UI checks.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `session.store` | `SessionStore` | `One` | globally required | Persists the whole Session aggregate, including SessionModelConfig, and its atomic revision/CAS transactions; lists resumable Sessions through bounded, deterministic, lifecycle-scoped cursor pages within an Agent/Workspace scope; History remains the unique append-only fact view inside that aggregate. | Contracted |
+| `session.store` | `SessionStore` | `One` | globally required | Persists the whole Session aggregate, including SessionModelConfig, and its atomic revision/CAS transactions; lists resumable Sessions through bounded, deterministic, lifecycle-scoped cursor pages within an Agent/Workspace scope; History remains the unique append-only fact view inside that aggregate. | Conformant |
 | `context.source` | `ContextSource` | `Chain` | optional | Contributes ordered context for a model turn. | Contracted |
 | `context.compactor` | `ContextCompactor` | `One` | optional | Replaces the current full Context with a smaller conversation-message projection without rewriting History; AgentRuntime reattaches fixed prompts/tools and validates protocol and hard token limits. | Contracted |
 | `memory.store` | `MemoryStore` | `Many` | optional | Recalls, remembers, and forgets governed long-term memory outside authoritative conversation History. | Contracted |

@@ -13,6 +13,8 @@ var (
 	componentMapRowPattern      = regexp.MustCompile("(?m)^\\| `([a-z][a-z0-9.-]*)` \\|")
 	englishContractedRowPattern = regexp.MustCompile("(?m)^\\| `([a-z][a-z0-9.-]*)` \\|.*\\| Contracted \\|$")
 	chineseContractedRowPattern = regexp.MustCompile("(?m)^\\| `([a-z][a-z0-9.-]*)` \\|.*\\| 已定义契约 \\|$")
+	englishConformantRowPattern = regexp.MustCompile("(?m)^\\| `([a-z][a-z0-9.-]*)` \\|.*\\| Conformant \\|$")
+	chineseConformantRowPattern = regexp.MustCompile("(?m)^\\| `([a-z][a-z0-9.-]*)` \\|.*\\| 已通过一致性验证 \\|$")
 )
 
 func TestComponentMapsStaySynchronized(t *testing.T) {
@@ -23,6 +25,15 @@ func TestComponentMapsStaySynchronized(t *testing.T) {
 
 	assertSameSlotIDs(t, englishSlots, chineseSlots)
 	assertSameSlotIDs(t, englishContracted, chineseContracted)
+	englishConformant := componentMapRows(t, "COMPONENT_MAP.md", englishConformantRowPattern)
+	chineseConformant := componentMapRows(t, "COMPONENT_MAP.zh-CN.md", chineseConformantRowPattern)
+	assertSameSlotIDs(t, englishConformant, chineseConformant)
+	if len(englishConformant) != 1 {
+		t.Fatalf("Conformant row count = %d, want 1", len(englishConformant))
+	}
+	if _, exists := englishConformant["session.store"]; !exists {
+		t.Fatal("session.store is missing its reviewed Conformant evidence status")
+	}
 }
 
 func TestPublicDocsDescribeAgentLoopAsAStandardProfileSlot(t *testing.T) {
