@@ -74,6 +74,10 @@ SessionModelConfig 持久保存当前 Provider、Model、Reasoning 和模型参�
 在 Runtime idle 时显式修改，并在每个 Run 开始时冻结快照。SystemPrompt 和工具
 Schema 在模型请求中装配，不能仅因为模型可见就反复写成 History 事实。
 
+通用 Reasoning 词汇固定为 `default`、`low`、`medium`、`high`、`xhigh` 和 `max`。
+`default` 表示协议允许时不显式发送 effort。每个模型通过 Descriptor 声明自己实际支持的子集；
+应用不能假设所有模型支持整套词汇，也不能把不支持的档位展示或发送给该模型。
+
 全局必需的是 `ModelExecutor`，而不是 `ModelProvider`，因为前者才是 Runtime 的
 逻辑模型调用边界。`model.provider` 是可选 `Many` Slot：使用本地 Provider 集合的
 Executor 必须显式声明依赖；使用远程模型服务或内嵌后端的 Executor 不必伪造

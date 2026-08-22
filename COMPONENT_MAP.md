@@ -88,6 +88,12 @@ may be changed explicitly while the Runtime is idle and is snapshotted for each
 Run. SystemPrompt and tool schemas are assembled into model requests; they are
 not repeatedly stored as History facts merely because the model can see them.
 
+The portable reasoning vocabulary is finite: `default`, `low`, `medium`,
+`high`, `xhigh`, and `max`. `default` means that an adapter omits an explicit
+effort when its protocol supports omission. A model descriptor declares the
+subset it actually accepts; applications must not present or send the whole
+portable vocabulary as if every model supported it.
+
 `ModelExecutor`, rather than `ModelProvider`, is globally mandatory because it
 is the Runtime's logical model-call boundary. `model.provider` is an optional
 `Many` Slot: an Executor that uses installed providers declares that dependency

@@ -83,6 +83,8 @@ func (modelCommand) Describe() CommandDescriptor {
 				{Value: string(model.ReasoningLow), Title: "Low"},
 				{Value: string(model.ReasoningMedium), Title: "Medium"},
 				{Value: string(model.ReasoningHigh), Title: "High"},
+				{Value: string(model.ReasoningXHigh), Title: "XHigh"},
+				{Value: string(model.ReasoningMax), Title: "Max"},
 			}},
 			{Key: "temperature", Title: "Temperature", Type: FieldText},
 			{Key: "max_tokens", Title: "Maximum output tokens", Type: FieldText},

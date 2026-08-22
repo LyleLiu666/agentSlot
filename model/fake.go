@@ -120,7 +120,7 @@ func (*FakeModelExecutor) Inspect(_ context.Context, config Config) (ExecutionCa
 			OutputModalities: []Modality{ModalityText},
 			ToolCalling:      true,
 		},
-		Reasoning:           []Reasoning{ReasoningDefault, ReasoningLow, ReasoningMedium, ReasoningHigh},
+		Reasoning:           []Reasoning{ReasoningDefault, ReasoningLow, ReasoningMedium, ReasoningHigh, ReasoningXHigh, ReasoningMax},
 		ContextWindowTokens: 1_000_000, MaxOutputTokens: 100_000,
 	}, nil
 }

@@ -24,12 +24,14 @@ const (
 	ReasoningLow     Reasoning = "low"
 	ReasoningMedium  Reasoning = "medium"
 	ReasoningHigh    Reasoning = "high"
+	ReasoningXHigh   Reasoning = "xhigh"
+	ReasoningMax     Reasoning = "max"
 )
 
 // Valid reports whether reasoning belongs to the finite portable vocabulary.
 func (r Reasoning) Valid() bool {
 	switch r {
-	case ReasoningDefault, ReasoningLow, ReasoningMedium, ReasoningHigh:
+	case ReasoningDefault, ReasoningLow, ReasoningMedium, ReasoningHigh, ReasoningXHigh, ReasoningMax:
 		return true
 	default:
 		return false
