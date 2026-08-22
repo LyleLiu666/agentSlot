@@ -54,7 +54,8 @@ component map is normative, while its ecosystems remain at their explicitly
 recorded maturity. Every published tag is immutable; later changes receive a
 new semantic version.
 
-These newer boundaries remain `Contracted`, not `Conformant` or `Proven`.
+All newer boundaries remain at least `Contracted`. `session.store` is now
+`Conformant` against the exact `v0.0.10` contract; no ecosystem is yet `Proven`.
 
 ## Core model
 
@@ -340,8 +341,9 @@ timestamp atomically when it creates a durable `agent.Message` fact.
 Twenty-nine standard component contracts are now available in the `loop`,
 `session`, `model`, `tool`, `context`, `hook`, `interaction`, `policy`, `observe`,
 `goal`, `memory`, `workflow`, `billing`, and `artifact`
-packages. They are Contracted, but no domain ecosystem is yet Conformant or
-Proven.
+packages. They are at least Contracted; `session.store` has a reusable
+black-box `session.store/v1` result against the exact `v0.0.10` contract and is
+Conformant, while no domain ecosystem is yet Proven.
 
 The `standardagent` package implements the application-scoped Runtime registry,
 coordinator, fixed Gateway, GatewayAccess binding, GatewayChannel wrapper,
@@ -406,10 +408,12 @@ before invocation. Recovery can resume only the original prepared call;
 pending calls become `outcome_unknown` and are never replayed. Trace, Metric, Audit, and Usage
 chains are passive, and [`observe/jsonlines`](observe/jsonlines) is an explicit
 default sink. [`session.FileStore`](session/file_store.go) is a crash-safe
-single-process persistent implementation. These implementations do not make
-their Slots Conformant or Proven, and no Web/RPC transport, distributed Session
-lease, or reliable-delivery ACK is implied. Importing any package still has no
-registration or startup side effect.
+single-process persistent implementation. FileStore passes the separately
+maintained `session.store/v1` public black-box suite, making that ecosystem
+Conformant. MemoryStore and FileStore share one implementation codebase, so
+they do not establish Proven maturity; no Web/RPC transport, distributed
+Session lease, or reliable-delivery ACK is implied. Importing any package still
+has no registration or startup side effect.
 
 ## Reference agent
 

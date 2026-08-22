@@ -23,13 +23,14 @@
 | 已映射的标准组件生态位 | 41 |
 | 已标准化的领域词汇 | 9 |
 | 已定义契约的 AgentSlot 自有领域接口 | 29 |
-| 通过一致性验证的组件生态位 | 0 |
+| 通过一致性验证的组件生态位 | 1 |
 | 已由独立实现证明的组件生态位 | 0 |
 | 已进入标准装配的组件生态位 | 0 |
 
 独立的组装协议目前导出了五个 Go 接口：`Module`、`SlotRequirer`、
 `Registrar`、`Contribution` 和 `Lifecycle`。它们是框架机制，不能代替
-地图中 41 个 Agent 领域组件生态位；其中 29 个已经具备公开合同。
+地图中 41 个 Agent 领域组件生态位；其中 29 个已经具备公开合同，1 个已通过一致性验证，
+其余 28 个保持已定义契约，尚无生态位达到 Proven。
 
 表中 9 组有限领域词汇分别是：Agent Loop 结果、模型能力、工具调用、策略/审批、观察、
 Goal、Memory、Workflow 和 Billing。这个数字只统计为了互操作而固定的有限词汇和事实，不统计普通常量。
@@ -128,15 +129,20 @@ flowchart LR
 | **已证明（Proven）** | 至少两个语义上独立的实现通过同版一致性套件；同一实现的不同包装只能算一个。 |
 | **已装配（Assembled）** | LAS 或后续获准的真实消费者能够通过 Slot 替换已证明的实现，不包含具体类型分支。 |
 
-当前已有 29 个领域生态位进入**已定义契约（Contracted）**：它们拥有公开
-领域接口、typed Slot 和合同测试。仓库已经包含相互独立的内存/崩溃安全文件
+当前已有 29 个领域生态位至少进入**已定义契约（Contracted）**：它们拥有公开
+领域接口、typed Slot 和合同测试。仓库已经包含内存/崩溃安全文件
 SessionStore、确定性 Fake/OpenAI Chat Compatible Executor、Bash/文件/HTTP 工具、
 进程内/CLI GatewayChannel、确定性的工具策略与审批组件，以及 JSON Lines 观察模块；固定
-Runtime 与选中的 AgentLoop 不按具体类型分支即可消费它们。由于尚未建立可复用的一致性测试套件，所有
-这些生态位仍保持 Contracted，不能标为**已通过一致性验证**或**已证明**。其他生态位
-仍处于**已映射（Mapped）**阶段。
+Runtime 与选中的 AgentLoop 不按具体类型分支即可消费它们。
 
-在精确证据建立前，成绩仍为 0 个 Conformant、0 个 Proven、0 个 Assembled。
+`session.store` 已达到**已通过一致性验证（Conformant）**：可复用的 `session.store/v1`
+黑盒套件针对 AgentSlot `v0.0.10` 的精确提交
+`c6b42a767d5422464ebc2978bf408b7d15eb5125`，完整通过公共行为和持久重开场景，0 失败、
+0 跳过。MemoryStore 只作进程生命周期内参考自检；MemoryStore/FileStore 又共享同一实现
+代码库，因此这里只算一个实现结果，不能作为 Proven 证据。其余 28 个领域生态位保持
+**已定义契约**，其他生态位仍处于**已映射**阶段。
+
+当前成绩为 1 个 Conformant、0 个 Proven、0 个 Assembled。
 
 成绩以已经证明的组件生态位计算，不按 Module、包或接口方法的数量计算。
 一个 Module 可以向多个 Slot 提供组件，多个 Module 也可以共同向一个
@@ -225,7 +231,7 @@ OpenAI 专属的网络数据结构。
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `session.store` | `SessionStore` | `One` | 全局必需 | 持久化包含 SessionModelConfig 的完整 Session 聚合及其 revision/CAS 原子事务；按 Agent/Workspace 提供有界、确定性排序且绑定 Store 生命周期的游标分页；History 是聚合内唯一、append-only 的事实视图。 | 已定义契约 |
+| `session.store` | `SessionStore` | `One` | 全局必需 | 持久化包含 SessionModelConfig 的完整 Session 聚合及其 revision/CAS 原子事务；按 Agent/Workspace 提供有界、确定性排序且绑定 Store 生命周期的游标分页；History 是聚合内唯一、append-only 的事实视图。 | 已通过一致性验证 |
 | `context.source` | `ContextSource` | `Chain` | 可选 | 为一次模型调用按顺序提供上下文。 | 已定义契约 |
 | `context.compactor` | `ContextCompactor` | `One` | 可选 | 把当前完整 Context 转为更小的会话消息投影且不改写 History；AgentRuntime 重新装配固定 Prompt/Tool，并校验协议和硬 Token 上限。 | 已定义契约 |
 | `memory.store` | `MemoryStore` | `Many` | 可选 | 在权威会话 History 之外召回、记住和遗忘受治理的长期记忆。 | 已定义契约 |
