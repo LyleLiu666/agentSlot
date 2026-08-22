@@ -31,7 +31,6 @@ public_files=(
   README.md
   go.mod
   go.sum
-  docs/architecture.md
 )
 
 for relative_path in "${public_files[@]}"; do

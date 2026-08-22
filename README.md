@@ -43,7 +43,7 @@ never selects a Loop or any other domain component.
 
 ## Status
 
-AgentSlot is a pre-1.0 foundation. `v0.0.7` is the current validation release
+AgentSlot is a pre-1.0 foundation. `v0.0.8` is the current validation release
 and is intended to be consumed by real Agent projects. It adds the contracted
 Goal, Memory, Workflow, Billing, Agent Loop, and immutable Artifact Store
 boundaries developed after the first complete reference Agent path. It is not a
@@ -303,6 +303,15 @@ contract-reference implementations, not a production database; production
 storage remains a replaceable `session.store` Slot. Development
 applications can explicitly install `session.NewMemoryModule`; importing the
 package never selects it as a hidden default.
+
+The separate `memory.store` Slot defines portable Recall, Remember, and Forget
+semantics; it does not choose a database, vector index, ranking algorithm, or
+retention system. Application developers provide that implementation. The
+standard contract preserves typed session-summary, semantic, evidence, and
+temporal candidates, source and confidence facts, execution provenance,
+visibility, writeback policy, recall intent, and evidence selection. The host
+injects execution identity and governance through `memory.RuntimeScope`; model
+tool arguments cannot choose those authoritative values.
 
 Mapping a Slot and standardizing its Go method contract are different maturity
 steps. A proposed method-level interface needs two independent implementations,

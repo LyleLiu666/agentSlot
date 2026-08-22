@@ -248,8 +248,12 @@ Context，绝不能改写 History。
 标准 Compactor 契约允许整体替换；“摘要 + 最近三条 inbound”只是默认实现，
 不是框架不变量。
 `memory` 包固定可移植的 scope 与 memory kind 词汇，并提供可选的
-recall/remember/forget 工具和预召回 ContextSource。适配器可以把这些事实映射到更丰富
-的 Memory SDK，但不能制造第二份 Session History，也不能从 prompt 文本猜写入作用域。
+recall/remember/forget 工具和预召回 ContextSource。Store 契约完整保留四种 typed
+candidate payload、来源与可信度、执行 provenance、显式 visibility/writeback 治理、
+召回意图和 Evidence 选择；执行身份与治理值由宿主注入，模型工具参数不能自行指定。
+开发者仍可自由选择存储、索引、排序、保留和归并实现。适配器可以把这些可移植事实
+映射到更丰富的 Memory SDK，但不能制造第二份 Session History，不能从 prompt 文本
+猜写入作用域，也不能发明缺失事实或静默丢弃已经提供的事实。
 
 ### 5. 工作区、执行与产物
 

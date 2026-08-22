@@ -283,8 +283,14 @@ inbound messages” algorithm is a default implementation, not a framework
 invariant.
 The `memory` package fixes portable scope and memory-kind vocabularies and
 provides optional recall/remember/forget tools plus a pre-recall ContextSource.
-An adapter may map those facts into a richer memory SDK, but it may not turn
-memory into a second Session history or infer write scope from prompt text.
+Its Store contract preserves four typed candidate payloads, source and
+confidence facts, execution provenance, explicit visibility/writeback
+governance, recall intent, and evidence selection. The host injects execution
+identity and governance; model tool arguments cannot choose them. Implementers
+remain free to select storage, indexing, ranking, retention, and consolidation
+strategies. An adapter may map the portable facts into a richer memory SDK, but
+it may not turn memory into a second Session history, infer write scope from
+prompt text, invent missing facts, or silently discard a supplied fact.
 
 ### 5. Workspace, execution, and artifacts
 

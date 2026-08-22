@@ -8,6 +8,36 @@ when real consumers expose a flawed boundary.
 
 No changes yet.
 
+## v0.0.8 - 2026-08-22
+
+### Changed
+
+- Corrected the pre-1.0 `memory.store` contract so Recall preserves intent,
+  evidence selection, authoritative execution provenance, visibility filters,
+  and governed result facts.
+- Replaced lossy flat Remember fields with a closed union of typed session
+  summary, semantic, evidence, and temporal payloads. Source, confidence,
+  visibility, writeback policy, and full Session/Run/Step/Invocation identity
+  are explicit rather than guessed by adapters.
+- Updated the optional memory tools to expose the corrected schema, inject
+  authoritative identity and governance from `RuntimeScope`, and validate both
+  requests and implementation results at the Store boundary.
+
+### Safety
+
+- Model-callable memory tools cannot provide execution provenance, visibility,
+  writeback policy, or the trusted `worker_consolidation` source kind.
+- Memory implementation failures remain hidden from model-facing errors, and
+  invalid, inactive, or over-limit Store results are rejected before exposure.
+
+### Compatibility and maturity
+
+- This intentionally breaks the earlier pre-1.0 Memory request shapes; callers
+  and adapters must move to the typed contract together. No compatibility shim
+  is provided.
+- `memory.store` remains Contracted. This release does not promote any ecosystem
+  to Conformant, Proven, or Assembled.
+
 ## v0.0.7 - 2026-08-22
 
 ### Fixed
