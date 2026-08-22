@@ -42,7 +42,7 @@ never selects a Loop or any other domain component.
 
 ## Status
 
-AgentSlot is a pre-1.0 foundation. `v0.0.6` is the current validation release
+AgentSlot is a pre-1.0 foundation. `v0.0.7` is the current validation release
 and is intended to be consumed by real Agent projects. It adds the contracted
 Goal, Memory, Workflow, Billing, Agent Loop, and immutable Artifact Store
 boundaries developed after the first complete reference Agent path. It is not a
