@@ -257,6 +257,9 @@ func validateNewSession(initial NewSession) error {
 		if initial.Fork.ParentSessionID != initial.Session.ParentSessionID || !initial.Fork.ParentSessionID.Valid() {
 			return invalid("session.create", "fork provenance does not match parent session")
 		}
+		if initial.Fork.CutoffSequence != HistorySequence(len(initial.History)) {
+			return invalid("session.create", "fork cutoff must match the complete copied History prefix")
+		}
 		for _, fact := range initial.History {
 			if !fact.OriginFactID.Valid() {
 				return invalid("session.create", "forked history fact requires source identity")

@@ -8,6 +8,25 @@ when real consumers expose a flawed boundary.
 
 No changes yet.
 
+## v0.0.10 - 2026-08-22
+
+### Fixed
+
+- `FileStore` now restores a fork after the child Session appends its own
+  History facts. Only the copied source prefix carries `OriginFactID`; later
+  child facts are no longer misclassified as corrupt lineage during reload.
+- `SessionStore.Create` rejects a fork whose `CutoffSequence` does not match
+  the complete copied History prefix, so durable lineage can be validated
+  without guessing which facts belong to the parent.
+
+### Compatibility and maturity
+
+- This release corrects fork validation without changing the public Go type
+  shapes. Callers that supplied an inconsistent cutoff now receive invalid
+  input instead of creating an aggregate that cannot be validated reliably.
+- `session.store` remains Contracted. Conformance results are recorded
+  separately and are not claimed by this implementation fix.
+
 ## v0.0.9 - 2026-08-22
 
 ### Changed
