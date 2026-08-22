@@ -436,9 +436,16 @@ func validateFileDocument(id agent.SessionID, document fileStoreDocument) error 
 		return errors.New("fork provenance is inconsistent")
 	}
 	if snapshot.Fork != nil {
+		if snapshot.Fork.CutoffSequence > HistorySequence(len(snapshot.History)) {
+			return errors.New("fork cutoff exceeds the durable History prefix")
+		}
 		for _, fact := range snapshot.History {
-			if !fact.OriginFactID.Valid() {
-				return errors.New("forked history fact has no source identity")
+			if fact.Sequence <= snapshot.Fork.CutoffSequence {
+				if !fact.OriginFactID.Valid() {
+					return errors.New("forked History prefix fact has no source identity")
+				}
+			} else if fact.OriginFactID != "" {
+				return errors.New("child History fact unexpectedly carries source identity")
 			}
 		}
 	}

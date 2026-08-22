@@ -150,6 +150,57 @@ func TestFixedManagerForkPersistsHistoryLineageInFileStore(t *testing.T) {
 	}
 }
 
+func TestFileStoreReopensForkAfterChildAppendsNewFact(t *testing.T) {
+	directory := t.TempDir()
+	store := openFileStore(t, directory)
+	initialMessage := message("child-source-copy", "fork-child-append", agent.RoleUser, "copied from parent")
+	created, err := store.Create(context.Background(), session.NewSession{
+		Session: agent.Session{
+			ID: "fork-child-append", AgentID: "agent-1", WorkspaceID: "workspace-1",
+			ParentSessionID: "fork-parent", ParentRevision: 3,
+		},
+		History:     []session.HistoryFact{{OriginFactID: "parent-fact-1", Message: &initialMessage}},
+		ModelConfig: defaultConfig(), RunState: session.RunIdle,
+		Fork: &session.ForkProvenance{ParentSessionID: "fork-parent", CutoffSequence: 1},
+	})
+	if err != nil {
+		t.Fatalf("Create fork: %v", err)
+	}
+	childMessage := message("child-new-fact", created.Session.ID, agent.RoleUser, "created by child")
+	commitChanges(t, store, created.Session.ID, created.Revision, "child-append",
+		session.Change{Kind: session.AppendMessage, Message: &childMessage},
+	)
+	if err := store.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened := openFileStore(t, directory)
+	t.Cleanup(func() { _ = reopened.Close(context.Background()) })
+	loaded, err := reopened.Load(context.Background(), session.SessionRef{SessionID: created.Session.ID})
+	if err != nil {
+		t.Fatalf("Load reopened fork: %v", err)
+	}
+	if len(loaded.History) != 2 || loaded.History[0].OriginFactID != "parent-fact-1" || loaded.History[1].OriginFactID != "" {
+		t.Fatalf("reopened fork History lineage = %#v", loaded.History)
+	}
+}
+
+func TestFileStoreRejectsForkCutoffThatDoesNotMatchCopiedPrefix(t *testing.T) {
+	store := openFileStore(t, t.TempDir())
+	initialMessage := message("child-source-copy", "fork-cutoff-mismatch", agent.RoleUser, "copied from parent")
+	_, err := store.Create(context.Background(), session.NewSession{
+		Session: agent.Session{
+			ID: "fork-cutoff-mismatch", AgentID: "agent-1", WorkspaceID: "workspace-1",
+			ParentSessionID: "fork-parent", ParentRevision: 3,
+		},
+		History:     []session.HistoryFact{{OriginFactID: "parent-fact-1", Message: &initialMessage}},
+		ModelConfig: defaultConfig(), RunState: session.RunIdle,
+		Fork: &session.ForkProvenance{ParentSessionID: "fork-parent", CutoffSequence: 2},
+	})
+	if !agent.IsKind(err, agent.ErrorInvalidInput) {
+		t.Fatalf("Create mismatched fork cutoff error = %v, want invalid_input", err)
+	}
+}
+
 func TestFileStoreCASPublishesOnlyOneConcurrentCommit(t *testing.T) {
 	store := openFileStore(t, t.TempDir())
 	t.Cleanup(func() { _ = store.Close(context.Background()) })
