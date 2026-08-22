@@ -2,9 +2,6 @@
 
 [English](COMPONENT_MAP.md) | [简体中文](COMPONENT_MAP.zh-CN.md)
 
-For object ownership, the Gateway spine, and package dependency direction, read
-the public [architecture](docs/architecture.md).
-
 This document is the authoritative map of the customization seams in a
 composable LLM agent. It is a primary AgentSlot asset, not a list of whatever
 interfaces happen to exist in one implementation.
@@ -146,9 +143,9 @@ method-level contract is an engineering result.
 | --- | --- |
 | **Mapped** | Responsibility, boundary, Slot ID, and cardinality are defined here. No public Go interface is implied. |
 | **Contracted** | A public AgentSlot-owned domain interface and typed Slot declaration exist. |
-| **Conformant** | A reusable conformance suite verifies required behavior, cancellation, failures, and lifecycle ownership. |
-| **Proven** | At least two semantically independent implementations pass the conformance suite. Wrappers over the same implementation count once. |
-| **Assembled** | A reference application exchanges proven implementations through the Slot without concrete-type branches. |
+| **Conformant** | A reusable black-box suite has passed against an exact AgentSlot commit, verifying required behavior, cancellation, failures, and lifecycle ownership. |
+| **Proven** | At least two semantically independent implementations pass the same suite version. Wrappers over the same implementation count once. |
+| **Assembled** | LAS or another approved real consumer exchanges proven implementations through the Slot without concrete-type branches. |
 
 Twenty-nine domain rows are now **Contracted**: each has a public
 domain interface, typed Slot, and contract tests. The repository now contains
@@ -159,6 +156,9 @@ observation module. The fixed Runtime and selected AgentLoop consume these compo
 concrete-type branches. No ecosystem yet has the reusable conformance suite
 required by the next maturity level, so all remain Contracted rather than
 Conformant or Proven. Every other domain row remains **Mapped**.
+
+Until exact evidence exists, the score remains 0 Conformant, 0 Proven, and
+0 Assembled.
 
 The score is measured by proven component ecosystems, not by the number of
 modules, packages, or interface methods. One module may contribute to several
@@ -283,8 +283,14 @@ inbound messages” algorithm is a default implementation, not a framework
 invariant.
 The `memory` package fixes portable scope and memory-kind vocabularies and
 provides optional recall/remember/forget tools plus a pre-recall ContextSource.
-An adapter may map those facts into a richer memory SDK, but it may not turn
-memory into a second Session history or infer write scope from prompt text.
+Its Store contract preserves four typed candidate payloads, source and
+confidence facts, execution provenance, explicit visibility/writeback
+governance, recall intent, and evidence selection. The host injects execution
+identity and governance; model tool arguments cannot choose them. Implementers
+remain free to select storage, indexing, ranking, retention, and consolidation
+strategies. An adapter may map the portable facts into a richer memory SDK, but
+it may not turn memory into a second Session history, infer write scope from
+prompt text, invent missing facts, or silently discard a supplied fact.
 
 ### 5. Workspace, execution, and artifacts
 

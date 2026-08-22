@@ -1,12 +1,13 @@
 package memory
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
-	"time"
 
 	agentslot "github.com/LyleLiu666/agentSlot"
 	agent "github.com/LyleLiu666/agentSlot/agent"
@@ -22,14 +23,21 @@ const (
 )
 
 type RuntimeScope struct {
-	AgentID     agent.AgentID
-	WorkspaceID agent.WorkspaceID
-	Scopes      []Scope
-	WriteScopes []ScopeKind
+	AgentID          agent.AgentID
+	WorkspaceID      agent.WorkspaceID
+	AgentRole        string
+	ParentRunID      agent.RunID
+	RootRunID        agent.RunID
+	JobID            string
+	Scopes           []Scope
+	RecallVisibility []Visibility
+	WritePolicies    []WritePolicy
 }
 
 func (s RuntimeScope) Validate() error {
-	if !s.AgentID.Valid() || !s.WorkspaceID.Valid() || len(s.Scopes) == 0 {
+	if !s.AgentID.Valid() || !s.WorkspaceID.Valid() || !validOptionalText(s.AgentRole) ||
+		!validOptionalRunID(s.ParentRunID) || !validOptionalRunID(s.RootRunID) ||
+		!validOptionalText(s.JobID) || len(s.Scopes) == 0 || len(s.RecallVisibility) == 0 {
 		return errors.New("memory: invalid runtime scope")
 	}
 	seenScopes := make(map[ScopeKind]bool, len(s.Scopes))
@@ -42,17 +50,31 @@ func (s RuntimeScope) Validate() error {
 		}
 		seenScopes[scope.Kind] = true
 	}
-	seenWrites := make(map[ScopeKind]bool, len(s.WriteScopes))
-	for _, kind := range s.WriteScopes {
-		if !kind.Valid() {
-			return errors.New("memory: invalid write scope")
+	seenVisibility := make(map[Visibility]bool, len(s.RecallVisibility))
+	for _, visibility := range s.RecallVisibility {
+		if !visibility.Valid() || seenVisibility[visibility] {
+			return errors.New("memory: invalid recall visibility")
 		}
-		if seenWrites[kind] || !seenScopes[kind] {
+		seenVisibility[visibility] = true
+	}
+	seenWrites := make(map[ScopeKind]bool, len(s.WritePolicies))
+	for _, policy := range s.WritePolicies {
+		if err := policy.Validate(); err != nil {
+			return err
+		}
+		if seenWrites[policy.ScopeKind] || !seenScopes[policy.ScopeKind] {
 			return errors.New("memory: write scope must name one unique visible scope")
 		}
-		seenWrites[kind] = true
+		seenWrites[policy.ScopeKind] = true
 	}
 	return nil
+}
+
+func (s RuntimeScope) operation(sessionID agent.SessionID, runID agent.RunID, stepID agent.StepID) OperationContext {
+	return OperationContext{
+		SessionID: sessionID, RunID: runID, StepID: stepID, AgentID: s.AgentID, WorkspaceID: s.WorkspaceID,
+		AgentRole: s.AgentRole, ParentRunID: s.ParentRunID, RootRunID: s.RootRunID, JobID: s.JobID,
+	}
 }
 
 type ScopeResolver interface {
@@ -149,11 +171,19 @@ func (s *memoryContextSource) Contribute(ctx context.Context, input agentcontext
 	if query == "" {
 		return nil, nil
 	}
-	result, err := s.store.Recall(ctx, RecallRequest{
-		Query: query, Scopes: scope.Scopes, Limit: 5,
-		SessionID: input.SessionID, AgentID: scope.AgentID, WorkspaceID: scope.WorkspaceID,
-	})
+	request := RecallRequest{
+		Operation: scope.operation(input.SessionID, "", ""), Query: query,
+		Intent: RecallTaskContinuity, IncludeEvidence: false,
+		Scopes: cloneScopes(scope.Scopes), VisibilityFilter: cloneVisibility(scope.RecallVisibility), Limit: 5,
+	}
+	if err := request.Validate(); err != nil {
+		return nil, err
+	}
+	result, err := s.store.Recall(ctx, cloneRecallRequest(request))
 	if err != nil {
+		return nil, err
+	}
+	if err := result.Validate(request); err != nil {
 		return nil, err
 	}
 	if len(result.Items) == 0 {
@@ -162,9 +192,6 @@ func (s *memoryContextSource) Contribute(ctx context.Context, input agentcontext
 	var text strings.Builder
 	text.WriteString("MEMORY_CONTEXT\n")
 	for _, item := range result.Items {
-		if err := item.Validate(); err != nil {
-			return nil, err
-		}
 		text.WriteString("- ")
 		text.WriteString(item.Summary)
 		text.WriteByte('\n')
@@ -196,7 +223,11 @@ func newMemoryTool(name string, store MemoryStore, scopes ScopeResolver) (*memor
 func (t *memoryTool) Definition() tool.Definition       { return t.definition }
 func (*memoryTool) ParallelSafety() tool.ParallelSafety { return tool.Serial }
 func (t *memoryTool) Invoke(ctx context.Context, invocation tool.ToolInvocation) tool.ToolResult {
-	scope, err := t.scopes.ResolveMemoryScope(ctx, invocation.SessionID)
+	err := t.definition.InputSchema.ValidateArguments(invocation.Call.Arguments)
+	var scope RuntimeScope
+	if err == nil {
+		scope, err = t.scopes.ResolveMemoryScope(ctx, invocation.SessionID)
+	}
 	if err == nil {
 		err = scope.Validate()
 	}
@@ -204,59 +235,70 @@ func (t *memoryTool) Invoke(ctx context.Context, invocation tool.ToolInvocation)
 	if err == nil {
 		switch t.definition.Name {
 		case ToolRecall:
-			var args struct {
-				Query string `json:"query"`
-				Limit int    `json:"limit"`
-			}
-			if err = json.Unmarshal(invocation.Call.Arguments, &args); err == nil {
-				value, err = t.store.Recall(ctx, RecallRequest{
-					Query: args.Query, Limit: args.Limit, Scopes: scope.Scopes, SessionID: invocation.SessionID,
-					RunID: invocation.RunID, AgentID: scope.AgentID, WorkspaceID: scope.WorkspaceID,
-				})
+			var args recallArguments
+			if err = decodeStrict(invocation.Call.Arguments, &args); err == nil {
+				request := RecallRequest{
+					Operation: scope.operation(invocation.SessionID, invocation.RunID, invocation.StepID),
+					Query:     args.Query, Intent: args.Intent, IncludeEvidence: args.IncludeEvidence,
+					Scopes: cloneScopes(scope.Scopes), VisibilityFilter: cloneVisibility(scope.RecallVisibility), Limit: args.Limit,
+				}
+				if err = request.Validate(); err == nil {
+					var result RecallResult
+					result, err = t.store.Recall(ctx, cloneRecallRequest(request))
+					if err == nil {
+						err = result.Validate(request)
+						value = result
+					}
+				}
 			}
 		case ToolRemember:
 			var args rememberArguments
-			if err = json.Unmarshal(invocation.Call.Arguments, &args); err == nil {
-				var validFrom time.Time
-				var validTo *time.Time
-				if Kind(args.Kind) == KindTemporal {
-					validFrom, err = time.Parse(time.RFC3339, args.ValidFrom)
-					if err == nil && args.ValidTo != "" {
-						parsed, parseErr := time.Parse(time.RFC3339, args.ValidTo)
-						err = parseErr
-						validTo = &parsed
-					}
-				}
+			if err = decodeStrict(invocation.Call.Arguments, &args); err == nil {
 				target, found := scopeByKind(scope.Scopes, ScopeKind(args.ScopeKind))
-				if err == nil && (!found || !writeAllowed(scope.WriteScopes, target.Kind)) {
+				policy, allowed := writePolicyFor(scope.WritePolicies, target.Kind)
+				if !found || !allowed {
 					err = errors.New("memory write scope is not allowed")
 				}
 				if err == nil {
-					value, err = t.store.Remember(ctx, RememberRequest{
-						InvocationID: string(invocation.Call.ID), SessionID: invocation.SessionID, RunID: invocation.RunID,
-						AgentID: scope.AgentID, Scope: target, Kind: Kind(args.Kind), Title: args.Title, Summary: args.Summary,
-						EvidenceText: args.EvidenceText, Subject: args.Subject, Predicate: args.Predicate, Object: args.Object,
-						ValidFrom: validFrom, ValidTo: validTo, SourceRef: args.SourceRef,
-					})
+					var payload CandidatePayload
+					payload, err = decodeCandidatePayload(args.CandidateType, args.Payload)
+					request := RememberRequest{
+						Operation:    scope.operation(invocation.SessionID, invocation.RunID, invocation.StepID),
+						InvocationID: invocation.Call.ID, Scope: target, SourceKind: args.SourceKind,
+						SourceRef: args.SourceRef, Confidence: args.Confidence,
+						Visibility: policy.Visibility, WritebackMode: policy.WritebackMode, Payload: payload,
+					}
+					if err == nil {
+						err = request.Validate()
+					}
+					if err == nil {
+						var result RememberResult
+						result, err = t.store.Remember(ctx, request)
+						if err == nil {
+							err = result.Validate()
+							value = result
+						}
+					}
 				}
 			}
 		case ToolForget:
-			var args struct {
-				TargetID  string `json:"target_id"`
-				ScopeKind string `json:"scope_kind"`
-				Mode      string `json:"mode"`
-				Reason    string `json:"reason"`
-			}
-			if err = json.Unmarshal(invocation.Call.Arguments, &args); err == nil {
+			var args forgetArguments
+			if err = decodeStrict(invocation.Call.Arguments, &args); err == nil {
 				target, found := scopeByKind(scope.Scopes, ScopeKind(args.ScopeKind))
-				if !found || !writeAllowed(scope.WriteScopes, target.Kind) {
+				_, allowed := writePolicyFor(scope.WritePolicies, target.Kind)
+				if !found || !allowed {
 					err = errors.New("memory write scope is not allowed")
 				} else {
-					err = t.store.Forget(ctx, ForgetRequest{
-						SessionID: invocation.SessionID, RunID: invocation.RunID, TargetID: args.TargetID,
-						Scope: target, Mode: ForgetMode(args.Mode), Reason: args.Reason,
-					})
-					value = map[string]any{"target_id": args.TargetID, "applied": err == nil}
+					request := ForgetRequest{
+						Operation: scope.operation(invocation.SessionID, invocation.RunID, invocation.StepID),
+						TargetID:  args.TargetID, Scope: target, Mode: args.Mode, Reason: args.Reason,
+					}
+					if err = request.Validate(); err == nil {
+						err = t.store.Forget(ctx, request)
+					}
+					if err == nil {
+						value = map[string]any{"target_id": args.TargetID, "applied": true}
+					}
 				}
 			}
 		}
@@ -292,18 +334,27 @@ func latestRecallQuery(inputs []model.Input) string {
 	return ""
 }
 
+type recallArguments struct {
+	Query           string       `json:"query"`
+	Intent          RecallIntent `json:"intent"`
+	IncludeEvidence bool         `json:"include_evidence"`
+	Limit           int          `json:"limit"`
+}
+
 type rememberArguments struct {
-	ScopeKind    string `json:"scope_kind"`
-	Kind         string `json:"kind"`
-	Title        string `json:"title"`
-	Summary      string `json:"summary"`
-	EvidenceText string `json:"evidence_text"`
-	Subject      string `json:"subject"`
-	Predicate    string `json:"predicate"`
-	Object       string `json:"object"`
-	ValidFrom    string `json:"valid_from"`
-	ValidTo      string `json:"valid_to"`
-	SourceRef    string `json:"source_ref"`
+	ScopeKind     ScopeKind       `json:"scope_kind"`
+	CandidateType Kind            `json:"candidate_type"`
+	SourceKind    SourceKind      `json:"source_kind"`
+	SourceRef     string          `json:"source_ref"`
+	Confidence    float64         `json:"confidence"`
+	Payload       json.RawMessage `json:"payload"`
+}
+
+type forgetArguments struct {
+	TargetID  string     `json:"target_id"`
+	ScopeKind ScopeKind  `json:"scope_kind"`
+	Mode      ForgetMode `json:"mode"`
+	Reason    string     `json:"reason"`
 }
 
 func scopeByKind(scopes []Scope, kind ScopeKind) (Scope, bool) {
@@ -315,24 +366,88 @@ func scopeByKind(scopes []Scope, kind ScopeKind) (Scope, bool) {
 	return Scope{}, false
 }
 
-func writeAllowed(allowed []ScopeKind, kind ScopeKind) bool {
-	for _, candidate := range allowed {
-		if candidate == kind {
-			return true
+func cloneScopes(scopes []Scope) []Scope { return append([]Scope(nil), scopes...) }
+
+func cloneVisibility(visibility []Visibility) []Visibility {
+	return append([]Visibility(nil), visibility...)
+}
+
+func cloneRecallRequest(request RecallRequest) RecallRequest {
+	request.Scopes = cloneScopes(request.Scopes)
+	request.VisibilityFilter = cloneVisibility(request.VisibilityFilter)
+	return request
+}
+
+func writePolicyFor(policies []WritePolicy, kind ScopeKind) (WritePolicy, bool) {
+	for _, policy := range policies {
+		if policy.ScopeKind == kind {
+			return policy, true
 		}
 	}
-	return false
+	return WritePolicy{}, false
+}
+
+func decodeCandidatePayload(kind Kind, raw json.RawMessage) (CandidatePayload, error) {
+	var payload CandidatePayload
+	switch kind {
+	case KindSessionSummary:
+		payload = &SessionSummaryPayload{}
+	case KindSemantic:
+		payload = &SemanticPayload{}
+	case KindEvidence:
+		payload = &EvidencePayload{}
+	case KindTemporal:
+		payload = &TemporalPayload{}
+	default:
+		return nil, errors.New("memory: unsupported candidate type")
+	}
+	if err := decodeStrict(raw, payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func decodeStrict(raw []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("memory: arguments contain trailing JSON")
+	}
+	return nil
 }
 
 func memoryToolSchema(name string) (string, string, error) {
 	switch name {
 	case ToolRecall:
-		return `{"type":"object","additionalProperties":false,"properties":{"query":{"type":"string","minLength":1},"limit":{"type":"integer","minimum":1,"maximum":20}},"required":["query","limit"]}`, "Recall long-term memory visible to this Session.", nil
+		return `{"type":"object","additionalProperties":false,"properties":{"query":{"type":"string","minLength":1},"intent":{"type":"string","enum":["task_continuity","semantic_lookup","evidence_lookup","temporal_lookup","general"]},"include_evidence":{"type":"boolean"},"limit":{"type":"integer","minimum":1,"maximum":20}},"required":["query","intent","include_evidence","limit"]}`, "Recall long-term memory visible to this Session.", nil
 	case ToolRemember:
-		return `{"type":"object","additionalProperties":false,"properties":{"scope_kind":{"type":"string","enum":["user","org","workspace","session","agent"]},"kind":{"type":"string","enum":["summary","semantic","evidence","temporal"]},"title":{"type":"string"},"summary":{"type":"string"},"evidence_text":{"type":"string"},"subject":{"type":"string"},"predicate":{"type":"string"},"object":{"type":"string"},"valid_from":{"type":"string","format":"date-time"},"valid_to":{"type":"string","format":"date-time"},"source_ref":{"type":"string"}},"required":["scope_kind","kind"],"allOf":[{"if":{"properties":{"kind":{"const":"temporal"}},"required":["kind"]},"then":{"required":["subject","predicate","object","valid_from"]}}]}`, "Write a governed long-term-memory candidate.", nil
+		return rememberToolSchema, "Write a governed long-term-memory candidate.", nil
 	case ToolForget:
 		return `{"type":"object","additionalProperties":false,"properties":{"target_id":{"type":"string","minLength":1},"scope_kind":{"type":"string","enum":["user","org","workspace","session","agent"]},"mode":{"type":"string","enum":["invalidate","delete_candidate"]},"reason":{"type":"string","minLength":1}},"required":["target_id","scope_kind","mode","reason"]}`, "Invalidate formal memory or delete a candidate in an allowed scope.", nil
 	default:
 		return "", "", fmt.Errorf("memory: unknown tool %q", name)
 	}
 }
+
+const rememberToolSchema = `{
+  "type":"object",
+  "additionalProperties":false,
+  "properties":{
+    "scope_kind":{"type":"string","enum":["user","org","workspace","session","agent"]},
+    "candidate_type":{"type":"string","enum":["session_summary","semantic","evidence","temporal_fact"]},
+    "source_kind":{"type":"string","enum":["user_message","assistant_message","tool_result","runlog","host_import"]},
+    "source_ref":{"type":"string","minLength":1},
+    "confidence":{"type":"number","minimum":0,"maximum":1},
+    "payload":{"type":"object"}
+  },
+  "required":["scope_kind","candidate_type","source_kind","source_ref","confidence","payload"],
+  "allOf":[
+    {"if":{"properties":{"candidate_type":{"const":"session_summary"}},"required":["candidate_type"]},"then":{"properties":{"scope_kind":{"const":"session"},"payload":{"type":"object","additionalProperties":false,"properties":{"current_state":{"type":"string","minLength":1},"validated_findings":{"type":"array","minItems":1,"items":{"type":"string","minLength":1}},"next_actions":{"type":"array","minItems":1,"items":{"type":"string","minLength":1}},"blockers":{"type":"array","items":{"type":"string","minLength":1}},"key_refs":{"type":"array","items":{"type":"string","minLength":1}}},"required":["current_state","validated_findings","next_actions"]}}}},
+    {"if":{"properties":{"candidate_type":{"const":"semantic"}},"required":["candidate_type"]},"then":{"properties":{"payload":{"type":"object","additionalProperties":false,"properties":{"title":{"type":"string","minLength":1},"summary":{"type":"string","minLength":1},"topic_keys":{"type":"array","minItems":1,"items":{"type":"string","minLength":1}},"evidence_refs":{"type":"array","items":{"type":"string","minLength":1}}},"required":["title","summary","topic_keys"]}}}},
+    {"if":{"properties":{"candidate_type":{"const":"evidence"}},"required":["candidate_type"]},"then":{"properties":{"payload":{"type":"object","additionalProperties":false,"properties":{"evidence_kind":{"type":"string","enum":["conversation_chunk","tool_output","document_chunk","log_chunk"]},"body_text":{"type":"string","minLength":1},"mime_type":{"type":"string","minLength":1},"redaction_state":{"type":"string","enum":["clean","redacted"]}},"required":["evidence_kind","body_text","mime_type","redaction_state"]}}}},
+    {"if":{"properties":{"candidate_type":{"const":"temporal_fact"}},"required":["candidate_type"]},"then":{"properties":{"payload":{"type":"object","additionalProperties":false,"properties":{"subject":{"type":"string","minLength":1},"predicate":{"type":"string","minLength":1},"object":{"type":"string","minLength":1},"valid_from":{"type":"string","format":"date-time"},"valid_to":{"type":"string","format":"date-time"},"evidence_refs":{"type":"array","items":{"type":"string","minLength":1}}},"required":["subject","predicate","object","valid_from"]}}}}
+  ]
+}`

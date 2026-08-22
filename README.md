@@ -13,9 +13,10 @@ Typed component slots and deterministic composition for agent systems.
 > **Release history:** [CHANGELOG](CHANGELOG.md). Pre-1.0 validation releases
 > are intended for real-project feedback and do not promise API stability.
 
-> **Architecture:** [Composition and runtime architecture](docs/architecture.md).
-
 > A module unifies registration and lifecycle. A slot defines the component ecosystem, interface, cardinality, and ordering rule.
+
+The English and Chinese component maps remain the authoritative public
+inventory and maturity scorecard.
 
 The standard AgentRuntime fixes Session ownership, CAS, cancellation, and
 Gateway control. Its Run-control policy is the unique replaceable `agent.loop`
@@ -42,7 +43,7 @@ never selects a Loop or any other domain component.
 
 ## Status
 
-AgentSlot is a pre-1.0 foundation. `v0.0.7` is the current validation release
+AgentSlot is a pre-1.0 foundation. `v0.0.8` is the current validation release
 and is intended to be consumed by real Agent projects. It adds the contracted
 Goal, Memory, Workflow, Billing, Agent Loop, and immutable Artifact Store
 boundaries developed after the first complete reference Agent path. It is not a
@@ -53,11 +54,6 @@ recorded maturity. Every published tag is immutable; later changes receive a
 new semantic version.
 
 These newer boundaries remain `Contracted`, not `Conformant` or `Proven`.
-
-The project's architectural result is the quality of its component map, not a
-large interface count. Each accepted ecosystem must have a clear boundary,
-cardinality, dependency model, lifecycle, conformance suite, and inspectable
-place in the final Assembly.
 
 ## Core model
 
@@ -308,6 +304,15 @@ storage remains a replaceable `session.store` Slot. Development
 applications can explicitly install `session.NewMemoryModule`; importing the
 package never selects it as a hidden default.
 
+The separate `memory.store` Slot defines portable Recall, Remember, and Forget
+semantics; it does not choose a database, vector index, ranking algorithm, or
+retention system. Application developers provide that implementation. The
+standard contract preserves typed session-summary, semantic, evidence, and
+temporal candidates, source and confidence facts, execution provenance,
+visibility, writeback policy, recall intent, and evidence selection. The host
+injects execution identity and governance through `memory.RuntimeScope`; model
+tool arguments cannot choose those authoritative values.
+
 Mapping a Slot and standardizing its Go method contract are different maturity
 steps. A proposed method-level interface needs two independent implementations,
 one branch-free real consumer, and a conformance suite before it is described
@@ -447,8 +452,8 @@ go build ./...
 go vet ./...
 ```
 
-Read [docs/architecture.md](docs/architecture.md) before changing the public
-composition model.
+Use the standard component map and exported Go documentation as the public
+reference for the composition model.
 
 ## License
 
