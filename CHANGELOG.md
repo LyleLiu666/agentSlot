@@ -8,6 +8,37 @@ when real consumers expose a flawed boundary.
 
 No changes yet.
 
+## v0.0.9 - 2026-08-22
+
+### Changed
+
+- `SessionStore.ListSessions` now returns bounded cursor pages. Limit zero uses
+  50 entries, explicit limits are bounded at 200, and cursors are capped at
+  4096 bytes.
+- Session summaries have one deterministic order: `UpdatedAt` descending and
+  `SessionID` ascending. Cursors bind that position to the exact
+  Agent/Workspace scope and issuing Store lifecycle.
+- A traversal excludes Sessions created after its first page and does not
+  repeat positions already returned. Concurrent deletion may remove a pending
+  Session; an update may move one before the cursor until a fresh traversal.
+- The fixed Gateway carries `Limit`, opaque `Cursor`, and `NextCursor` without
+  interpreting or dropping the Store continuation.
+
+### Safety
+
+- Reference Store cursors are authenticated opaque values. Malformed,
+  modified, cross-scope, cross-Store, and expired-lifecycle cursors fail as
+  invalid input.
+- Session listing remains a persisted query and never creates, loads,
+  recovers, or starts an AgentRuntime.
+
+### Compatibility and maturity
+
+- This is an intentional pre-1.0 `ListRequest`/`ListResult` contract change;
+  Store implementations and consumers must adopt pagination together.
+- `session.store` remains Contracted. This release does not promote it to
+  Conformant, Proven, or Assembled.
+
 ## v0.0.8 - 2026-08-22
 
 ### Changed

@@ -50,7 +50,7 @@ AgentLoop 默认实现；通用
 | Slot ID | 标准契约 | 类型 | 必需基数 | 职责 |
 | --- | --- | --- | --- | --- |
 | `agent.loop` | `AgentLoop` | `One` | 恰好 1 个 | 通过框架 Step 协议决定每个持久 Run 如何推进、继续或停止。 |
-| `session.store` | `SessionStore` | `One` | 恰好 1 个 | 持久化 Session 聚合中的 History、Context、Queue、RunJournal、SessionModelConfig、revision 和原子 CAS 事务，并按 Agent/Workspace 列出可恢复 Session。 |
+| `session.store` | `SessionStore` | `One` | 恰好 1 个 | 持久化 Session 聚合中的 History、Context、Queue、RunJournal、SessionModelConfig、revision 和原子 CAS 事务，并通过有界的 Agent/Workspace 游标分页列出可恢复 Session。 |
 | `model.executor` | `ModelExecutor` | `One` | 恰好 1 个 | 执行一次逻辑模型调用，并封装 Provider 专属的真实请求、流恢复、不透明续传状态和最终失败语义。 |
 | `gateway.channel` | `GatewayChannel` | `Many` | 至少 1 个 | 把 TUI、Web、桌面端、函数、HTTP、ACP 或其他调用 Channel 绑定到固定 Gateway。 |
 
@@ -225,7 +225,7 @@ OpenAI 专属的网络数据结构。
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `session.store` | `SessionStore` | `One` | 全局必需 | 持久化包含 SessionModelConfig 的完整 Session 聚合及其 revision/CAS 原子事务；按 Agent/Workspace 提供更新时间有序的恢复列表；History 是聚合内唯一、append-only 的事实视图。 | 已定义契约 |
+| `session.store` | `SessionStore` | `One` | 全局必需 | 持久化包含 SessionModelConfig 的完整 Session 聚合及其 revision/CAS 原子事务；按 Agent/Workspace 提供有界、确定性排序且绑定 Store 生命周期的游标分页；History 是聚合内唯一、append-only 的事实视图。 | 已定义契约 |
 | `context.source` | `ContextSource` | `Chain` | 可选 | 为一次模型调用按顺序提供上下文。 | 已定义契约 |
 | `context.compactor` | `ContextCompactor` | `One` | 可选 | 把当前完整 Context 转为更小的会话消息投影且不改写 History；AgentRuntime 重新装配固定 Prompt/Tool，并校验协议和硬 Token 上限。 | 已定义契约 |
 | `memory.store` | `MemoryStore` | `Many` | 可选 | 在权威会话 History 之外召回、记住和遗忘受治理的长期记忆。 | 已定义契约 |
@@ -245,6 +245,11 @@ OpenAI 专属的网络数据结构。
 删除、换位，也不得向已经提交的尾部之前插入事实；还必须原子协调 History、
 Context、Queue、RunJournal 和 revision/CAS 边界。上下文压缩只能产生派生
 Context，绝不能改写 History。
+Session 列表刻意采用弱一致性：一次遍历会排除首页之后新建的 Session，且不会重复
+已返回的位置；并发删除可以让尚未返回的 Session 消失，并发更新可以让它移到游标
+之前，调用方需要发起一次全新遍历来刷新结果。游标是不透明值，只能用于签发它的
+Store 生命周期及完全相同的 Agent/Workspace 作用域。列出 Session 不得创建、加载、
+恢复或启动 Session Runtime。
 标准 Compactor 契约允许整体替换；“摘要 + 最近三条 inbound”只是默认实现，
 不是框架不变量。
 `memory` 包固定可移植的 scope 与 memory kind 词汇，并提供可选的

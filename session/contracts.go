@@ -572,11 +572,40 @@ type SessionStore interface {
 	ListSessions(context.Context, ListRequest) (ListResult, error)
 }
 
-// ListRequest selects persisted Sessions in one Agent/Workspace scope. The
-// store, rather than currently open runtimes, is the authority for this query.
+const (
+	// DefaultSessionListLimit is used when ListRequest.Limit is zero.
+	DefaultSessionListLimit = 50
+	// MaxSessionListLimit bounds one persisted Session query.
+	MaxSessionListLimit = 200
+	// MaxSessionListCursorBytes bounds an opaque cursor before it is decoded.
+	MaxSessionListCursorBytes = 4096
+)
+
+// ListRequest selects one bounded page of persisted Sessions in an exact
+// Agent/Workspace scope. The store, rather than currently open runtimes, is
+// the authority for this query. Cursor is opaque and may only be reused with
+// the same Store lifecycle and scope that issued it. Limit zero selects the
+// default; an explicit limit must be between one and MaxSessionListLimit.
 type ListRequest struct {
 	AgentID     agent.AgentID
 	WorkspaceID agent.WorkspaceID
+	Limit       int
+	Cursor      string
+}
+
+// Validate checks the portable request bounds. A Store additionally validates
+// the opaque Cursor against its scope and current lifecycle.
+func (r ListRequest) Validate() error {
+	if !r.AgentID.Valid() || !r.WorkspaceID.Valid() {
+		return fmt.Errorf("agent ID and workspace ID are required")
+	}
+	if r.Limit < 0 || r.Limit > MaxSessionListLimit {
+		return fmt.Errorf("limit must be zero or between 1 and %d", MaxSessionListLimit)
+	}
+	if len(r.Cursor) > MaxSessionListCursorBytes {
+		return fmt.Errorf("cursor exceeds %d bytes", MaxSessionListCursorBytes)
+	}
+	return nil
 }
 
 // SessionSummary is the stable persisted projection used by entrypoints for
@@ -589,8 +618,15 @@ type SessionSummary struct {
 	UpdatedAt   time.Time
 }
 
+// ListResult is ordered by UpdatedAt descending and then SessionID ascending.
+// NextCursor is empty when this traversal is complete. A traversal excludes
+// Sessions created after its first page and never repeats a position already
+// returned. Concurrent deletion may remove a pending Session; updating a
+// pending Session may move it before the cursor and omit it until a fresh
+// traversal. Listing never creates, loads, recovers, or starts a Runtime.
 type ListResult struct {
-	Sessions []SessionSummary
+	Sessions   []SessionSummary
+	NextCursor string
 }
 
 type HistoryPageRequest struct {

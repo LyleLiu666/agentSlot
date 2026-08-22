@@ -43,10 +43,11 @@ never selects a Loop or any other domain component.
 
 ## Status
 
-AgentSlot is a pre-1.0 foundation. `v0.0.8` is the current validation release
-and is intended to be consumed by real Agent projects. It adds the contracted
-Goal, Memory, Workflow, Billing, Agent Loop, and immutable Artifact Store
-boundaries developed after the first complete reference Agent path. It is not a
+AgentSlot is a pre-1.0 foundation. `v0.0.9` is the current validation release
+and is intended to be consumed by real Agent projects. It includes the
+contracted Goal, Memory, Workflow, Billing, Agent Loop, immutable Artifact
+Store, and bounded Session-list pagination boundaries developed after the first
+complete reference Agent path. It is not a
 stable-production claim, and public APIs may still change based on integration
 feedback. The composition core works today; the standard
 component map is normative, while its ecosystems remain at their explicitly
@@ -293,6 +294,16 @@ SessionStore aggregate. Runtime-fixed SystemPrompt, ToolKeys, and Context
 settings do not change during one Runtime lifetime; the Session's provider,
 model, reasoning, and model parameters can be changed explicitly while idle
 and are snapshotted for each Run.
+
+`SessionStore.ListSessions` returns bounded cursor pages for one exact
+Agent/Workspace scope. Results are ordered by `UpdatedAt` descending and then
+`SessionID` ascending. A cursor is opaque, scoped to the Store lifecycle that
+issued it, and excludes Sessions created after the traversal's first page.
+Concurrent updates may move an unreturned Session before the cursor, so callers
+start a fresh traversal to refresh a resume picker; this deliberately avoids
+pretending that every Store can provide a distributed snapshot. An empty
+`NextCursor` completes the traversal. The fixed Gateway preserves the same
+`Limit`, opaque `Cursor`, and `NextCursor` fields for every Channel.
 
 The `session` package includes a reference `MemoryStore`; the standard framework
 constructs its fixed SessionManager over the installed Store and the
