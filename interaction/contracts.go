@@ -58,13 +58,21 @@ type GatewayAccess interface {
 	CloseSession(context.Context, CloseSessionRequest) error
 }
 
+// ListSessionsRequest carries the Session Store's bounded opaque-cursor query
+// through the transport-neutral Gateway. Channels must return Cursor unchanged
+// rather than interpreting it.
 type ListSessionsRequest struct {
 	AgentID     agent.AgentID
 	WorkspaceID agent.WorkspaceID
+	Limit       int
+	Cursor      string
 }
 
+// SessionList preserves the Store's deterministic order and continuation.
+// An empty NextCursor means the traversal is complete.
 type SessionList struct {
-	Sessions []SessionSummary
+	Sessions   []SessionSummary
+	NextCursor string
 }
 
 type SessionSummary struct {

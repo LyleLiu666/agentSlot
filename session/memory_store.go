@@ -38,6 +38,7 @@ type memoryCommit struct {
 type MemoryStore struct {
 	mu       sync.Mutex
 	sessions map[agent.SessionID]*memoryAggregate
+	list     sessionListIndex
 }
 
 var _ SessionStore = (*MemoryStore)(nil)
@@ -82,7 +83,8 @@ func (s *MemoryStore) Create(ctx context.Context, initial NewSession) (Snapshot,
 		Fork:        initial.Fork,
 	})
 	copy.Session.Revision = copy.Revision
-	s.sessions[copy.Session.ID] = &memoryAggregate{snapshot: copy, idempotency: make(map[string]memoryCommit), updatedAt: time.Now().UTC()}
+	updatedAt := s.list.recordCreate(copy.Session.ID)
+	s.sessions[copy.Session.ID] = &memoryAggregate{snapshot: copy, idempotency: make(map[string]memoryCommit), updatedAt: updatedAt}
 	return cloneSnapshot(copy), nil
 }
 
@@ -90,23 +92,32 @@ func (s *MemoryStore) ListSessions(ctx context.Context, request ListRequest) (Li
 	if err := contextErr(ctx, "session.list"); err != nil {
 		return ListResult{}, err
 	}
-	if !request.AgentID.Valid() || !request.WorkspaceID.Valid() {
-		return ListResult{}, invalid("session.list", "agent ID and workspace ID are required")
+	if err := request.Validate(); err != nil {
+		return ListResult{}, invalid("session.list", err.Error())
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	result := ListResult{Sessions: make([]SessionSummary, 0)}
+	listed := make([]listedSession, 0)
 	for _, aggregate := range s.sessions {
+		if err := contextErr(ctx, "session.list"); err != nil {
+			return ListResult{}, err
+		}
 		current := aggregate.snapshot
 		if current.Session.AgentID != request.AgentID || current.Session.WorkspaceID != request.WorkspaceID {
 			continue
 		}
-		result.Sessions = append(result.Sessions, SessionSummary{
-			SessionID: current.Session.ID, AgentID: current.Session.AgentID, WorkspaceID: current.Session.WorkspaceID,
-			Revision: current.Revision, UpdatedAt: aggregate.updatedAt,
+		listed = append(listed, listedSession{
+			summary: SessionSummary{
+				SessionID: current.Session.ID, AgentID: current.Session.AgentID, WorkspaceID: current.Session.WorkspaceID,
+				Revision: current.Revision, UpdatedAt: aggregate.updatedAt,
+			},
+			generation: s.list.generationFor(current.Session.ID),
 		})
 	}
-	sortSessionSummaries(result.Sessions)
+	result, err := s.list.paginate(request, listed)
+	if err != nil {
+		return ListResult{}, invalid("session.list", err.Error())
+	}
 	return result, nil
 }
 
@@ -165,7 +176,7 @@ func (s *MemoryStore) Recover(ctx context.Context, ref SessionRef) (Snapshot, er
 	if changed {
 		aggregate.snapshot.Revision++
 		aggregate.snapshot.Session.Revision = aggregate.snapshot.Revision
-		aggregate.updatedAt = time.Now().UTC()
+		aggregate.updatedAt = s.list.nextUpdatedAt(aggregate.updatedAt)
 	}
 	return cloneSnapshot(aggregate.snapshot), nil
 }
@@ -206,7 +217,7 @@ func (s *MemoryStore) Commit(ctx context.Context, request CommitRequest) (Commit
 	working.Revision++
 	working.Session.Revision = working.Revision
 	aggregate.snapshot = working
-	aggregate.updatedAt = time.Now().UTC()
+	aggregate.updatedAt = s.list.nextUpdatedAt(aggregate.updatedAt)
 	first, last := appendedHistoryRange(previousHistoryLength, len(working.History))
 	result := Commit{
 		SessionID: request.SessionID, Revision: working.Revision,

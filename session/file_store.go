@@ -32,6 +32,7 @@ type FileStore struct {
 	mu        sync.Mutex
 	directory string
 	opened    bool
+	list      sessionListIndex
 }
 
 var _ SessionStore = (*FileStore)(nil)
@@ -69,6 +70,7 @@ func (s *FileStore) Open(ctx context.Context) error {
 	if err != nil || !info.IsDir() {
 		return agent.NewError(agent.ErrorInvalidInput, "session.file_store.open", "storage path is not a directory", err)
 	}
+	s.list.reset()
 	s.opened = true
 	return nil
 }
@@ -115,7 +117,7 @@ func (s *FileStore) Create(ctx context.Context, initial NewSession) (Snapshot, e
 		Fork: initial.Fork,
 	})
 	snapshot.Session.Revision = snapshot.Revision
-	document := fileStoreDocument{Format: fileStoreFormat, Snapshot: snapshot, UpdatedAt: time.Now().UTC(), Idempotency: make(map[string]fileStoreCommit)}
+	document := fileStoreDocument{Format: fileStoreFormat, Snapshot: snapshot, UpdatedAt: s.list.recordCreate(snapshot.Session.ID), Idempotency: make(map[string]fileStoreCommit)}
 	if err := s.persistLocked(ctx, path, document); err != nil {
 		return Snapshot{}, err
 	}
@@ -145,8 +147,8 @@ func (s *FileStore) ListSessions(ctx context.Context, request ListRequest) (List
 	if err := contextErr(ctx, "session.file_store.list"); err != nil {
 		return ListResult{}, err
 	}
-	if !request.AgentID.Valid() || !request.WorkspaceID.Valid() {
-		return ListResult{}, invalid("session.file_store.list", "agent ID and workspace ID are required")
+	if err := request.Validate(); err != nil {
+		return ListResult{}, invalid("session.file_store.list", err.Error())
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -157,7 +159,7 @@ func (s *FileStore) ListSessions(ctx context.Context, request ListRequest) (List
 	if err != nil {
 		return ListResult{}, agent.NewError(agent.ErrorUnavailable, "session.file_store.list", "cannot read storage directory", err)
 	}
-	result := ListResult{Sessions: make([]SessionSummary, 0)}
+	listed := make([]listedSession, 0)
 	for _, entry := range entries {
 		if err := contextErr(ctx, "session.file_store.list"); err != nil {
 			return ListResult{}, err
@@ -171,15 +173,22 @@ func (s *FileStore) ListSessions(ctx context.Context, request ListRequest) (List
 			return ListResult{}, err
 		}
 		current := document.Snapshot
+		s.list.observeUpdatedAt(document.UpdatedAt)
 		if current.Session.AgentID != request.AgentID || current.Session.WorkspaceID != request.WorkspaceID {
 			continue
 		}
-		result.Sessions = append(result.Sessions, SessionSummary{
-			SessionID: current.Session.ID, AgentID: current.Session.AgentID, WorkspaceID: current.Session.WorkspaceID,
-			Revision: current.Revision, UpdatedAt: document.UpdatedAt,
+		listed = append(listed, listedSession{
+			summary: SessionSummary{
+				SessionID: current.Session.ID, AgentID: current.Session.AgentID, WorkspaceID: current.Session.WorkspaceID,
+				Revision: current.Revision, UpdatedAt: document.UpdatedAt,
+			},
+			generation: s.list.generationFor(current.Session.ID),
 		})
 	}
-	sortSessionSummaries(result.Sessions)
+	result, err := s.list.paginate(request, listed)
+	if err != nil {
+		return ListResult{}, invalid("session.file_store.list", err.Error())
+	}
 	return result, nil
 }
 
@@ -225,7 +234,7 @@ func (s *FileStore) Recover(ctx context.Context, ref SessionRef) (Snapshot, erro
 	if changed {
 		document.Snapshot.Revision++
 		document.Snapshot.Session.Revision = document.Snapshot.Revision
-		document.UpdatedAt = time.Now().UTC()
+		document.UpdatedAt = s.list.nextUpdatedAt(document.UpdatedAt)
 		if err := s.persistLocked(ctx, s.path(ref.SessionID), document); err != nil {
 			return Snapshot{}, err
 		}
@@ -277,7 +286,7 @@ func (s *FileStore) Commit(ctx context.Context, request CommitRequest) (Commit, 
 		FirstHistorySequence: first, LastHistorySequence: last, Applied: true,
 	}
 	document.Snapshot = working
-	document.UpdatedAt = time.Now().UTC()
+	document.UpdatedAt = s.list.nextUpdatedAt(document.UpdatedAt)
 	if document.Idempotency == nil {
 		document.Idempotency = make(map[string]fileStoreCommit)
 	}

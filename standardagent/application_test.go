@@ -89,12 +89,23 @@ func TestGatewayListsPersistedSessionsWithoutOpeningRuntimes(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = runtime.Stop(context.Background()) })
 
-	listed, err := entry.Access().ListSessions(context.Background(), interaction.ListSessionsRequest{AgentID: "agent-1", WorkspaceID: "workspace-1"})
+	listed, err := entry.Access().ListSessions(context.Background(), interaction.ListSessionsRequest{
+		AgentID: "agent-1", WorkspaceID: "workspace-1", Limit: 1,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(listed.Sessions) != 2 || !listed.Sessions[0].SessionID.Valid() || listed.Sessions[0].UpdatedAt.IsZero() {
+	if len(listed.Sessions) != 1 || !listed.Sessions[0].SessionID.Valid() || listed.Sessions[0].UpdatedAt.IsZero() || listed.NextCursor == "" {
 		t.Fatalf("ListSessions() = %#v", listed.Sessions)
+	}
+	continued, err := entry.Access().ListSessions(context.Background(), interaction.ListSessionsRequest{
+		AgentID: "agent-1", WorkspaceID: "workspace-1", Limit: 1, Cursor: listed.NextCursor,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(continued.Sessions) != 1 || continued.Sessions[0].SessionID == listed.Sessions[0].SessionID || continued.NextCursor != "" {
+		t.Fatalf("ListSessions(continued) = %#v", continued)
 	}
 	if store.RecoverCalls() != 0 {
 		t.Fatalf("ListSessions opened Session runtimes through Recover %d times", store.RecoverCalls())

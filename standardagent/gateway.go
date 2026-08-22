@@ -52,11 +52,15 @@ func (g *gateway) ListSessions(ctx context.Context, request interaction.ListSess
 		}
 		listed, err := coordinator.components.store.ListSessions(operationCtx, session.ListRequest{
 			AgentID: request.AgentID, WorkspaceID: request.WorkspaceID,
+			Limit: request.Limit, Cursor: request.Cursor,
 		})
 		if err != nil {
 			return interaction.SessionList{}, err
 		}
-		result := interaction.SessionList{Sessions: make([]interaction.SessionSummary, len(listed.Sessions))}
+		result := interaction.SessionList{
+			Sessions:   make([]interaction.SessionSummary, len(listed.Sessions)),
+			NextCursor: listed.NextCursor,
+		}
 		for index, summary := range listed.Sessions {
 			result.Sessions[index] = interaction.SessionSummary{
 				SessionID: summary.SessionID, AgentID: summary.AgentID, WorkspaceID: summary.WorkspaceID,
