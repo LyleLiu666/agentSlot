@@ -77,6 +77,8 @@ Schema 在模型请求中装配，不能仅因为模型可见就反复写成 His
 通用 Reasoning 词汇固定为 `default`、`low`、`medium`、`high`、`xhigh` 和 `max`。
 `default` 表示协议允许时不显式发送 effort。每个模型通过 Descriptor 声明自己实际支持的子集；
 应用不能假设所有模型支持整套词汇，也不能把不支持的档位展示或发送给该模型。
+标准模型命令在查询结果中返回每个模型各自的子集，因此不会在命令描述中发布一份虚假的全局
+Reasoning 下拉列表。
 
 全局必需的是 `ModelExecutor`，而不是 `ModelProvider`，因为前者才是 Runtime 的
 逻辑模型调用边界。`model.provider` 是可选 `Many` Slot：使用本地 Provider 集合的

@@ -8,6 +8,14 @@ when real consumers expose a flawed boundary.
 
 No changes yet.
 
+## v0.0.7 - 2026-08-22
+
+### Fixed
+
+- The standard model command no longer advertises one static reasoning
+  dropdown for every model. Channels obtain each model's supported subset from
+  the command query result and can render only valid choices.
+
 ## v0.0.6 - 2026-08-22
 
 ### Added

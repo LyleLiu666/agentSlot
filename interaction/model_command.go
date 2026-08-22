@@ -78,14 +78,10 @@ func (modelCommand) Describe() CommandDescriptor {
 		Fields: []FieldDescriptor{
 			{Key: "provider_key", Title: "Provider", Type: FieldText, Required: true},
 			{Key: "model_id", Title: "Model", Type: FieldText, Required: true},
-			{Key: "reasoning", Title: "Reasoning", Type: FieldSingle, Required: true, Choices: []Choice{
-				{Value: string(model.ReasoningDefault), Title: "Default"},
-				{Value: string(model.ReasoningLow), Title: "Low"},
-				{Value: string(model.ReasoningMedium), Title: "Medium"},
-				{Value: string(model.ReasoningHigh), Title: "High"},
-				{Value: string(model.ReasoningXHigh), Title: "XHigh"},
-				{Value: string(model.ReasoningMax), Title: "Max"},
-			}},
+			{
+				Key: "reasoning", Title: "Reasoning", Type: FieldText, Required: true,
+				Description: "Use only a reasoning value advertised by the selected model",
+			},
 			{Key: "temperature", Title: "Temperature", Type: FieldText},
 			{Key: "max_tokens", Title: "Maximum output tokens", Type: FieldText},
 			{Key: "accept_compatibility_loss", Title: "Accept compatibility loss", Type: FieldBoolean},

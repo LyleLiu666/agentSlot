@@ -66,19 +66,15 @@ func TestModelCommandQueriesCurrentSelectionAndAvailableModels(t *testing.T) {
 	}
 }
 
-func TestModelCommandDescribesTheCompletePortableReasoningVocabulary(t *testing.T) {
+func TestModelCommandDoesNotPretendEveryModelSupportsTheWholeReasoningVocabulary(t *testing.T) {
 	command := installedModelCommand(t)
 	descriptor := command.Describe()
 	for _, field := range descriptor.Fields {
 		if field.Key != "reasoning" {
 			continue
 		}
-		values := make([]string, 0, len(field.Choices))
-		for _, choice := range field.Choices {
-			values = append(values, choice.Value)
-		}
-		if !reflect.DeepEqual(values, []string{"default", "low", "medium", "high", "xhigh", "max"}) {
-			t.Fatalf("reasoning choices = %#v", values)
+		if field.Type != interaction.FieldText || len(field.Choices) != 0 || !strings.Contains(field.Description, "selected model") {
+			t.Fatalf("reasoning field = %#v", field)
 		}
 		return
 	}

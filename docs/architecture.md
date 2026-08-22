@@ -130,7 +130,9 @@ The runtime boundary below the Assembly is explicit:
 Reasoning uses the closed portable vocabulary `default`, `low`, `medium`,
 `high`, `xhigh`, and `max`. Model descriptors advertise an explicit supported
 subset. `default` means no explicit effort is requested when the adapter's wire
-protocol permits omission; it does not imply that all other levels exist.
+protocol permits omission; it does not imply that all other levels exist. The
+standard model command exposes supported subsets with its model query result,
+not as one static field-choice list shared by every model.
 
 `SendRequest` and `SteerRequest` may carry a caller-generated
 `ClientMessageID`. The fixed Runtime copies it to the durable user `Message`

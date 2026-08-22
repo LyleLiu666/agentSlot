@@ -92,7 +92,9 @@ The portable reasoning vocabulary is finite: `default`, `low`, `medium`,
 `high`, `xhigh`, and `max`. `default` means that an adapter omits an explicit
 effort when its protocol supports omission. A model descriptor declares the
 subset it actually accepts; applications must not present or send the whole
-portable vocabulary as if every model supported it.
+portable vocabulary as if every model supported it. The standard model command
+returns those per-model subsets in its query data and deliberately does not
+publish one static reasoning dropdown in the command descriptor.
 
 `ModelExecutor`, rather than `ModelProvider`, is globally mandatory because it
 is the Runtime's logical model-call boundary. `model.provider` is an optional
