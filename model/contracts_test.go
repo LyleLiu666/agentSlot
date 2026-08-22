@@ -191,7 +191,19 @@ func TestFakeModelExecutorScriptsAndDetachesRequests(t *testing.T) {
 }
 
 func TestReasoningVocabularyIsClosed(t *testing.T) {
-	if !model.ReasoningHigh.Valid() || model.Reasoning("vendor-secret-mode").Valid() {
+	for _, reasoning := range []model.Reasoning{
+		model.ReasoningDefault,
+		model.ReasoningLow,
+		model.ReasoningMedium,
+		model.ReasoningHigh,
+		model.ReasoningXHigh,
+		model.ReasoningMax,
+	} {
+		if !reasoning.Valid() {
+			t.Fatalf("portable reasoning %q is invalid", reasoning)
+		}
+	}
+	if model.Reasoning("vendor-secret-mode").Valid() {
 		t.Fatal("reasoning vocabulary is not closed")
 	}
 }

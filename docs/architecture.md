@@ -102,6 +102,7 @@ The runtime boundary below the Assembly is explicit:
    `Close`. Model configuration can change only while idle and is snapshotted
    for each Run. Resume only means restoring a Session; it is not an execution
    command.
+
    `Send`, `Steer`, Queue edits, summary starts, and Hook follow-on proposals
    carry identity-free `MessageInput`; only the fixed Runtime may allocate a
    durable MessageID and Session/Run/Step containment.
@@ -125,6 +126,11 @@ The runtime boundary below the Assembly is explicit:
    only revision notifications, and clients refresh the authoritative View.
    Disconnect and stream overflow do not cancel the Run. Non-streaming calls
    aggregate the same durable Run facts rather than invoking a second path.
+
+Reasoning uses the closed portable vocabulary `default`, `low`, `medium`,
+`high`, `xhigh`, and `max`. Model descriptors advertise an explicit supported
+subset. `default` means no explicit effort is requested when the adapter's wire
+protocol permits omission; it does not imply that all other levels exist.
 
 `SendRequest` and `SteerRequest` may carry a caller-generated
 `ClientMessageID`. The fixed Runtime copies it to the durable user `Message`

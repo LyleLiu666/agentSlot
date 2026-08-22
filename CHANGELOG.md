@@ -8,6 +8,14 @@ when real consumers expose a flawed boundary.
 
 No changes yet.
 
+## v0.0.6 - 2026-08-22
+
+### Added
+
+- The closed portable reasoning vocabulary now includes `xhigh` and `max`.
+  Each model continues to advertise only the subset it actually supports;
+  adding vocabulary does not claim universal Provider support.
+
 ## v0.0.5 - 2026-08-21
 
 ### Added
