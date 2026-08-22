@@ -13,9 +13,10 @@ Typed component slots and deterministic composition for agent systems.
 > **Release history:** [CHANGELOG](CHANGELOG.md). Pre-1.0 validation releases
 > are intended for real-project feedback and do not promise API stability.
 
-> **Architecture:** [Composition and runtime architecture](docs/architecture.md).
-
 > A module unifies registration and lifecycle. A slot defines the component ecosystem, interface, cardinality, and ordering rule.
+
+The English and Chinese component maps remain the authoritative public
+inventory and maturity scorecard.
 
 The standard AgentRuntime fixes Session ownership, CAS, cancellation, and
 Gateway control. Its Run-control policy is the unique replaceable `agent.loop`
@@ -53,11 +54,6 @@ recorded maturity. Every published tag is immutable; later changes receive a
 new semantic version.
 
 These newer boundaries remain `Contracted`, not `Conformant` or `Proven`.
-
-The project's architectural result is the quality of its component map, not a
-large interface count. Each accepted ecosystem must have a clear boundary,
-cardinality, dependency model, lifecycle, conformance suite, and inspectable
-place in the final Assembly.
 
 ## Core model
 
@@ -447,8 +443,8 @@ go build ./...
 go vet ./...
 ```
 
-Read [docs/architecture.md](docs/architecture.md) before changing the public
-composition model.
+Use the standard component map and exported Go documentation as the public
+reference for the composition model.
 
 ## License
 

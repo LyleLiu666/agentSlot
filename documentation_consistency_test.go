@@ -1,0 +1,87 @@
+package agentslot_test
+
+import (
+	"os"
+	"regexp"
+	"strings"
+	"testing"
+
+	"github.com/LyleLiu666/agentSlot/loop"
+)
+
+var (
+	componentMapRowPattern      = regexp.MustCompile("(?m)^\\| `([a-z][a-z0-9.-]*)` \\|")
+	englishContractedRowPattern = regexp.MustCompile("(?m)^\\| `([a-z][a-z0-9.-]*)` \\|.*\\| Contracted \\|$")
+	chineseContractedRowPattern = regexp.MustCompile("(?m)^\\| `([a-z][a-z0-9.-]*)` \\|.*\\| 已定义契约 \\|$")
+)
+
+func TestComponentMapsStaySynchronized(t *testing.T) {
+	englishSlots := componentMapSlots(t, "COMPONENT_MAP.md")
+	chineseSlots := componentMapSlots(t, "COMPONENT_MAP.zh-CN.md")
+	englishContracted := componentMapRows(t, "COMPONENT_MAP.md", englishContractedRowPattern)
+	chineseContracted := componentMapRows(t, "COMPONENT_MAP.zh-CN.md", chineseContractedRowPattern)
+
+	assertSameSlotIDs(t, englishSlots, chineseSlots)
+	assertSameSlotIDs(t, englishContracted, chineseContracted)
+}
+
+func TestPublicDocsDescribeAgentLoopAsAStandardProfileSlot(t *testing.T) {
+	readme := readDocument(t, "README.md")
+
+	if !strings.Contains(readme, "AgentLoop") {
+		t.Fatalf("README does not describe standard profile slot %s", loop.AgentLoopSlot.ID())
+	}
+	if strings.Contains(readme, "standard `agent.loop` has been removed") {
+		t.Fatalf("README says that standard slot %s was removed", loop.AgentLoopSlot.ID())
+	}
+
+	componentSlots := componentMapSlots(t, "COMPONENT_MAP.zh-CN.md")
+	if _, exists := componentSlots[loop.AgentLoopSlot.ID()]; !exists {
+		t.Fatalf("Chinese component map does not contain %s", loop.AgentLoopSlot.ID())
+	}
+}
+
+func componentMapSlots(t *testing.T, path string) map[string]struct{} {
+	t.Helper()
+
+	return componentMapRows(t, path, componentMapRowPattern)
+}
+
+func componentMapRows(t *testing.T, path string, pattern *regexp.Regexp) map[string]struct{} {
+	t.Helper()
+
+	document := readDocument(t, path)
+	slots := make(map[string]struct{})
+	for _, match := range pattern.FindAllStringSubmatch(document, -1) {
+		slots[match[1]] = struct{}{}
+	}
+	if len(slots) == 0 {
+		t.Fatalf("%s contains no component-map rows", path)
+	}
+	return slots
+}
+
+func assertSameSlotIDs(t *testing.T, left, right map[string]struct{}) {
+	t.Helper()
+
+	for id := range left {
+		if _, exists := right[id]; !exists {
+			t.Errorf("Chinese component map is missing %s", id)
+		}
+	}
+	for id := range right {
+		if _, exists := left[id]; !exists {
+			t.Errorf("English component map is missing %s", id)
+		}
+	}
+}
+
+func readDocument(t *testing.T, path string) string {
+	t.Helper()
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(content)
+}

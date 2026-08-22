@@ -2,8 +2,6 @@
 
 [English](COMPONENT_MAP.md) | [简体中文](COMPONENT_MAP.zh-CN.md)
 
-对象所有权、Gateway 主链路和包依赖请先阅读公开的[架构说明](docs/architecture.md)。
-
 本文档是可组合 LLM Agent 定制边界的权威地图。它是 AgentSlot 的核心资产，
 不是对某一个实现中已有接口的简单罗列。
 
@@ -126,9 +124,9 @@ flowchart LR
 | --- | --- |
 | **已映射（Mapped）** | 已确定职责、边界、Slot ID 和基数；不代表存在公开 Go 接口。 |
 | **已定义契约（Contracted）** | 已存在 AgentSlot 自有的公开领域接口和强类型 Slot 声明。 |
-| **已通过一致性验证（Conformant）** | 已有可复用的一致性测试套件，验证必要行为、取消、失败和生命周期所有权。 |
-| **已证明（Proven）** | 至少两个语义上独立的实现通过一致性测试；同一实现的不同包装只能算一个。 |
-| **已装配（Assembled）** | 参考应用能够通过 Slot 替换已证明的实现，不包含具体类型分支。 |
+| **已通过一致性验证（Conformant）** | 可复用黑盒套件已针对明确 AgentSlot commit 通过，验证必要行为、取消、失败和生命周期所有权。 |
+| **已证明（Proven）** | 至少两个语义上独立的实现通过同版一致性套件；同一实现的不同包装只能算一个。 |
+| **已装配（Assembled）** | LAS 或后续获准的真实消费者能够通过 Slot 替换已证明的实现，不包含具体类型分支。 |
 
 当前已有 29 个领域生态位进入**已定义契约（Contracted）**：它们拥有公开
 领域接口、typed Slot 和合同测试。仓库已经包含相互独立的内存/崩溃安全文件
@@ -137,6 +135,8 @@ SessionStore、确定性 Fake/OpenAI Chat Compatible Executor、Bash/文件/HTTP
 Runtime 与选中的 AgentLoop 不按具体类型分支即可消费它们。由于尚未建立可复用的一致性测试套件，所有
 这些生态位仍保持 Contracted，不能标为**已通过一致性验证**或**已证明**。其他生态位
 仍处于**已映射（Mapped）**阶段。
+
+在精确证据建立前，成绩仍为 0 个 Conformant、0 个 Proven、0 个 Assembled。
 
 成绩以已经证明的组件生态位计算，不按 Module、包或接口方法的数量计算。
 一个 Module 可以向多个 Slot 提供组件，多个 Module 也可以共同向一个
