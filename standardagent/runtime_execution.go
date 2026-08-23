@@ -440,6 +440,7 @@ func (r *runtimeInstance) requestModel(run *activeRun, step agent.StepID) (stepO
 		return stepFailed, "", nil
 	}
 	defer stream.Close()
+	assistantMessageID := agent.MessageID(r.nextID("message"))
 	for {
 		event, err := stream.Recv(run.ctx)
 		if err != nil {
@@ -459,10 +460,10 @@ func (r *runtimeInstance) requestModel(run *activeRun, step agent.StepID) (stepO
 		}
 		switch event.Kind {
 		case model.EventDelta:
-			r.events.publish(interaction.Event{Kind: interaction.EventChunk, SessionID: r.id(), RunID: run.id, StepID: step, AttemptID: event.AttemptID, Text: event.Text})
+			r.events.publish(interaction.Event{Kind: interaction.EventChunk, SessionID: r.id(), RunID: run.id, StepID: step, MessageID: assistantMessageID, AttemptID: event.AttemptID, Text: event.Text})
 		case model.EventReset:
 			r.observeModelAttempt(observe.TraceModelAttemptReset, run, step, agent.AttemptID(event.AttemptID))
-			r.events.publish(interaction.Event{Kind: interaction.EventReset, SessionID: r.id(), RunID: run.id, StepID: step, AttemptID: event.AttemptID})
+			r.events.publish(interaction.Event{Kind: interaction.EventReset, SessionID: r.id(), RunID: run.id, StepID: step, MessageID: assistantMessageID, AttemptID: event.AttemptID})
 		case model.EventFailed:
 			if errors.Is(event.Err, model.ErrTokenBudgetExceeded) {
 				if recordErr := r.recordBudgetExceeded(run); recordErr != nil {
@@ -472,7 +473,7 @@ func (r *runtimeInstance) requestModel(run *activeRun, step agent.StepID) (stepO
 			}
 			return stepFailed, "", nil
 		case model.EventComplete:
-			calls, canceled, err := r.commitCompletion(run, step, *event.Output)
+			calls, canceled, err := r.commitCompletion(run, step, assistantMessageID, *event.Output)
 			if canceled {
 				return stepCanceled, "", nil
 			}
@@ -701,7 +702,7 @@ func (r *runtimeInstance) observeModelAttempt(kind observe.TraceKind, run *activ
 	})
 }
 
-func (r *runtimeInstance) commitCompletion(run *activeRun, step agent.StepID, output model.Completion) ([]agent.ToolCall, bool, error) {
+func (r *runtimeInstance) commitCompletion(run *activeRun, step agent.StepID, messageID agent.MessageID, output model.Completion) ([]agent.ToolCall, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.active != run || run.cancelRequested || r.closing {
@@ -712,7 +713,7 @@ func (r *runtimeInstance) commitCompletion(run *activeRun, step agent.StepID, ou
 		return nil, false, err
 	}
 	assistant := agent.Message{
-		ID: agent.MessageID(r.nextID("message")), SessionID: r.id(), RunID: run.id, StepID: step,
+		ID: messageID, SessionID: r.id(), RunID: run.id, StepID: step,
 		Role: agent.RoleAssistant, Parts: cloneRuntimeParts(output.Parts), CreatedAt: time.Now().UTC(),
 	}
 	if len(output.Continuation) > 0 {
