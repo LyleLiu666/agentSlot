@@ -13,16 +13,18 @@ import (
 	"github.com/LyleLiu666/agentSlot/observe"
 	"github.com/LyleLiu666/agentSlot/policy"
 	"github.com/LyleLiu666/agentSlot/tool"
+	"github.com/LyleLiu666/agentSlot/workspace"
 )
 
 // toolDispatcher is fixed Runtime machinery, not a replaceable Slot. Tools
 // themselves remain independently replaceable keyed components.
 type toolDispatcher struct {
-	tools              map[string]installedTool
-	orderedDefinitions []tool.Definition
-	guards             []policy.PolicyGuard
-	approval           policy.ApprovalService
-	observations       *observationHub
+	tools                map[string]installedTool
+	orderedDefinitions   []tool.Definition
+	guards               []policy.PolicyGuard
+	approval             policy.ApprovalService
+	observations         *observationHub
+	maxInlineOutputBytes int
 }
 
 func (d *toolDispatcher) withObservations(observations *observationHub) *toolDispatcher {
@@ -37,13 +39,14 @@ type installedTool struct {
 	safety     tool.ParallelSafety
 }
 
-func newToolDispatcher(installed []agentslot.Named[tool.Tool], guards []policy.PolicyGuard, approval policy.ApprovalService) (*toolDispatcher, error) {
+func newToolDispatcher(installed []agentslot.Named[tool.Tool], guards []policy.PolicyGuard, approval policy.ApprovalService, maxInlineOutputBytes int) (*toolDispatcher, error) {
 	installed = append([]agentslot.Named[tool.Tool](nil), installed...)
 	sort.Slice(installed, func(i, j int) bool { return installed[i].Key < installed[j].Key })
 	dispatcher := &toolDispatcher{
-		tools:    make(map[string]installedTool, len(installed)),
-		guards:   append([]policy.PolicyGuard(nil), guards...),
-		approval: approval,
+		tools:                make(map[string]installedTool, len(installed)),
+		guards:               append([]policy.PolicyGuard(nil), guards...),
+		approval:             approval,
+		maxInlineOutputBytes: maxInlineOutputBytes,
 	}
 	for _, named := range installed {
 		definition := named.Value.Definition()
@@ -67,19 +70,28 @@ func (d *toolDispatcher) definitions() []tool.Definition {
 	return append([]tool.Definition(nil), d.orderedDefinitions...)
 }
 
-func (d *toolDispatcher) dispatch(ctx context.Context, calls []agent.ToolCall) []tool.ToolResult {
-	return d.dispatchPrepared(ctx, calls, nil)
-}
-
 // dispatchPrepared lets the Runtime durably cross the execution boundary
 // after policy and approval succeed but before a Tool can observe the call.
 // A nil callback is reserved for dispatcher unit tests that have no Session.
-func (d *toolDispatcher) dispatchPrepared(ctx context.Context, calls []agent.ToolCall, beforeInvoke func(agent.ToolCall) error) []tool.ToolResult {
-	results := make([]tool.ToolResult, len(calls))
+type toolDispatchOutcome struct {
+	results           []tool.ToolResult
+	contractViolation bool
+}
+
+func (d *toolDispatcher) dispatchPrepared(ctx context.Context, calls []agent.ToolCall, beforeInvoke func(agent.ToolCall) error, scope workspace.Scope, boundary workspace.Boundary) toolDispatchOutcome {
+	outcome := toolDispatchOutcome{results: make([]tool.ToolResult, len(calls))}
 	for index := 0; index < len(calls); {
+		if outcome.contractViolation {
+			for remaining := index; remaining < len(calls); remaining++ {
+				outcome.results[remaining] = failedToolResult(calls[remaining].ID, "tool_batch_aborted", "tool batch stopped after a component contract violation")
+			}
+			break
+		}
 		installed, ok := d.tools[calls[index].Name]
 		if !ok || installed.safety == tool.Serial {
-			results[index] = d.invoke(ctx, calls[index], beforeInvoke)
+			result, violation := d.invoke(ctx, calls[index], beforeInvoke, scope, boundary)
+			outcome.results[index] = result
+			outcome.contractViolation = outcome.contractViolation || violation
 			index++
 			continue
 		}
@@ -92,60 +104,67 @@ func (d *toolDispatcher) dispatchPrepared(ctx context.Context, calls []agent.Too
 			end++
 		}
 		var wait sync.WaitGroup
+		violations := make([]bool, end-index)
 		for callIndex := index; callIndex < end; callIndex++ {
 			wait.Add(1)
 			go func(callIndex int) {
 				defer wait.Done()
-				results[callIndex] = d.invoke(ctx, calls[callIndex], beforeInvoke)
+				outcome.results[callIndex], violations[callIndex-index] = d.invoke(ctx, calls[callIndex], beforeInvoke, scope, boundary)
 			}(callIndex)
 		}
 		wait.Wait()
+		for _, violation := range violations {
+			outcome.contractViolation = outcome.contractViolation || violation
+		}
 		index = end
 	}
-	return results
+	return outcome
 }
 
-func (d *toolDispatcher) invoke(ctx context.Context, call agent.ToolCall, beforeInvoke func(agent.ToolCall) error) (result tool.ToolResult) {
+func (d *toolDispatcher) invoke(ctx context.Context, call agent.ToolCall, beforeInvoke func(agent.ToolCall) error, scope workspace.Scope, boundary workspace.Boundary) (result tool.ToolResult, contractViolation bool) {
 	installed, ok := d.tools[call.Name]
 	if !ok {
-		return failedToolResult(call.ID, "tool_not_found", "requested tool is not installed")
+		return failedToolResult(call.ID, "tool_not_found", "requested tool is not installed"), false
 	}
 	if err := installed.definition.InputSchema.ValidateArguments(call.Arguments); err != nil {
-		return failedToolResult(call.ID, "invalid_arguments", "tool arguments do not match the declared schema")
+		return failedToolResult(call.ID, "invalid_arguments", "tool arguments do not match the declared schema"), false
 	}
-	if failure := d.authorize(ctx, call); failure != nil {
-		return *failure
+	if failure := d.authorize(ctx, call, scope); failure != nil {
+		return *failure, false
 	}
 	if beforeInvoke != nil {
 		if err := beforeInvoke(call); err != nil {
-			return failedToolResult(call.ID, "execution_state_error", "tool execution could not be started safely")
+			return failedToolResult(call.ID, "execution_state_error", "tool execution could not be started safely"), false
 		}
 	}
 	d.observeToolStarted(call)
 	defer func() {
 		if recover() != nil {
 			result = failedToolResult(call.ID, "tool_internal", "tool execution failed")
+			contractViolation = true
 		}
 		d.observeToolCompleted(call, result)
 	}()
 	result = installed.value.Invoke(ctx, tool.ToolInvocation{
 		Call:      tool.Call{ID: call.ID, Name: call.Name, Arguments: append([]byte(nil), call.Arguments...)},
-		SessionID: call.SessionID, RunID: call.RunID, StepID: call.StepID,
+		SessionID: call.SessionID, AgentID: scope.AgentID, WorkspaceID: scope.WorkspaceID,
+		Actor:             agent.ActorIdentity{Kind: agent.ActorAgent, ID: string(scope.AgentID)},
+		WorkspaceBoundary: boundary, MaxInlineOutputBytes: d.maxInlineOutputBytes, RunID: call.RunID, StepID: call.StepID,
 	})
 	if result.Status == tool.ResultUnknown {
-		return failedToolResult(call.ID, "invalid_tool_result", "outcome_unknown is reserved for crash recovery")
+		return failedToolResult(call.ID, "invalid_tool_result", "outcome_unknown is reserved for crash recovery"), true
 	}
-	if result.CallID != call.ID || result.Validate() != nil {
-		return failedToolResult(call.ID, "invalid_tool_result", "tool returned an invalid result")
+	if result.CallID != call.ID || result.ValidateWithin(d.maxInlineOutputBytes) != nil {
+		return failedToolResult(call.ID, "invalid_tool_result", "tool returned an invalid or oversized result"), true
 	}
-	return result
+	return result, false
 }
 
 // authorize is part of the fixed dispatcher so policy components can decide
 // whether an action may run without becoming a second execution controller.
 // Every extension receives a detached Action; only the dispatcher retains the
 // invocation that can reach the Tool.
-func (d *toolDispatcher) authorize(ctx context.Context, call agent.ToolCall) *tool.ToolResult {
+func (d *toolDispatcher) authorize(ctx context.Context, call agent.ToolCall, scope workspace.Scope) *tool.ToolResult {
 	action := policy.Action{
 		Kind: policy.ActionTool,
 		Tool: &policy.ToolAction{
@@ -155,9 +174,11 @@ func (d *toolDispatcher) authorize(ctx context.Context, call agent.ToolCall) *to
 				Name:      call.Name,
 				Arguments: append([]byte(nil), call.Arguments...),
 			},
-			SessionID: call.SessionID,
-			RunID:     call.RunID,
-			StepID:    call.StepID,
+			SessionID:   call.SessionID,
+			AgentID:     scope.AgentID,
+			WorkspaceID: scope.WorkspaceID,
+			RunID:       call.RunID,
+			StepID:      call.StepID,
 		},
 	}
 	if err := action.Validate(); err != nil {

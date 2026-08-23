@@ -16,6 +16,7 @@ import (
 
 	agentslot "github.com/LyleLiu666/agentSlot"
 	agent "github.com/LyleLiu666/agentSlot/agent"
+	"github.com/LyleLiu666/agentSlot/credential"
 	"github.com/LyleLiu666/agentSlot/interaction"
 	"github.com/LyleLiu666/agentSlot/interaction/cli"
 	"github.com/LyleLiu666/agentSlot/model"
@@ -27,12 +28,13 @@ import (
 	"github.com/LyleLiu666/agentSlot/tool/bash"
 	"github.com/LyleLiu666/agentSlot/tool/files"
 	httptool "github.com/LyleLiu666/agentSlot/tool/http"
+	"github.com/LyleLiu666/agentSlot/tool/sessionhistory"
 )
 
 type referenceConfig struct {
 	providerKey          string
 	providerURL          string
-	apiKey               string
+	credentialToken      []byte
 	modelID              string
 	workspace            string
 	sessionDir           string
@@ -99,8 +101,8 @@ func buildReferenceApplication(config referenceConfig, channels ...agentslot.Mod
 	if err != nil {
 		return nil, err
 	}
-	provider, err := openaicompat.NewModule(openaicompat.Config{
-		ProviderKey: config.providerKey, BaseURL: config.providerURL, APIKey: config.apiKey,
+	providerConfig := openaicompat.Config{
+		ProviderKey: config.providerKey, BaseURL: config.providerURL,
 		Models: []openaicompat.Model{{
 			ID: config.modelID, Title: config.modelID,
 			Capabilities: model.ExecutionCapabilities{
@@ -112,7 +114,24 @@ func buildReferenceApplication(config referenceConfig, channels ...agentslot.Mod
 			},
 		}},
 		MaxAttempts: 3, RetryBackoff: 250 * time.Millisecond, RequestTimeout: 2 * time.Minute,
-	})
+	}
+	var credentialModule agentslot.Module
+	if len(config.credentialToken) > 0 {
+		ref := credential.Ref{ID: "reference-provider"}
+		resolver, err := credential.NewMemoryResolver(credential.Record{
+			Ref: ref, Identity: credential.Identity{Fingerprint: "reference-provider-configured"},
+			Material: credential.Material{Kind: credential.KindBearer, Token: config.credentialToken},
+		})
+		if err != nil {
+			return nil, err
+		}
+		credentialModule, err = credential.NewModule("reference.credential", resolver)
+		if err != nil {
+			return nil, err
+		}
+		providerConfig.CredentialRef = ref
+	}
+	provider, err := openaicompat.NewModule(providerConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -152,17 +171,21 @@ func buildReferenceApplication(config referenceConfig, channels ...agentslot.Mod
 		return nil, err
 	}
 	modules := []agentslot.Module{
-		sessions, provider, bashTool, fileTools, httpTool, policyModule, observations,
+		sessions, provider, bashTool, fileTools, httpTool, sessionhistory.NewModule(sessionhistory.Config{Scope: sessionhistory.ScopeSameWorkspace}), policyModule, observations,
 		interaction.NewModelCommandModule(),
+	}
+	if credentialModule != nil {
+		modules = append([]agentslot.Module{credentialModule}, modules...)
 	}
 	modules = append(modules, channels...)
 	application := standardagent.NewApplication(standardagent.ApplicationSpec{
 		Name: "reference-agent", DefaultModelConfig: defaultModel,
 		RuntimeConfig: standardagent.AgentRuntimeConfig{
-			SystemPrompt:         "You are a careful coding agent. Use installed tools only when they materially help the user.",
-			ToolKeys:             []string{bash.Key, files.ReadKey, files.WriteKey, files.EditKey, httptool.Key},
-			ContextRetentionMode: config.contextRetentionMode,
-			MaxTokensPerRun:      config.maxTokensPerRun,
+			SystemPrompt:             "You are a careful coding agent. Use installed tools only when they materially help the user.",
+			ToolKeys:                 []string{bash.Key, files.ReadKey, files.WriteKey, files.EditKey, httptool.Key, sessionhistory.Key},
+			ContextRetentionMode:     config.contextRetentionMode,
+			MaxTokensPerRun:          config.maxTokensPerRun,
+			MaxInlineToolResultBytes: 64 << 10,
 		},
 		Modules: modules,
 	})
@@ -193,15 +216,16 @@ func main() {
 	}
 	hosts := splitNonEmpty(environment("AGENTSLOT_HTTP_HOSTS", "api.github.com"))
 	config := referenceConfig{
-		providerKey: "openai-compatible",
-		providerURL: environment("AGENTSLOT_PROVIDER_URL", "https://api.openai.com/v1"),
-		apiKey:      os.Getenv("AGENTSLOT_API_KEY"), modelID: environment("AGENTSLOT_MODEL", "gpt-4.1-mini"),
+		providerKey:     "openai-compatible",
+		providerURL:     environment("AGENTSLOT_PROVIDER_URL", "https://api.openai.com/v1"),
+		credentialToken: []byte(os.Getenv("AGENTSLOT_API_KEY")), modelID: environment("AGENTSLOT_MODEL", "gpt-4.1-mini"),
 		workspace: workspace, sessionDir: environment("AGENTSLOT_SESSION_DIR", filepath.Join(configDirectory, "agentslot", "reference", "sessions")),
 		httpHosts: hosts, approveEffects: environmentBoolean("AGENTSLOT_APPROVE_EFFECTS"),
 		contextRetentionMode: standardagent.ContextLatestOnly, maxTokensPerRun: 0,
 		actor: agent.ActorIdentity{Kind: agent.ActorLocalUser, ID: "reference-cli"},
 		input: os.Stdin, output: os.Stdout, errorOutput: os.Stderr, observationOut: os.Stderr,
 	}
+	defer clear(config.credentialToken)
 	application, channel, err := buildReference(config)
 	if err != nil {
 		log.Fatal(err)

@@ -2,9 +2,16 @@
 
 [English](COMPONENT_MAP.md) | [简体中文](COMPONENT_MAP.zh-CN.md)
 
-This document is the authoritative map of the customization seams in a
-composable LLM agent. It is a primary AgentSlot asset, not a list of whatever
-interfaces happen to exist in one implementation.
+This document is the generated public map of the customization seams in a
+composable LLM agent. The versioned `ComponentCatalog` in the
+[`componentcatalog`](componentcatalog) package is its structured source. The
+catalog and this view are primary AgentSlot assets, not a list of whatever
+interfaces happen to exist in one implementation. The catalog is documentation
+data and never participates in Runtime assembly. It also records publicly
+constructible implementation identities, non-secret generation settings,
+dependencies, conflicts, Tool keys, and the two deterministic `agentslot init`
+presets. This scaffold metadata selects explicit source code; it is not a
+Runtime service locator or hidden default.
 
 The map answers four questions for component authors and application authors:
 
@@ -23,15 +30,16 @@ Current repository reality:
 | --- | ---: |
 | Mapped standard component ecosystems | 41 |
 | Standardized domain vocabularies | 9 |
-| Contracted AgentSlot-owned domain interfaces | 29 |
+| Contracted AgentSlot-owned domain interfaces | 32 |
 | Conformant component ecosystems | 1 |
 | Proven component ecosystems | 0 |
 | Assembled standard component ecosystems | 0 |
 
 The generic composition protocol exports five Go interfaces: `Module`,
-`SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. Twenty-nine
-domain contracts are now defined across the standard leaf packages; one is
-Conformant, the other twenty-eight remain Contracted, and none is Proven.
+`SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. Thirty-two domain
+contracts are now defined across the standard leaf packages; one is
+Conformant, the other thirty-one remain Contracted, and none is Proven.
+The other nine ecosystems remain Mapped.
 
 The nine counted vocabulary families are Agent Loop outcomes, model capability,
 tool calls, policy/approval, observation, Goal, Memory, Workflow, and Billing. This count
@@ -46,22 +54,25 @@ default. The generic
 `agentslot.NewApplication` never infers a standard Agent profile from installed
 Slots.
 
-An AgentSlot application conforms to the runnable standard agent profile only
-when its Assembly contains all four of these component ecosystems:
+The Go profile requires the five implemented ecosystems below. Token counting
+is independently replaceable from model execution; a missing or failed counter
+prevents provider dispatch rather than silently using an indefensible estimate.
 
 `Assembly` is the immutable build result exposed by the current Go implementation.
 Its description uses `AssemblyDescription` and the `agentslot.assembly/v0` schema.
 
 | Slot ID | Standard contract | Kind | Required cardinality | Responsibility |
 | --- | --- | --- | --- | --- |
-| `agent.loop` | `AgentLoop` | `One` | exactly 1 | Owns each durable Run's advance/continue/stop decision over the framework Step protocol. |
-| `session.store` | `SessionStore` | `One` | exactly 1 | Persists the Session aggregate—History, Context, Queue, RunJournal, SessionModelConfig, revisions, and atomic CAS transactions—and lists resumable Sessions through bounded Agent/Workspace cursor pages. |
-| `model.executor` | `ModelExecutor` | `One` | exactly 1 | Executes one logical model call while containing provider-specific physical attempts, streaming recovery, opaque continuation state, and final failure semantics. |
-| `gateway.channel` | `GatewayChannel` | `Many` | at least 1 | Binds a TUI, Web, desktop, function, HTTP, ACP, or another caller-facing channel to the fixed Gateway. |
+| `agent.loop` | `AgentLoop` | `One` | exactly 1 | Owns replaceable Agent execution strategy through ordered, Run-scoped Runtime actions while the framework retains Session truth, budgets, cancellation, recovery, and terminal commits. |
+| `session.store` | `SessionStore` | `One` | exactly 1 | Persists the whole Session aggregate, including SessionModelConfig, and its atomic revision/CAS transactions; lists resumable Sessions through bounded, deterministic, lifecycle-scoped cursor pages within an Agent/Workspace scope; History remains the unique append-only fact view inside that aggregate. |
+| `model.executor` | `ModelExecutor` | `One` | exactly 1 | Validates selected-model capabilities, executes one logical model call, contains retries and continuation, reports post-call usage, and durably records each physical attempt through the restricted AttemptRecorder. |
+| `model.token-counter` | `TokenCounter` | `One` | exactly 1 | Counts the complete provider-visible request for pre-call planning, using an exact tokenizer or a validated conservative bound and failing closed when neither is defensible. |
+| `gateway.channel` | `GatewayChannel` | `Many` | at least 1 | Binds one caller-facing protocol, function API, or UI to the fixed Gateway and receives only `GatewayAccess`; gRPC, WebSocket, SSH, and inbound ACP are alternative implementations of this Slot. |
 
 `AgentRuntime` and the in-process Gateway remain framework control-plane
-behavior, not Slots. The selected `AgentLoop` controls Run progression without
-owning Session truth, Gateway routing, or transaction invariants. Creating or explicitly resuming a Session
+behavior, not Slots. The selected `AgentLoop` controls execution strategy through
+constrained, run-scoped actions without owning Session truth, Gateway routing,
+or transaction invariants. Creating or explicitly resuming a Session
 initializes one Runtime bound to that Session; listing or viewing Sessions does
 not. One started application Runtime and all AgentRuntimes registered beneath it
 live in one process. The same Session has one Runtime in that registry, that
@@ -77,8 +88,8 @@ one registry lives in the same process, while persisted Sessions that have not
 been opened occupy no Runtime. This is the standard architecture boundary, not
 a first-version compromise.
 
-An immutable AgentRuntimeConfig snapshot supplies SystemPrompt, ToolKeys, and
-Context settings for one Runtime lifetime. An Agent-level default initializes
+An immutable AgentRuntimeConfig snapshot supplies SystemPrompt, ToolKeys,
+MaxInlineToolResultBytes, and Context settings for one Runtime lifetime. An Agent-level default initializes
 new Sessions, while each Session durably owns its current provider, model,
 reasoning, and model parameters as SessionModelConfig. That model configuration
 may be changed explicitly while the Runtime is idle and is snapshotted for each
@@ -122,8 +133,9 @@ flowchart LR
     SM --> SS["SessionStore Slot (1)"]
     REG -->|"CreateSession / ResumeSession"| R["framework AgentRuntime"]
     R --> L["AgentLoop (1)"]
-    L -. "advance Step" .-> R
+    L -. "run-scoped actions" .-> R
     R --> ME["ModelExecutor (1)"]
+    R --> TC["TokenCounter (1)"]
     ME -. "optional dependency" .-> MP["ModelProvider (0..n)"]
     R -. "optional" .-> T["Tools and skills"]
     R -. "optional" .-> C["Context components"]
@@ -147,7 +159,7 @@ method-level contract is an engineering result.
 | **Proven** | At least two semantically independent implementations pass the same suite version. Wrappers over the same implementation count once. |
 | **Assembled** | LAS or another approved real consumer exchanges proven implementations through the Slot without concrete-type branches. |
 
-Twenty-nine domain rows are now at least **Contracted**: each has a public
+Thirty-two domain rows are now at least **Contracted**: each has a public
 domain interface, typed Slot, and contract tests. The repository now contains
 in-memory and crash-safe file Session stores, deterministic Fake and
 OpenAI Chat Compatible executors, Bash/file/HTTP tools, in-process and CLI
@@ -161,7 +173,7 @@ the exact AgentSlot `v0.0.10` commit
 `c6b42a767d5422464ebc2978bf408b7d15eb5125`, with no failures or skips.
 MemoryStore remains a process-lifetime reference check, and MemoryStore/FileStore
 share one implementation codebase, so this is one implementation result rather
-than Proven evidence. The other twenty-eight domain rows remain **Contracted**;
+than Proven evidence. The other thirty-one domain rows remain **Contracted**;
 every other row remains **Mapped**.
 
 The current score is 1 Conformant, 0 Proven, and 0 Assembled.
@@ -176,8 +188,8 @@ Slots, and several modules may contribute to one `Many` or `Chain` Slot.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `agent.loop` | `AgentLoop` | `One` | globally requires exactly 1 | Controls sequential Step advancement and returns one finite terminal Run outcome; the standard Loop is an explicit conditional default. | Contracted |
-| `gateway.channel` | `GatewayChannel` | `Many` | globally requires at least 1 | Binds one caller-facing protocol, function API, or UI to the fixed Gateway and receives only `GatewayAccess`. | Contracted |
+| `agent.loop` | `AgentLoop` | `One` | globally requires exactly 1 | Owns replaceable Agent execution strategy through ordered, Run-scoped Runtime actions while the framework retains Session truth, budgets, cancellation, recovery, and terminal commits. | Contracted |
+| `gateway.channel` | `GatewayChannel` | `Many` | globally requires at least 1 | Binds one caller-facing protocol, function API, or UI to the fixed Gateway and receives only `GatewayAccess`; gRPC, WebSocket, SSH, and inbound ACP are alternative implementations of this Slot. | Contracted |
 | `interaction.command` | `InteractionCommand` | `Many` | optional | Registers a keyed UI-neutral command with the fixed Gateway; Channels render the shared descriptor as slash commands, menus, buttons, forms, or command palettes. | Contracted |
 | `agent.hook` | `AgentHook` | `Chain` | optional | Proposes controlled follow-on input before run completion; it cannot mutate Session state or become a second Runtime controller. | Contracted |
 | `goal.store` | `goal.Store` | `One` | optional; installed with `goal.evaluator` | Owns one CAS-protected objective lifecycle per Session, separate from append-only conversation History. | Contracted |
@@ -201,7 +213,8 @@ evaluation takes precedence. Goal state remains outside conversation History.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `model.executor` | `ModelExecutor` | `One` | globally required | Validates selected-model capabilities, counts complete requests, executes one logical model call, returns optional opaque continuation state, and durably records each physical attempt through the restricted AttemptRecorder. | Contracted |
+| `model.executor` | `ModelExecutor` | `One` | globally required | Validates selected-model capabilities, executes one logical model call, contains retries and continuation, reports post-call usage, and durably records each physical attempt through the restricted AttemptRecorder. | Contracted |
+| `model.token-counter` | `TokenCounter` | `One` | globally requires exactly 1 | Counts the complete provider-visible request for pre-call planning, using an exact tokenizer or a validated conservative bound and failing closed when neither is defensible. | Contracted |
 | `model.attempt.observer` | `AttemptObserver` | `Chain` | optional | Synchronously records or rejects one physical provider attempt before dispatch and after completion; unlike passive telemetry it may fail closed. | Contracted |
 | `model.provider` | `ModelProvider` | `Many` | optional; required only by an Executor that declares it | Implements named provider access for Executors that compose local adapters. | Mapped |
 | `model.selector` | `ModelSelector` | `One` | optional; conditional for dynamic routing | Selects a provider/model using explicit request and policy inputs. | Mapped |
@@ -239,7 +252,6 @@ wire objects.
 | `tool` | `Tool` | `Many` | optional globally; profiles may require keys | Declares and invokes a named capability available to AgentRuntime. | Contracted |
 | `skill` | `Skill` | `Many` | optional | Supplies discoverable instructions, resources, or component bundles without pretending natural-language keyword matching is semantic routing. | Mapped |
 | `tool.middleware` | `ToolMiddleware` | `Chain` | optional | Wraps invocation for policy, telemetry, normalization, or recovery. | Mapped |
-| `tool.output-store` | `ToolOutputStore` | `One` | optional | Stores oversized or binary tool results and returns stable references. | Mapped |
 
 The [`tool` package](tool) fixes the portable tool-call vocabulary:
 
@@ -258,6 +270,14 @@ keyword and size limits; they may not reinterpret the standard schema.
 Common file read/write/edit and controlled shell execution belong in an
 official optional component pack. They must remain disableable, and their risk
 decisions must use policy/approval components rather than concrete UI checks.
+
+ToolInvocation carries an explicit inline-output budget and ToolResult carries
+a standard list of `artifact.store` metadata references. Tools handle the
+budget normally; fixed Runtime validates it before History persistence and
+never silently truncates or automatically retries a violating, possibly
+effectful call. Capture,
+preview, truncation, search, and paged reading remain Tool/package behavior and
+do not form a second `tool.output-store` ecosystem.
 
 ### 4. Context, history, and memory
 
@@ -293,6 +313,12 @@ must not create, load, recover, or start a Session Runtime.
 The standard Compactor contract is replaceable: any “summary plus last three
 inbound messages” algorithm is a default implementation, not a framework
 invariant.
+`session_history` is a keyed standard Tool rather than a new Slot. It returns a
+model-safe, revision/sequence-traceable projection through a narrow read-only
+History boundary, preserves complete logical Steps under the ToolResult budget,
+and never opens Artifact content automatically. Its configurable ceiling is
+current Session, same Workspace, or explicitly authorized full access; same
+Workspace is the default, and its public Authorizer hook can only narrow it.
 The `memory` package fixes portable scope and memory-kind vocabularies and
 provides optional recall/remember/forget tools plus a pre-recall ContextSource.
 Its Store contract preserves four typed candidate payloads, source and
@@ -308,10 +334,10 @@ prompt text, invent missing facts, or silently discard a supplied fact.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `workspace.manager` | `WorkspaceManager` | `One` | optional | Defines the files, roots, isolation, and lifetime visible to an agent session or run. | Mapped |
+| `workspace.manager` | `workspace.Manager` | `One` | optional | Resolves and isolates the trusted resource boundary visible to a Session or Run; a Workspace may be a local directory, container, remote resource, cloud notes, or object storage, while concrete operations remain separate components. | Contracted |
 | `execution.environment` | `ExecutionEnvironment` | `Many` | optional | Executes commands or code in a named local, container, sandbox, or remote environment. | Mapped |
-| `artifact.store` | `ArtifactStore` | `One` | optional; required by components that consume attachments | Persists immutable inbound or generated content and resolves stable metadata/references without placing binary data or local paths in History. | Contracted |
-| `credential.resolver` | `CredentialResolver` | `One` | optional | Resolves scoped credentials without placing secret values in Assemblies or component descriptions. | Mapped |
+| `artifact.store` | `ArtifactStore` | `One` | optional; required by components that consume attachments | Persists immutable inbound or generated content—including tool content deliberately retained long-term—and resolves stable metadata/references without placing binary data, local paths, or credentials in History. | Contracted |
+| `credential.resolver` | `Resolver` | `One` | optional; required by configured outbound adapters | Late-resolves a product-supplied non-secret Ref inside one physical outbound-operation callback; supports distinct credential shapes while exposing only an opaque non-reversible identity outside that callback. | Contracted |
 
 ### 6. Policy, authorization, and human approval
 

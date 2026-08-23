@@ -636,8 +636,11 @@ type HistoryPageRequest struct {
 }
 
 type HistoryPage struct {
-	Facts   []HistoryFact
-	HasMore bool
+	AgentID     agent.AgentID
+	WorkspaceID agent.WorkspaceID
+	Revision    agent.Revision
+	Facts       []HistoryFact
+	HasMore     bool
 }
 
 // NewSession is the complete initial aggregate supplied by the fixed framework Manager.

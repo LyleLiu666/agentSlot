@@ -53,11 +53,7 @@ func (r *activeRun) signalPrepared(revision agent.Revision) {
 // restorePreparedRun reconstructs only the safe, pre-execution portion of an
 // interrupted Run. SessionStore recovery has already converted every call
 // that may have crossed the execution boundary to outcome_unknown.
-func (r *runtimeInstance) restorePreparedRun() error {
-	snapshot, err := r.session.View(context.Background())
-	if err != nil {
-		return err
-	}
+func (r *runtimeInstance) restorePreparedRun(snapshot session.Snapshot) error {
 	if snapshot.RunState != session.RunRunning {
 		return nil
 	}
@@ -97,24 +93,8 @@ func (r *runtimeInstance) restorePreparedRun() error {
 	}
 	r.activateLocked(run)
 	run.signalPrepared(snapshot.Revision)
-	go r.resumePreparedCalls(run, calls)
+	go r.runLoopPrepared(run, step, calls)
 	return nil
-}
-
-func (r *runtimeInstance) resumePreparedCalls(run *activeRun, calls []agent.ToolCall) {
-	results := r.components.dispatcher.dispatchPrepared(run.ctx, calls, func(call agent.ToolCall) error {
-		return r.markToolExecuting(run, call)
-	})
-	next, canceled, err := r.commitToolResults(run, calls, results)
-	if err != nil {
-		r.finishRun(run, stepFailed)
-		return
-	}
-	if canceled {
-		r.finishRun(run, stepCanceled)
-		return
-	}
-	r.runLoop(run, next)
 }
 
 type stepOutcome uint8
@@ -125,15 +105,31 @@ const (
 	stepFailed
 	stepCanceled
 	stepBudgetExceeded
+	stepWaiting
+	stepToolsReady
 )
 
 func (r *runtimeInstance) nextID(kind string) string {
 	return fmt.Sprintf("%s-%s-%d", kind, r.prefix, r.sequence.Add(1))
 }
 func (r *runtimeInstance) runLoop(run *activeRun, step agent.StepID) {
+	r.runLoopWithPrepared(run, step, nil)
+}
+
+func (r *runtimeInstance) runLoopPrepared(run *activeRun, step agent.StepID, calls []agent.ToolCall) {
+	r.runLoopWithPrepared(run, step, calls)
+}
+
+func (r *runtimeInstance) runLoopWithPrepared(run *activeRun, step agent.StepID, prepared []agent.ToolCall) {
 	for {
 		driver := &runtimeLoopRun{runtime: r, run: run, step: step}
+		if len(prepared) > 0 {
+			driver.state = agentloop.StateToolsReady
+			driver.pendingTools = append([]agent.ToolCall(nil), prepared...)
+		}
 		outcome, err := invokeAgentLoop(r.components.agentLoop, run.ctx, driver)
+		escapedAction := driver.closeActions()
+		prepared = nil
 		run.signalPrepared(r.revision())
 		if err != nil {
 			if errors.Is(err, context.Canceled) || run.ctx.Err() != nil {
@@ -142,7 +138,8 @@ func (r *runtimeInstance) runLoop(run *activeRun, step agent.StepID) {
 				outcome = agentloop.OutcomeFailed
 			}
 		}
-		if !outcome.Terminal() || (driver.terminal && driver.outcome != outcome) {
+		terminal, committedOutcome := driver.terminalOutcome()
+		if escapedAction || !outcome.Terminal() || !terminal || committedOutcome != outcome {
 			outcome = agentloop.OutcomeFailed
 		}
 		nextRun, firstStep := r.finishRun(run, stepOutcomeFromLoop(outcome))
@@ -154,37 +151,213 @@ func (r *runtimeInstance) runLoop(run *activeRun, step agent.StepID) {
 }
 
 type runtimeLoopRun struct {
-	runtime  *runtimeInstance
-	run      *activeRun
-	step     agent.StepID
-	stepping atomic.Bool
-	terminal bool
-	outcome  agentloop.Outcome
+	runtime        *runtimeInstance
+	run            *activeRun
+	step           agent.StepID
+	lifecycleMu    sync.Mutex
+	closed         bool
+	active         bool
+	activeDone     chan struct{}
+	stateMu        sync.Mutex
+	terminal       bool
+	outcome        agentloop.Outcome
+	state          agentloop.State
+	nextStep       agent.StepID
+	pendingTools   []agent.ToolCall
+	legacyStepping atomic.Bool
 }
 
 func (r *runtimeLoopRun) SessionID() agent.SessionID { return r.runtime.id() }
 func (r *runtimeLoopRun) RunID() agent.RunID         { return r.run.id }
+func (r *runtimeLoopRun) State() agentloop.State {
+	r.stateMu.Lock()
+	defer r.stateMu.Unlock()
+	if r.state == "" {
+		return agentloop.StateReadyForModel
+	}
+	return r.state
+}
 
 func (r *runtimeLoopRun) Step(ctx context.Context) (agentloop.Outcome, error) {
-	if err := ctx.Err(); err != nil {
-		return agentloop.OutcomeCanceled, err
-	}
-	if !r.stepping.CompareAndSwap(false, true) {
+	if !r.legacyStepping.CompareAndSwap(false, true) {
 		return agentloop.OutcomeFailed, errors.New("standardagent: AgentLoop called Run.Step concurrently")
 	}
-	defer r.stepping.Store(false)
+	defer r.legacyStepping.Store(false)
+	state := r.State()
+	if state == agentloop.StateContinueReady {
+		var err error
+		state, err = r.Act(ctx, agentloop.Action{Kind: agentloop.ActionContinue})
+		if err != nil {
+			return agentloop.OutcomeFailed, err
+		}
+	}
+	if state == agentloop.StateReadyForModel {
+		var err error
+		state, err = r.Act(ctx, agentloop.Action{Kind: agentloop.ActionRequestModel})
+		if err != nil {
+			return agentloop.OutcomeFailed, err
+		}
+	}
+	if state == agentloop.StateToolsReady {
+		var err error
+		state, err = r.Act(ctx, agentloop.Action{Kind: agentloop.ActionExecuteTools})
+		if err != nil {
+			return agentloop.OutcomeFailed, err
+		}
+	}
+	if state == agentloop.StateContinueReady {
+		return agentloop.OutcomeContinue, nil
+	}
+	outcome := loopOutcomeFromState(state)
+	if !outcome.Terminal() {
+		return agentloop.OutcomeFailed, errors.New("standardagent: Runtime returned an unknown Loop state")
+	}
+	if outcome != agentloop.OutcomeWaiting {
+		if _, err := r.Act(ctx, agentloop.Action{Kind: agentloop.ActionFinish, Outcome: outcome}); err != nil {
+			return agentloop.OutcomeFailed, err
+		}
+	}
+	return outcome, nil
+}
+
+func (r *runtimeLoopRun) Act(ctx context.Context, action agentloop.Action) (agentloop.State, error) {
+	if err := ctx.Err(); err != nil {
+		return agentloop.StateCanceled, err
+	}
+	if err := r.run.ctx.Err(); err != nil {
+		return agentloop.StateCanceled, err
+	}
+	if err := action.Validate(); err != nil {
+		return agentloop.StateFailed, err
+	}
+	if err := r.beginAction(); err != nil {
+		return agentloop.StateFailed, err
+	}
+	defer r.endAction()
+	r.stateMu.Lock()
 	if r.terminal {
-		return agentloop.OutcomeFailed, errors.New("standardagent: AgentLoop called Run.Step after a terminal outcome")
+		r.stateMu.Unlock()
+		return agentloop.StateFailed, errors.New("standardagent: AgentLoop submitted an action after terminal state")
 	}
-	outcome, next := r.runtime.executeStep(r.run, r.step)
-	mapped := loopOutcomeFromStep(outcome)
-	if mapped == agentloop.OutcomeContinue {
-		r.step = next
-	} else {
-		r.terminal = true
-		r.outcome = mapped
+	if r.state == "" {
+		r.state = agentloop.StateReadyForModel
 	}
-	return mapped, nil
+	r.stateMu.Unlock()
+	switch action.Kind {
+	case agentloop.ActionRequestModel:
+		r.stateMu.Lock()
+		if r.state != agentloop.StateReadyForModel {
+			r.stateMu.Unlock()
+			return agentloop.StateFailed, errors.New("standardagent: model action is not valid in the current Run state")
+		}
+		r.stateMu.Unlock()
+		outcome, next, calls := r.runtime.requestModel(r.run, r.step)
+		r.stateMu.Lock()
+		r.nextStep = next
+		r.pendingTools = calls
+		r.state = loopStateFromStep(outcome)
+		state := r.state
+		r.stateMu.Unlock()
+		return state, nil
+	case agentloop.ActionContinue:
+		r.stateMu.Lock()
+		defer r.stateMu.Unlock()
+		if r.state != agentloop.StateContinueReady || !r.nextStep.Valid() {
+			return agentloop.StateFailed, errors.New("standardagent: continue action is not valid in the current Run state")
+		}
+		r.step, r.nextStep, r.state = r.nextStep, "", agentloop.StateReadyForModel
+		return r.state, nil
+	case agentloop.ActionExecuteTools:
+		r.stateMu.Lock()
+		if r.state != agentloop.StateToolsReady || len(r.pendingTools) == 0 {
+			r.stateMu.Unlock()
+			return agentloop.StateFailed, errors.New("standardagent: no prepared Tool batch is available")
+		}
+		calls := append([]agent.ToolCall(nil), r.pendingTools...)
+		r.stateMu.Unlock()
+		dispatched := r.runtime.components.dispatcher.dispatchPrepared(r.run.ctx, calls, func(call agent.ToolCall) error {
+			return r.runtime.markToolExecuting(r.run, call)
+		}, r.runtime.workspaceScope(), r.runtime.workspaceBoundary)
+		next, canceled, err := r.runtime.commitToolResults(r.run, calls, dispatched.results)
+		r.stateMu.Lock()
+		r.pendingTools = nil
+		if err != nil || dispatched.contractViolation {
+			r.state = agentloop.StateFailed
+		} else if canceled {
+			r.state = agentloop.StateCanceled
+		} else {
+			r.nextStep, r.state = next, agentloop.StateContinueReady
+		}
+		state := r.state
+		r.stateMu.Unlock()
+		return state, err
+	case agentloop.ActionWait:
+		r.stateMu.Lock()
+		defer r.stateMu.Unlock()
+		if r.state != agentloop.StateReadyForModel && r.state != agentloop.StateContinueReady {
+			return agentloop.StateFailed, errors.New("standardagent: wait action is not valid in the current Run state")
+		}
+		r.state, r.terminal, r.outcome = agentloop.StateWaiting, true, agentloop.OutcomeWaiting
+		return r.state, nil
+	case agentloop.ActionFinish:
+		r.stateMu.Lock()
+		defer r.stateMu.Unlock()
+		if !finishAllowed(r.state, action.Outcome) {
+			return agentloop.StateFailed, errors.New("standardagent: finish outcome does not match Runtime state")
+		}
+		r.terminal, r.outcome = true, action.Outcome
+		return r.state, nil
+	default:
+		return agentloop.StateFailed, errors.New("standardagent: unsupported Run action")
+	}
+}
+
+func (r *runtimeLoopRun) beginAction() error {
+	r.lifecycleMu.Lock()
+	defer r.lifecycleMu.Unlock()
+	if r.closed {
+		return errors.New("standardagent: AgentLoop submitted an action after Run returned")
+	}
+	if r.active {
+		return errors.New("standardagent: AgentLoop submitted concurrent actions")
+	}
+	r.active = true
+	r.activeDone = make(chan struct{})
+	return nil
+}
+
+func (r *runtimeLoopRun) endAction() {
+	r.lifecycleMu.Lock()
+	r.active = false
+	close(r.activeDone)
+	r.activeDone = nil
+	r.lifecycleMu.Unlock()
+}
+
+func (r *runtimeLoopRun) closeActions() bool {
+	r.lifecycleMu.Lock()
+	r.closed = true
+	done := r.activeDone
+	r.lifecycleMu.Unlock()
+	if done == nil {
+		return false
+	}
+	r.run.cancel()
+	<-done
+	return true
+}
+
+func (r *runtimeLoopRun) terminalOutcome() (bool, agentloop.Outcome) {
+	r.stateMu.Lock()
+	defer r.stateMu.Unlock()
+	return r.terminal, r.outcome
+}
+
+func finishAllowed(state agentloop.State, outcome agentloop.Outcome) bool {
+	if state == agentloop.StateReadyForModel || state == agentloop.StateContinueReady {
+		return outcome == agentloop.OutcomeCompleted || outcome == agentloop.OutcomeFailed
+	}
+	return loopOutcomeFromState(state) == outcome
 }
 
 func invokeAgentLoop(component agentloop.AgentLoop, ctx context.Context, run agentloop.Run) (outcome agentloop.Outcome, err error) {
@@ -197,18 +370,22 @@ func invokeAgentLoop(component agentloop.AgentLoop, ctx context.Context, run age
 	return component.Run(ctx, run)
 }
 
-func loopOutcomeFromStep(outcome stepOutcome) agentloop.Outcome {
+func loopStateFromStep(outcome stepOutcome) agentloop.State {
 	switch outcome {
 	case stepContinue:
-		return agentloop.OutcomeContinue
+		return agentloop.StateContinueReady
 	case stepNatural:
-		return agentloop.OutcomeCompleted
+		return agentloop.StateCompleted
 	case stepCanceled:
-		return agentloop.OutcomeCanceled
+		return agentloop.StateCanceled
 	case stepBudgetExceeded:
-		return agentloop.OutcomeBudgetExceeded
+		return agentloop.StateBudgetExceeded
+	case stepWaiting:
+		return agentloop.StateWaiting
+	case stepToolsReady:
+		return agentloop.StateToolsReady
 	default:
-		return agentloop.OutcomeFailed
+		return agentloop.StateFailed
 	}
 }
 
@@ -220,26 +397,28 @@ func stepOutcomeFromLoop(outcome agentloop.Outcome) stepOutcome {
 		return stepCanceled
 	case agentloop.OutcomeBudgetExceeded:
 		return stepBudgetExceeded
+	case agentloop.OutcomeWaiting:
+		return stepWaiting
 	default:
 		return stepFailed
 	}
 }
 
-func (r *runtimeInstance) executeStep(run *activeRun, step agent.StepID) (stepOutcome, agent.StepID) {
+func (r *runtimeInstance) requestModel(run *activeRun, step agent.StepID) (stepOutcome, agent.StepID, []agent.ToolCall) {
 	defer func() { run.signalPrepared(r.revision()) }()
 	if r.runBudget(run).Exhausted() {
 		if err := r.recordBudgetExceeded(run); err != nil {
-			return stepFailed, ""
+			return stepFailed, "", nil
 		}
-		return stepBudgetExceeded, ""
+		return stepBudgetExceeded, "", nil
 	}
 	request, err := r.prepareModelRequest(run, step)
 	if err != nil {
 		run.signalPrepared(r.revision())
 		if errors.Is(err, context.Canceled) {
-			return stepCanceled, ""
+			return stepCanceled, "", nil
 		}
-		return stepFailed, ""
+		return stepFailed, "", nil
 	}
 	recorder := &runtimeAttemptRecorder{runtime: r, run: run, step: step}
 	stream, err := r.components.executor.Execute(run.ctx, request, recorder)
@@ -247,18 +426,18 @@ func (r *runtimeInstance) executeStep(run *activeRun, step agent.StepID) (stepOu
 		run.signalPrepared(r.revision())
 		if errors.Is(err, model.ErrTokenBudgetExceeded) {
 			if recordErr := r.recordBudgetExceeded(run); recordErr != nil {
-				return stepFailed, ""
+				return stepFailed, "", nil
 			}
-			return stepBudgetExceeded, ""
+			return stepBudgetExceeded, "", nil
 		}
 		if errors.Is(err, context.Canceled) {
-			return stepCanceled, ""
+			return stepCanceled, "", nil
 		}
-		return stepFailed, ""
+		return stepFailed, "", nil
 	}
 	if stream == nil {
 		run.signalPrepared(r.revision())
-		return stepFailed, ""
+		return stepFailed, "", nil
 	}
 	defer stream.Close()
 	for {
@@ -266,17 +445,17 @@ func (r *runtimeInstance) executeStep(run *activeRun, step agent.StepID) (stepOu
 		if err != nil {
 			if errors.Is(err, model.ErrTokenBudgetExceeded) {
 				if recordErr := r.recordBudgetExceeded(run); recordErr != nil {
-					return stepFailed, ""
+					return stepFailed, "", nil
 				}
-				return stepBudgetExceeded, ""
+				return stepBudgetExceeded, "", nil
 			}
 			if errors.Is(err, context.Canceled) {
-				return stepCanceled, ""
+				return stepCanceled, "", nil
 			}
-			return stepFailed, ""
+			return stepFailed, "", nil
 		}
 		if err := event.Validate(); err != nil {
-			return stepFailed, ""
+			return stepFailed, "", nil
 		}
 		switch event.Kind {
 		case model.EventDelta:
@@ -287,43 +466,33 @@ func (r *runtimeInstance) executeStep(run *activeRun, step agent.StepID) (stepOu
 		case model.EventFailed:
 			if errors.Is(event.Err, model.ErrTokenBudgetExceeded) {
 				if recordErr := r.recordBudgetExceeded(run); recordErr != nil {
-					return stepFailed, ""
+					return stepFailed, "", nil
 				}
-				return stepBudgetExceeded, ""
+				return stepBudgetExceeded, "", nil
 			}
-			return stepFailed, ""
+			return stepFailed, "", nil
 		case model.EventComplete:
 			calls, canceled, err := r.commitCompletion(run, step, *event.Output)
 			if canceled {
-				return stepCanceled, ""
+				return stepCanceled, "", nil
 			}
 			if err != nil {
-				return stepFailed, ""
+				return stepFailed, "", nil
 			}
 			if len(calls) > 0 {
-				results := r.components.dispatcher.dispatchPrepared(run.ctx, calls, func(call agent.ToolCall) error {
-					return r.markToolExecuting(run, call)
-				})
-				next, canceled, err := r.commitToolResults(run, calls, results)
-				if err != nil {
-					return stepFailed, ""
-				}
-				if canceled {
-					return stepCanceled, ""
-				}
-				return stepContinue, next
+				return stepToolsReady, "", calls
 			}
 			next, continued, canceled, err := r.continueAfterCompletion(run)
 			if canceled {
-				return stepCanceled, ""
+				return stepCanceled, "", nil
 			}
 			if err != nil {
-				return stepFailed, ""
+				return stepFailed, "", nil
 			}
 			if continued {
-				return stepContinue, next
+				return stepContinue, next, nil
 			}
-			return stepNatural, ""
+			return stepNatural, "", nil
 		}
 	}
 }
@@ -787,7 +956,7 @@ func (r *runtimeInstance) finishRun(run *activeRun, outcome stepOutcome) (*activ
 		terminalKind = session.RunCompleted
 	case stepCanceled:
 		terminalKind = session.RunCanceled
-	case stepBudgetExceeded:
+	case stepBudgetExceeded, stepWaiting:
 		terminalKind = session.RunInterrupted
 	}
 	terminal := session.RunFact{
@@ -1077,6 +1246,7 @@ func cloneRuntimeConfig(source model.Config) model.Config {
 func cloneRuntimeToolResult(source tool.ToolResult) tool.ToolResult {
 	copy := source
 	copy.Output = append([]byte(nil), source.Output...)
+	copy.Artifacts = append(source.Artifacts[:0:0], source.Artifacts...)
 	if source.Error != nil {
 		errorCopy := *source.Error
 		copy.Error = &errorCopy

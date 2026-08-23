@@ -146,12 +146,12 @@ func (r *runtimeInstance) buildContextCandidate(run *activeRun, step agent.StepI
 	}
 
 	request := r.assembleModelRequest(run, step, dynamic)
-	tokens, err := r.components.executor.CountTokens(run.ctx, cloneRuntimeModelRequest(request))
+	tokens, err := r.components.counter.CountTokens(run.ctx, cloneRuntimeModelRequest(request))
 	if err != nil {
 		return model.ModelRequest{}, nil, 0, err
 	}
 	if tokens < 0 {
-		return model.ModelRequest{}, nil, 0, agent.NewError(agent.ErrorInternal, "standardagent.context", "ModelExecutor returned a negative token count", nil)
+		return model.ModelRequest{}, nil, 0, agent.NewError(agent.ErrorInternal, "standardagent.context", "TokenCounter returned a negative token count", nil)
 	}
 	limit := capabilities.ContextWindowTokens
 	if configured := r.components.config.Context.HardTokenLimit; configured > 0 && configured < limit {
@@ -181,12 +181,12 @@ func (r *runtimeInstance) buildContextCandidate(run *activeRun, step agent.StepI
 	}
 	dynamic = projectUnsupportedAttachments(dynamic, capabilities.Media)
 	request = r.assembleModelRequest(run, step, dynamic)
-	tokens, err = r.components.executor.CountTokens(run.ctx, cloneRuntimeModelRequest(request))
+	tokens, err = r.components.counter.CountTokens(run.ctx, cloneRuntimeModelRequest(request))
 	if err != nil {
 		return model.ModelRequest{}, nil, 0, err
 	}
 	if tokens < 0 {
-		return model.ModelRequest{}, nil, 0, agent.NewError(agent.ErrorInternal, "standardagent.context", "ModelExecutor returned a negative token count", nil)
+		return model.ModelRequest{}, nil, 0, agent.NewError(agent.ErrorInternal, "standardagent.context", "TokenCounter returned a negative token count", nil)
 	}
 	if tokens > limit {
 		return model.ModelRequest{}, nil, 0, contextLimitError(tokens, limit)

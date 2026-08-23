@@ -4,9 +4,107 @@ This file records published AgentSlot releases. The project is pre-1.0: a
 validation release is usable through Go modules, but its public API may change
 when real consumers expose a flawed boundary.
 
-## Unreleased
+## v0.1.0 - 2026-08-23
 
-No changes yet.
+### Added
+
+- Added the versioned public `componentcatalog` package as the structured
+  source for all 41 standard component ecosystems, including localized
+  responsibilities, cardinality, profile requirements, contract availability,
+  maturity, evidence identities, and known gaps.
+- Added deterministic English and Chinese component-map generation plus a
+  repository drift test. The catalog is documentation data only and does not
+  participate in Runtime assembly.
+- Added the independent `model.token-counter` typed Slot and made it the fifth
+  required ecosystem in the standard Agent profile. Context planning now
+  fails closed before provider dispatch when counting fails or returns a
+  negative value.
+- Added explicit fake and OpenAI-compatible TokenCounter implementations. The
+  OpenAI-compatible provider module contributes its counter as a replaceable
+  default while keeping post-call usage estimation private to its Executor.
+- Added the optional `workspace.manager` Slot with a path-neutral Scope and
+  opaque Boundary contract validated by local-filesystem and non-filesystem
+  fixtures.
+- Tool invocations and policy actions now receive trusted AgentID/WorkspaceID
+  values derived from the authoritative Session. Installed Workspace managers
+  reject missing boundaries before Session creation or recovery and never
+  fall back to process-global resources.
+- Added an explicit per-invocation inline ToolResult byte budget and standard
+  immutable Artifact metadata references. History and Fork preserve those
+  references while OpenAI-compatible model projection exposes only safe
+  metadata.
+- Runtime now converts invalid or oversized Tool results into a durable
+  structured contract failure, stops the Run, aborts later serial calls, and
+  never silently truncates or retries the possibly effectful Tool.
+- Replaced the former one-step AgentLoop driver with ordered, Run-scoped
+  Runtime actions for model requests, prepared tool batches, continuation,
+  waiting, and termination. A recovered prepared ToolCall re-enters the same
+  public Loop protocol without changing its identity. The deprecated
+  `Run.Step` entry point remains source-compatible and delegates to those
+  controlled actions; new Loop implementations should use `State` and `Act`.
+- Runtime rejects concurrent, out-of-order, forged-terminal, and post-terminal
+  Loop actions; cancellation, Loop errors, and panics converge to durable Run
+  terminal facts without granting the Loop Store or Gateway access.
+- Added the optional `credential.resolver` contract with non-secret Ref,
+  callback-scoped bearer/basic material, and an opaque non-reversible identity.
+  Development memory and AES-256-GCM encrypted-file implementations validate
+  two distinct credential shapes and rotation without rebuilding an Assembly.
+- OpenAI-compatible Executors no longer retain an API key string. Direct
+  construction accepts a Resolver, while Modules explicitly depend on
+  `credential.resolver` and resolve the configured Ref for every physical HTTP
+  attempt.
+- Added the keyed, read-only `session_history` Tool with current-Session,
+  same-Workspace, and explicitly authorized full-access ceilings. It uses only
+  a narrow HistoryReader and returns safe revision/sequence projections without
+  provider attempt identities, continuation state, actors, or Context internals.
+- Session history pages now atomically report revision and Agent/Workspace
+  scope. The Tool preserves complete logical Steps while fitting its inline
+  output budget and returns `result_too_large` instead of silently clipping one
+  oversized Step.
+- Added crash-safe local reference implementations for `workspace.manager` and
+  `artifact.store`. Workspace roots stay private behind opaque scoped
+  boundaries; immutable Artifacts use content-derived IDs, self-describing
+  files, atomic rename, file and directory sync, and no backing-path exposure.
+- Extended ComponentCatalog with constructible implementation identities,
+  non-secret configuration fields, dependencies, conflicts, Tool keys, and
+  deterministic `local-coding` and `minimal-chat` presets.
+- Added `agentslot init`. It generates reviewable, version-pinned Go assembly
+  without local replaces or credential values, refuses existing targets,
+  validates Workspace/storage separation before writing, supports explicit
+  implementation customization, and reports automatically selected
+  dependencies. Generated preset fixtures pass build, race, and vet checks.
+- Added the runnable `gateway.channel/remote-grpc/v1` example and matching
+  out-of-process `GatewayAccess` client. All Gateway operations, revision and
+  History integers, event streaming, classified errors, authentication-derived
+  Actor identity, authorization scope, overflow, and disconnect behavior are
+  mapped without adding a transport Slot or a second Session owner.
+- Added the stable ACP v1 inbound profile
+  `gateway.channel/inbound-acp/v1`. It binds a transport-authenticated remote
+  identity and fixed Agent/Workspace/CWD scope to Gateway, negotiates only its
+  implemented session and content capabilities, maps complete durable replies
+  to ACP updates, and preserves Runs across peer disconnect while honoring
+  explicit ACP cancellation.
+
+### Changed
+
+- Removed planning-time `CountTokens` from `ModelExecutor`; execution,
+  capability inspection, retry/continuation, and post-call usage remain the
+  Executor's responsibility. The concrete fake and OpenAI-compatible
+  executors retain deprecated `CountTokens` methods for source compatibility;
+  composition resolves the independent `model.token-counter` Slot.
+
+### Migration
+
+- Existing `v0.0.x` consumers remain pinned until they opt in. Standard Agent
+  assemblies must now provide `model.token-counter`; the fake and
+  OpenAI-compatible modules provide matching implementations.
+- OpenAI-compatible provider credentials move from `Config.APIKey` to a
+  non-secret `CredentialRef` plus `credential.resolver`. This is intentionally
+  not shimmed because retaining the old field would retain credential material
+  inside the Executor.
+- Existing AgentLoop implementations using `Run.Step` continue to compile and
+  run. New implementations should migrate to the explicit `State`/`Act`
+  protocol to control model, tool, continuation, waiting, and finish actions.
 
 ## v0.0.10 - 2026-08-22
 

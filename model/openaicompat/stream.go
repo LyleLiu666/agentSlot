@@ -15,6 +15,7 @@ import (
 	"time"
 
 	agent "github.com/LyleLiu666/agentSlot/agent"
+	"github.com/LyleLiu666/agentSlot/credential"
 	"github.com/LyleLiu666/agentSlot/model"
 )
 
@@ -152,10 +153,7 @@ func (s *eventStream) attempt(executor *Executor, payload []byte, attemptID stri
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "text/event-stream")
 	request.Header.Set("User-Agent", "AgentSlot-OpenAI-Compatible/1")
-	if executor.apiKey != "" {
-		request.Header.Set("Authorization", "Bearer "+executor.apiKey)
-	}
-	response, err := executor.client.Do(request)
+	response, err := executor.send(ctx, request)
 	if err != nil {
 		return attemptResult{retryable: true, errorCode: "transport", err: err}
 	}
@@ -179,6 +177,32 @@ func (s *eventStream) attempt(executor *Executor, payload []byte, attemptID stri
 		result.errorCode = "stream"
 	}
 	return result
+}
+
+func (e *Executor) send(ctx context.Context, request *http.Request) (*http.Response, error) {
+	if e.credentialRef == (credential.Ref{}) {
+		return e.client.Do(request)
+	}
+	if nilCredentialResolver(e.credentials) {
+		return nil, errors.New("openaicompat: provider credential is unavailable")
+	}
+	var response *http.Response
+	var sendErr error
+	_, resolveErr := e.credentials.Resolve(ctx, credential.Request{
+		Ref: e.credentialRef, Kind: credential.KindBearer,
+	}, func(material credential.Material) error {
+		request.Header.Set("Authorization", "Bearer "+string(material.Token))
+		defer request.Header.Del("Authorization")
+		response, sendErr = e.client.Do(request)
+		return sendErr
+	})
+	if sendErr != nil {
+		return response, sendErr
+	}
+	if resolveErr != nil {
+		return nil, errors.New("openaicompat: provider credential is unavailable")
+	}
+	return response, nil
 }
 
 func (s *eventStream) emit(event model.ModelEvent) bool {

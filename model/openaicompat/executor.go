@@ -17,6 +17,7 @@ import (
 	agentslot "github.com/LyleLiu666/agentSlot"
 	agent "github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/artifact"
+	"github.com/LyleLiu666/agentSlot/credential"
 	"github.com/LyleLiu666/agentSlot/model"
 )
 
@@ -27,16 +28,19 @@ type Model struct {
 }
 
 type Config struct {
-	ProviderKey    string
-	BaseURL        string
-	APIKey         string
-	Models         []Model
-	HTTPClient     *http.Client
-	MaxAttempts    int
-	RetryBackoff   time.Duration
-	RequestTimeout time.Duration
-	MaxEventBytes  int
-	MaxOutputBytes int
+	ProviderKey   string
+	BaseURL       string
+	CredentialRef credential.Ref
+	// CredentialResolver is accepted only by New for direct construction.
+	// NewModule resolves CredentialRef through credential.resolver instead.
+	CredentialResolver credential.Resolver
+	Models             []Model
+	HTTPClient         *http.Client
+	MaxAttempts        int
+	RetryBackoff       time.Duration
+	RequestTimeout     time.Duration
+	MaxEventBytes      int
+	MaxOutputBytes     int
 	// MaxAttachmentBytes bounds each artifact opened for a provider request.
 	// Zero uses the adapter default. The Store may enforce a lower limit.
 	MaxAttachmentBytes int64
@@ -46,7 +50,8 @@ type Config struct {
 type Executor struct {
 	providerKey        string
 	endpoint           string
-	apiKey             string
+	credentialRef      credential.Ref
+	credentials        credential.Resolver
 	client             *http.Client
 	models             map[string]Model
 	descriptors        []model.Descriptor
@@ -60,16 +65,33 @@ type Executor struct {
 	sequence           atomic.Uint64
 }
 
+// TokenCounter owns planning-time measurement for the exact wire projection
+// produced by this adapter. It is deliberately exposed separately from
+// Executor so applications can replace counting without replacing execution.
+type TokenCounter struct {
+	executor *Executor
+}
+
 var (
 	_ model.ModelExecutor = (*Executor)(nil)
 	_ model.ModelCatalog  = (*Executor)(nil)
+	_ model.TokenCounter  = (*TokenCounter)(nil)
 )
 
 func New(config Config) (*Executor, error) {
-	return newExecutor(config, false)
+	return newExecutor(config, false, false)
 }
 
-func newExecutor(config Config, allowMissingArtifactStore bool) (*Executor, error) {
+// NewTokenCounter constructs the counter paired with this provider adapter.
+func NewTokenCounter(config Config) (*TokenCounter, error) {
+	executor, err := newExecutor(config, false, true)
+	if err != nil {
+		return nil, err
+	}
+	return &TokenCounter{executor: executor}, nil
+}
+
+func newExecutor(config Config, allowMissingArtifactStore, allowMissingCredentialResolver bool) (*Executor, error) {
 	if config.ProviderKey == "" {
 		return nil, errors.New("openaicompat: provider key is required")
 	}
@@ -120,6 +142,17 @@ func newExecutor(config Config, allowMissingArtifactStore bool) (*Executor, erro
 	if needsArtifactStore && nilArtifactStore(config.ArtifactStore) && !allowMissingArtifactStore {
 		return nil, errors.New("openaicompat: ArtifactStore is required by an image-capable model")
 	}
+	hasCredential := config.CredentialRef != (credential.Ref{})
+	if hasCredential {
+		if err := config.CredentialRef.Validate(); err != nil {
+			return nil, errors.New("openaicompat: CredentialRef is invalid")
+		}
+		if nilCredentialResolver(config.CredentialResolver) && !allowMissingCredentialResolver {
+			return nil, errors.New("openaicompat: CredentialResolver is required by CredentialRef")
+		}
+	} else if !nilCredentialResolver(config.CredentialResolver) {
+		return nil, errors.New("openaicompat: CredentialResolver requires CredentialRef")
+	}
 	retryBackoff := config.RetryBackoff
 	if retryBackoff == 0 {
 		retryBackoff = 250 * time.Millisecond
@@ -145,9 +178,10 @@ func newExecutor(config Config, allowMissingArtifactStore bool) (*Executor, erro
 		client = http.DefaultClient
 	}
 	return &Executor{
-		providerKey: config.ProviderKey,
-		endpoint:    strings.TrimRight(parsed.String(), "/") + "/chat/completions",
-		apiKey:      config.APIKey, client: client, models: models, descriptors: descriptors,
+		providerKey:   config.ProviderKey,
+		endpoint:      strings.TrimRight(parsed.String(), "/") + "/chat/completions",
+		credentialRef: config.CredentialRef, credentials: config.CredentialResolver,
+		client: client, models: models, descriptors: descriptors,
 		maxAttempts: maxAttempts, retryBackoff: retryBackoff,
 		requestTimeout: requestTimeout, maxEventBytes: maxEventBytes, maxOutputBytes: maxOutputBytes,
 		maxAttachmentBytes: maxAttachmentBytes, artifacts: config.ArtifactStore,
@@ -169,7 +203,7 @@ func (e *Executor) Execute(ctx context.Context, request model.ModelRequest, reco
 	if err != nil {
 		return nil, agent.NewError(agent.ErrorInvalidInput, "openaicompat.execute", "invalid logical model request", err)
 	}
-	inputTokenEstimate, err := e.CountTokens(ctx, request)
+	inputTokenEstimate, err := e.countTokens(ctx, request)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +230,24 @@ func (e *Executor) Inspect(ctx context.Context, config model.Config) (model.Exec
 	return cloneCapabilities(configured.Capabilities), nil
 }
 
+func (c *TokenCounter) CountTokens(ctx context.Context, request model.ModelRequest) (int, error) {
+	if c == nil || c.executor == nil {
+		return 0, errors.New("openaicompat: TokenCounter is not initialized")
+	}
+	return c.executor.countTokens(ctx, request)
+}
+
+// CountTokens preserves the concrete Executor API used before token counting
+// became an independently replaceable Slot. Runtime composition must resolve
+// model.TokenCounterSlot instead of relying on this convenience method.
+//
+// Deprecated: construct TokenCounter with NewTokenCounter or resolve
+// model.TokenCounterSlot from an Assembly.
 func (e *Executor) CountTokens(ctx context.Context, request model.ModelRequest) (int, error) {
+	return e.countTokens(ctx, request)
+}
+
+func (e *Executor) countTokens(ctx context.Context, request model.ModelRequest) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -252,7 +303,10 @@ func supportsReasoning(supported []model.Reasoning, selected model.Reasoning) bo
 // provider wire adapter remains explicit; importing this package changes no
 // Assembly.
 func NewModule(config Config) (agentslot.Module, error) {
-	executor, err := newExecutor(config, true)
+	if !nilCredentialResolver(config.CredentialResolver) {
+		return nil, errors.New("openaicompat: NewModule resolves credentials through credential.resolver; Config.CredentialResolver must be nil")
+	}
+	executor, err := newExecutor(config, true, true)
 	if err != nil {
 		return nil, err
 	}
@@ -268,27 +322,53 @@ type executorModule struct {
 func (m executorModule) ID() string { return "model.openaicompat." + m.catalog.providerKey }
 
 func (m executorModule) RequiredSlots() []agentslot.Requirement {
-	if !m.needsArtifactStore {
-		return nil
+	requirements := make([]agentslot.Requirement, 0, 2)
+	if m.needsArtifactStore {
+		requirements = append(requirements, agentslot.RequireOne(artifact.StoreSlot))
 	}
-	return []agentslot.Requirement{agentslot.RequireOne(artifact.StoreSlot)}
+	if m.catalog.credentialRef != (credential.Ref{}) {
+		requirements = append(requirements, agentslot.RequireOne(credential.ResolverSlot))
+	}
+	return requirements
 }
 
 func (m executorModule) Register(reg agentslot.Registrar) error {
 	executorContribution := agentslot.Set(model.ExecutorSlot, model.ModelExecutor(m.catalog))
-	if m.needsArtifactStore {
+	counterContribution := agentslot.SetDefault(model.TokenCounterSlot, model.TokenCounter(&TokenCounter{executor: m.catalog}))
+	if m.needsArtifactStore || m.catalog.credentialRef != (credential.Ref{}) {
 		executorContribution = agentslot.SetWith(model.ExecutorSlot, func(resolver agentslot.Resolver) (model.ModelExecutor, error) {
+			config := m.config
+			if m.needsArtifactStore {
+				store, err := agentslot.ResolveOne(resolver, artifact.StoreSlot)
+				if err != nil {
+					return nil, err
+				}
+				config.ArtifactStore = store
+			}
+			if m.catalog.credentialRef != (credential.Ref{}) {
+				credentials, err := agentslot.ResolveOne(resolver, credential.ResolverSlot)
+				if err != nil {
+					return nil, err
+				}
+				config.CredentialResolver = credentials
+			}
+			return New(config)
+		})
+	}
+	if m.needsArtifactStore {
+		counterContribution = agentslot.SetDefaultWith(model.TokenCounterSlot, func(resolver agentslot.Resolver) (model.TokenCounter, error) {
 			store, err := agentslot.ResolveOne(resolver, artifact.StoreSlot)
 			if err != nil {
 				return nil, err
 			}
 			config := m.config
 			config.ArtifactStore = store
-			return New(config)
+			return NewTokenCounter(config)
 		})
 	}
 	return reg.Contribute(
 		executorContribution,
+		counterContribution,
 		agentslot.Add(model.CatalogSlot, m.catalog.providerKey, model.ModelCatalog(m.catalog)),
 	)
 }
@@ -313,4 +393,12 @@ func nilArtifactStore(store artifact.ArtifactStore) bool {
 	default:
 		return false
 	}
+}
+
+func nilCredentialResolver(resolver credential.Resolver) bool {
+	if resolver == nil {
+		return true
+	}
+	value := reflect.ValueOf(resolver)
+	return value.Kind() == reflect.Pointer && value.IsNil()
 }

@@ -224,8 +224,6 @@ type ModelExecutor interface {
 	Execute(context.Context, ModelRequest, AttemptRecorder) (ModelStream, error)
 	// Inspect validates a selection and returns authoritative capabilities.
 	Inspect(context.Context, Config) (ExecutionCapabilities, error)
-	// CountTokens evaluates the complete fixed request without mutating it.
-	CountTokens(context.Context, ModelRequest) (int, error)
 }
 
 // AttemptOutcome is the terminal result of one physical provider request.

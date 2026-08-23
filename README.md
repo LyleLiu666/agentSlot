@@ -15,18 +15,59 @@ Typed component slots and deterministic composition for agent systems.
 
 > A module unifies registration and lifecycle. A slot defines the component ecosystem, interface, cardinality, and ordering rule.
 
-The English and Chinese component maps remain the authoritative public
-inventory and maturity scorecard.
+The versioned `ComponentCatalog` in the public
+[`componentcatalog`](componentcatalog) package is the structured source for
+Slot identity, cardinality, profile requirements, contract availability,
+maturity, and evidence gaps. The English and Chinese component maps are its
+generated public views and remain the human-readable maturity scorecard. The
+catalog contains no component instances and is never consulted by Runtime
+assembly.
 
 The standard AgentRuntime fixes Session ownership, CAS, cancellation, and
 Gateway control. Its Run-control policy is the unique replaceable `agent.loop`
-Slot. The other replaceable parts include one SessionStore, one
-ModelExecutor, zero or more Tools, ordered Context and Hook
+Slot. The other replaceable parts include one SessionStore, one ModelExecutor,
+one independent TokenCounter, zero or more Tools, ordered Context and Hook
 components, one or more GatewayChannels, optional keyed InteractionCommands,
 Goal completion evaluation, long-term Memory, multi-agent Workflow,
 Policy/Approval, synchronous usage/billing guards, and passive observation chains.
 AgentSlot makes those cardinalities explicit and validates the assembled system
 before startup.
+
+The standard profile includes an independent `model.token-counter` for
+authoritative pre-call planning counts. `agent.loop` is a constrained
+execution-strategy Slot: a Loop receives only the current Run identity, state,
+and ordered actions for model requests, prepared tool batches, continuation,
+waiting, and termination. Runtime retains Session truth, budgets, cancellation,
+recovery, and terminal commits.
+
+`gateway.channel` is also the protocol extension seam. gRPC, WebSocket, SSH,
+and inbound ACP may be implemented independently without adding a transport
+Slot. Outbound ACP, where this Agent calls another Agent, belongs to
+`agent.provider`; sharing a codec does not merge their lifecycles or evidence.
+
+Workspace is now a Contracted optional resource-isolation scope rather than a
+filesystem-root API. Runtime propagates the Session-owned Agent/Workspace
+identity to policy and Tool calls; an installed Manager resolves an opaque
+boundary and rejects missing resources without falling back to process state.
+Long-lived tool content reuses `artifact.store`; the duplicate
+`tool.output-store` map entry has been removed. ToolInvocation now carries an
+explicit inline-output byte budget, ToolResult carries standard Artifact
+metadata references, and Runtime rejects violations before continuing the Run.
+`credential.resolver` is now Contracted after validation with bearer and basic
+credential shapes. Outbound adapters retain only a non-secret Ref, resolve
+material inside one physical-operation callback, and may copy only the opaque,
+non-reversible identity into billing or audit facts. The OpenAI-compatible
+adapter resolves its bearer credential afresh for every physical retry.
+
+`session_history` is a standard keyed, read-only Tool rather than another Slot.
+It holds only `HistoryReader`, returns a model-safe revision/sequence projection,
+preserves complete logical Steps under the inline output budget, and defaults
+to the current Workspace. Current-Session and explicitly authorized full-access
+ceilings are available at construction. The `agentslot init` terminal wizard
+consumes ComponentCatalog and generates explicit Go assembly code. Its default
+`local-coding` preset keeps writes, shell commands, and external side effects
+behind approval; `minimal-chat` installs no Tools, Workspace, Artifact, or
+Approval components. The generator reads and writes no credential material.
 
 The generic core remains product-neutral. A standard LLM Agent explicitly uses
 `standardagent.NewApplication`, which returns the same `*agentslot.Application`
@@ -43,19 +84,73 @@ never selects a Loop or any other domain component.
 
 ## Status
 
-AgentSlot is a pre-1.0 foundation. `v0.0.10` is the current validation release
-and is intended to be consumed by real Agent projects. It includes the
-contracted Goal, Memory, Workflow, Billing, Agent Loop, immutable Artifact
-Store, and bounded Session-list pagination boundaries developed after the first
-complete reference Agent path. It is not a
+AgentSlot is a pre-1.0 foundation. `v0.1.0` is the current validation release
+and is intended to be consumed by real Agent projects. It adds independent
+token counting, controlled Loop actions, late-bound credentials, trusted
+Workspace boundaries, bounded Tool results, durable Artifact and Workspace
+references, safe Session history access, explicit project generation, and
+remote gRPC/ACP Gateway channels. It is not a
 stable-production claim, and public APIs may still change based on integration
 feedback. The composition core works today; the standard
 component map is normative, while its ecosystems remain at their explicitly
 recorded maturity. Every published tag is immutable; later changes receive a
 new semantic version.
 
-All newer boundaries remain at least `Contracted`. `session.store` is now
-`Conformant` against the exact `v0.0.10` contract; no ecosystem is yet `Proven`.
+All implemented public boundaries remain at least `Contracted`.
+`model.token-counter` is Contracted and independently replaceable from
+`model.executor`. `session.store` is `Conformant` against the exact `v0.0.10`
+contract; no ecosystem is yet `Proven`.
+
+## Generate an explicit Agent project
+
+A released `agentslot` binary pins its own exact AgentSlot version. A source
+checkout must supply the release explicitly:
+
+```bash
+go run ./cmd/agentslot init --agentslot-version v0.1.0 ./my-agent
+```
+
+An interactive terminal selects a preset and collects only non-secret provider,
+model, `CredentialRef`, Workspace, and storage settings. Non-interactive use
+defaults to `local-coding` and exposes the same choices as flags. Repeat
+`--add-implementation` or `--remove-implementation` to customize the Catalog
+selection; required dependencies are either added with a visible reason or
+rejected before any file is written.
+
+The generated project contains a fixed `go.mod`, explicit Module assembly,
+standard Profile requirements, a strict Tool allowlist, approval policy, and a
+build test. It contains no local `replace` directive and never overwrites an
+existing target directory.
+
+## Out-of-process Gateway example
+
+[`interaction/grpcchannel`](interaction/grpcchannel) implements the complete
+`GatewayAccess` surface as `gateway.channel/remote-grpc/v1`. It uses a bounded
+protobuf `BytesValue` envelope so uint64 revisions and History sequences remain
+exact, and provides a matching `GatewayAccess` client. Install the server with
+`standardagent.NewGatewayChannelModule`; the standard wrapper owns its listener
+lifecycle after the fixed Gateway is available.
+
+Authentication and authorization callbacks are mandatory. Authenticated
+`remote_user`, `service`, or `agent` identity replaces every caller-supplied
+Actor value before a write reaches Gateway. TLS, credentials, rate limits, and
+deployment remain product configuration through gRPC server options and the
+callbacks. A disconnected `SendAndWait` client does not cancel the durable Run;
+application shutdown still does.
+
+[`interaction/acpchannel`](interaction/acpchannel) implements the stable ACP v1
+inbound surface as `gateway.channel/inbound-acp/v1`. The product-owned transport
+must supply an already-authenticated remote identity and an authorization
+callback. The channel fixes Agent, Workspace, and working-directory scope;
+supports ACP initialize, session new/list/resume/prompt/cancel/close; and maps
+complete durable assistant messages to ACP updates. Peer disconnect does not
+cancel the durable Run, while ACP `session/cancel` does.
+
+The profile advertises only what it implements. It accepts ACP's required text
+and `resource_link` prompt blocks, projecting links to deterministic readable
+text. It does not advertise image, audio, embedded context, session load, MCP,
+ACP authentication, modes, or configuration options. Outbound ACP remains an
+`agent.provider` concern.
 
 ## Core model
 
@@ -269,7 +364,9 @@ contribution that would bypass GatewayAccess binding or lifecycle ordering.
 Tools, ModelProviders, Context components, and AgentHooks are optional globally;
 an installed ModelExecutor may explicitly require one or more ModelProviders.
 Installed Tools are not implicitly authorized: `AgentRuntimeConfig.ToolKeys` is
-a strict allowlist, and nil, empty, or omitted values expose no Tools. AgentHook
+a strict allowlist, and nil, empty, or omitted values expose no Tools. Selecting
+any Tool also requires a positive `MaxInlineToolResultBytes`; Runtime supplies
+that budget to every invocation and fails the Run on a violating result. AgentHook
 only proposes follow-on input before Run completion; applied Session commits are
 observed separately through the asynchronous `session.commit.observer` chain.
 `interaction.command` is an optional `Many` Slot for structured commands that
@@ -295,6 +392,12 @@ SessionStore aggregate. Runtime-fixed SystemPrompt, ToolKeys, and Context
 settings do not change during one Runtime lifetime; the Session's provider,
 model, reasoning, and model parameters can be changed explicitly while idle
 and are snapshotted for each Run.
+
+`workspace.Manager` is optional. When installed, create, fork, summary-start,
+and resume resolve the exact Session scope before execution; unknown or
+unavailable boundaries fail explicitly. The portable Boundary exposes only
+its AgentID/WorkspaceID scope—not a root path, URI, credential, or operation—so
+filesystem, shell, note, and object-storage capabilities remain separate.
 
 `SessionStore.ListSessions` returns bounded cursor pages for one exact
 Agent/Workspace scope. Results are ordered by `UpdatedAt` descending and then
@@ -338,9 +441,9 @@ model-facing tool inputs use self-contained JSON Schema Draft 2020-12.
 Caller and Hook input uses `agent.MessageInput`, which carries content only;
 the fixed Runtime allocates MessageID, Session/Run/Step containment, role, and
 timestamp atomically when it creates a durable `agent.Message` fact.
-Twenty-nine standard component contracts are now available in the `loop`,
+Thirty-two standard component contracts are now available in the `loop`,
 `session`, `model`, `tool`, `context`, `hook`, `interaction`, `policy`, `observe`,
-`goal`, `memory`, `workflow`, `billing`, and `artifact`
+`goal`, `memory`, `workflow`, `billing`, `artifact`, `workspace`, and `credential`
 packages. They are at least Contracted; `session.store` has a reusable
 black-box `session.store/v1` result against the exact `v0.0.10` contract and is
 Conformant, while no domain ecosystem is yet Proven.

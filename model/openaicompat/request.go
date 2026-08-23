@@ -18,6 +18,7 @@ import (
 	agent "github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/artifact"
 	"github.com/LyleLiu666/agentSlot/model"
+	"github.com/LyleLiu666/agentSlot/tool"
 )
 
 type chatRequest struct {
@@ -150,7 +151,13 @@ func buildMessages(ctx context.Context, inputs []model.Input, capabilities model
 				return nil, fmt.Errorf("openaicompat: result %q has no correlated call", result.CallID)
 			}
 			content := string(result.Output)
-			if result.Error != nil {
+			if len(result.Artifacts) > 0 {
+				encoded, err := json.Marshal(toolResultProjectionFor(*result))
+				if err != nil {
+					return nil, err
+				}
+				content = string(encoded)
+			} else if result.Error != nil {
 				encoded, err := json.Marshal(result.Error)
 				if err != nil {
 					return nil, err
@@ -162,6 +169,27 @@ func buildMessages(ctx context.Context, inputs []model.Input, capabilities model
 		}
 	}
 	return messages, nil
+}
+
+type toolResultArtifactReference struct {
+	ID        string `json:"id"`
+	MediaType string `json:"media_type"`
+	Name      string `json:"name,omitempty"`
+	Size      int64  `json:"size"`
+}
+
+type toolResultProjection struct {
+	Output    json.RawMessage               `json:"output,omitempty"`
+	Error     *tool.StructuredError         `json:"error,omitempty"`
+	Artifacts []toolResultArtifactReference `json:"artifacts"`
+}
+
+func toolResultProjectionFor(result tool.ToolResult) toolResultProjection {
+	projection := toolResultProjection{Output: result.Output, Error: result.Error, Artifacts: make([]toolResultArtifactReference, len(result.Artifacts))}
+	for index, reference := range result.Artifacts {
+		projection.Artifacts[index] = toolResultArtifactReference{ID: reference.ID, MediaType: reference.MediaType, Name: reference.Name, Size: reference.Size}
+	}
+	return projection
 }
 
 func messageContent(ctx context.Context, message agent.Message, capabilities model.ExecutionCapabilities, artifacts artifact.ArtifactStore, maxAttachmentBytes int64) (any, error) {

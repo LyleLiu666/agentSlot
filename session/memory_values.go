@@ -172,6 +172,7 @@ func cloneToolCall(source agent.ToolCall) agent.ToolCall {
 func cloneToolResult(source tool.ToolResult) tool.ToolResult {
 	copy := source
 	copy.Output = append(json.RawMessage(nil), source.Output...)
+	copy.Artifacts = append(source.Artifacts[:0:0], source.Artifacts...)
 	if source.Error != nil {
 		errorCopy := *source.Error
 		copy.Error = &errorCopy

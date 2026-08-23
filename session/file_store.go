@@ -140,7 +140,14 @@ func (s *FileStore) HistoryPage(ctx context.Context, request HistoryPageRequest)
 	if err != nil {
 		return HistoryPage{}, err
 	}
-	return historyPage(document.Snapshot.History, request)
+	page, err := historyPage(document.Snapshot.History, request)
+	if err != nil {
+		return HistoryPage{}, err
+	}
+	page.AgentID = document.Snapshot.Session.AgentID
+	page.WorkspaceID = document.Snapshot.Session.WorkspaceID
+	page.Revision = document.Snapshot.Revision
+	return page, nil
 }
 
 func (s *FileStore) ListSessions(ctx context.Context, request ListRequest) (ListResult, error) {
