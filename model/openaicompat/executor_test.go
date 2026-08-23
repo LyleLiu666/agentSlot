@@ -480,6 +480,36 @@ func TestExecutorLateResolvesCredentialForEveryPhysicalAttempt(t *testing.T) {
 	}
 }
 
+func TestExecutorClassifiesCredentialFailureBeforeProviderDispatch(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		requests.Add(1)
+	}))
+	defer server.Close()
+	resolver, err := credential.NewMemoryResolver()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := standardConfig(server.URL, "")
+	config.MaxAttempts = 1
+	config.CredentialRef = credential.Ref{ID: "missing-provider"}
+	config.CredentialResolver = resolver
+	executor := newExecutorConfig(t, config)
+	recorder := &attemptRecorder{}
+	stream, err := executor.Execute(context.Background(), requestWithUser("credential"), recorder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := receiveUntilTerminal(t, stream)
+	if events[len(events)-1].Kind != model.EventFailed {
+		t.Fatalf("events = %#v", events)
+	}
+	_, finishes := recorder.records()
+	if requests.Load() != 0 || len(finishes) != 1 || finishes[0].ErrorCode != "credential_unavailable" {
+		t.Fatalf("provider requests=%d finishes=%#v", requests.Load(), finishes)
+	}
+}
+
 func TestExecutorDoesNotRetryNonRetryableHTTPErrorOrLeakBody(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {

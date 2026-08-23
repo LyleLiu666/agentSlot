@@ -4,6 +4,15 @@ This file records published AgentSlot releases. The project is pre-1.0: a
 validation release is usable through Go modules, but its public API may change
 when real consumers expose a flawed boundary.
 
+## v0.1.1 - 2026-08-23
+
+### Fixed
+
+- OpenAI-compatible executors now classify a credential-resolution failure as
+  `credential_unavailable` before provider dispatch instead of the ambiguous
+  `transport` failure code. This lets accounting adapters avoid fabricating a
+  physical provider occurrence when no request bytes were sent.
+
 ## v0.1.0 - 2026-08-23
 
 ### Added
