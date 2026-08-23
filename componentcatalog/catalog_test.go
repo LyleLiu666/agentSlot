@@ -51,6 +51,15 @@ func TestStandardCatalogPreservesApprovedInventory(t *testing.T) {
 	if component, ok := catalog.Lookup("credential.resolver"); !ok || component.Maturity != MaturityContracted || !component.Contract.Available || component.Contract.Package != module+"/credential" {
 		t.Fatalf("credential.resolver = %#v, %v", component, ok)
 	}
+	if len(catalog.Implementations) != 13 || len(catalog.Presets) != 2 {
+		t.Fatalf("scaffold inventory = %d implementations / %d presets", len(catalog.Implementations), len(catalog.Presets))
+	}
+	for _, presetID := range []string{"local-coding", "minimal-chat"} {
+		preset, ok := catalog.LookupPreset(presetID)
+		if !ok || len(preset.Implementations) == 0 {
+			t.Fatalf("preset %q = %#v, %v", presetID, preset, ok)
+		}
+	}
 }
 
 func TestStandardCatalogReturnsDetachedValues(t *testing.T) {
@@ -58,10 +67,58 @@ func TestStandardCatalogReturnsDetachedValues(t *testing.T) {
 	first.Components[0].ID = "changed"
 	first.Components[0].Profiles[0].Name = "changed"
 	first.Components[0].Evidence.IndependentImplementations = append(first.Components[0].Evidence.IndependentImplementations, "changed")
+	first.Implementations[0].Dependencies = append(first.Implementations[0].Dependencies, "changed")
+	first.Implementations[0].Configuration = append(first.Implementations[0].Configuration, ConfigurationField{Key: "changed", Description: "changed"})
+	first.Implementations[0].ToolKeys = append(first.Implementations[0].ToolKeys, "changed")
+	first.Presets[0].Implementations[0] = "changed"
+	first.Presets[0].ToolKeys[0] = "changed"
 
 	second := Standard()
-	if second.Components[0].ID == "changed" || second.Components[0].Profiles[0].Name == "changed" || len(second.Components[0].Evidence.IndependentImplementations) != 0 {
-		t.Fatalf("Standard returned shared mutable state: %#v", second.Components[0])
+	if second.Components[0].ID == "changed" || second.Components[0].Profiles[0].Name == "changed" || len(second.Components[0].Evidence.IndependentImplementations) != 0 ||
+		len(second.Implementations[0].Dependencies) != 0 || len(second.Implementations[0].Configuration) != 0 || len(second.Implementations[0].ToolKeys) != 0 ||
+		second.Presets[0].Implementations[0] == "changed" || second.Presets[0].ToolKeys[0] == "changed" {
+		t.Fatalf("Standard returned shared mutable state: %#v / %#v / %#v", second.Components[0], second.Implementations[0], second.Presets[0])
+	}
+}
+
+func TestImplementationMetadataCoversConfigurationAndToolExposure(t *testing.T) {
+	catalog := Standard()
+	provider, ok := catalog.LookupImplementation("model.openaicompat.executor")
+	if !ok || len(provider.Configuration) != 4 || provider.Configuration[3].Key != "credential-ref" {
+		t.Fatalf("provider configuration metadata = %#v, %v", provider.Configuration, ok)
+	}
+	files, ok := catalog.LookupImplementation("tool.files")
+	if !ok || !slices.Equal(files.ToolKeys, []string{"file_read", "file_write", "file_edit"}) ||
+		!slices.Contains(files.Dependencies, "policy.guard") {
+		t.Fatalf("file tool scaffold metadata = %#v, %v", files, ok)
+	}
+}
+
+func TestCatalogRejectsUnavailableOrIncompletePresetSelections(t *testing.T) {
+	catalog := Standard()
+	catalog.Presets[0].Implementations = slices.DeleteFunc(catalog.Presets[0].Implementations, func(id string) bool {
+		return id == "workspace.local"
+	})
+	if err := catalog.Validate(); err == nil {
+		t.Fatal("Validate accepted a preset missing an implementation dependency")
+	}
+
+	catalog = Standard()
+	catalog.Implementations[0].Available = false
+	if err := catalog.Validate(); err == nil {
+		t.Fatal("Validate accepted a preset selecting an unavailable implementation")
+	}
+
+	catalog = Standard()
+	catalog.Implementations[0].UnavailableReason = "contradicts available state"
+	if err := catalog.Validate(); err == nil {
+		t.Fatal("Validate accepted an unavailable reason on an available implementation")
+	}
+
+	catalog = Standard()
+	catalog.Presets[0].ToolKeys = append(catalog.Presets[0].ToolKeys, "uninstalled_tool")
+	if err := catalog.Validate(); err == nil {
+		t.Fatal("Validate accepted a Tool key not supplied by the selected implementations")
 	}
 }
 

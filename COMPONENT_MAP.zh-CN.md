@@ -5,7 +5,9 @@
 本文档是可组合 LLM Agent 定制边界的公开生成地图。版本化 `ComponentCatalog`
 位于 [`componentcatalog`](componentcatalog) 包，是这张地图的结构化底稿。Catalog
 与本视图都是 AgentSlot 的核心资产，不是对某一个实现中已有接口的简单罗列；Catalog
-只保存标准文档数据，不参与 Runtime 装配。
+只保存标准文档数据，不参与 Runtime 装配。它还记录公开可构造实现的身份、非秘密生成配置、
+依赖、冲突、Tool key 和两个确定性的 `agentslot init` 预设。这些脚手架元数据只用于生成
+显式源代码，不是 Runtime 服务定位器或隐藏默认值。
 
 这张地图回答组件开发者和应用开发者的四个问题：
 

@@ -75,9 +75,43 @@ type Component struct {
 	Evidence Evidence
 }
 
+// ConfigurationField describes one non-secret value required to emit an
+// implementation. Credential material is deliberately not representable.
+type ConfigurationField struct {
+	Key         string
+	Description string
+	Required    bool
+}
+
+// Implementation is scaffold metadata for one publicly constructible
+// implementation. It contains no component instance or configuration value.
+type Implementation struct {
+	ID                string
+	ComponentID       string
+	Package           string
+	Symbol            string
+	Available         bool
+	UnavailableReason string
+	Dependencies      []string
+	Conflicts         []string
+	Configuration     []ConfigurationField
+	ToolKeys          []string
+}
+
+// Preset is one deterministic, reviewable scaffold selection. ToolKeys is the
+// explicit allowlist emitted by the generator; it is never a Runtime default.
+type Preset struct {
+	ID              string
+	Title           string
+	Implementations []string
+	ToolKeys        []string
+}
+
 type Catalog struct {
 	StandardVersion string
 	Components      []Component
+	Implementations []Implementation
+	Presets         []Preset
 }
 
 type MaturityCounts struct {
@@ -118,6 +152,24 @@ func (c Catalog) Lookup(id string) (Component, bool) {
 		}
 	}
 	return Component{}, false
+}
+
+func (c Catalog) LookupImplementation(id string) (Implementation, bool) {
+	for _, implementation := range c.Implementations {
+		if implementation.ID == id {
+			return cloneImplementation(implementation), true
+		}
+	}
+	return Implementation{}, false
+}
+
+func (c Catalog) LookupPreset(id string) (Preset, bool) {
+	for _, preset := range c.Presets {
+		if preset.ID == id {
+			return clonePreset(preset), true
+		}
+	}
+	return Preset{}, false
 }
 
 var componentIDPattern = regexp.MustCompile(`^[a-z][a-z0-9.-]*$`)
@@ -173,13 +225,149 @@ func (c Catalog) Validate() error {
 			return fmt.Errorf("componentcatalog: component %q lacks assembly evidence", component.ID)
 		}
 	}
+	implementations, err := c.validateImplementations()
+	if err != nil {
+		return err
+	}
+	return c.validatePresets(implementations)
+}
+
+func (c Catalog) validateImplementations() (map[string]Implementation, error) {
+	implementations := make(map[string]Implementation, len(c.Implementations))
+	for _, implementation := range c.Implementations {
+		if !componentIDPattern.MatchString(implementation.ID) || implementation.Package == "" || implementation.Symbol == "" {
+			return nil, fmt.Errorf("componentcatalog: invalid implementation %q", implementation.ID)
+		}
+		if _, duplicate := implementations[implementation.ID]; duplicate {
+			return nil, fmt.Errorf("componentcatalog: duplicate implementation %q", implementation.ID)
+		}
+		component, ok := c.Lookup(implementation.ComponentID)
+		if !ok || (implementation.Available && !component.Contract.Available) {
+			return nil, fmt.Errorf("componentcatalog: implementation %q has an unavailable component", implementation.ID)
+		}
+		if implementation.Available == (implementation.UnavailableReason != "") {
+			return nil, fmt.Errorf("componentcatalog: implementation %q has inconsistent availability metadata", implementation.ID)
+		}
+		for _, dependency := range implementation.Dependencies {
+			if _, ok := c.Lookup(dependency); !ok {
+				return nil, fmt.Errorf("componentcatalog: implementation %q has unknown dependency %q", implementation.ID, dependency)
+			}
+		}
+		fields := make(map[string]struct{}, len(implementation.Configuration))
+		for _, field := range implementation.Configuration {
+			if !componentIDPattern.MatchString(field.Key) || field.Description == "" {
+				return nil, fmt.Errorf("componentcatalog: implementation %q has invalid configuration field %q", implementation.ID, field.Key)
+			}
+			if _, duplicate := fields[field.Key]; duplicate {
+				return nil, fmt.Errorf("componentcatalog: implementation %q repeats configuration field %q", implementation.ID, field.Key)
+			}
+			fields[field.Key] = struct{}{}
+		}
+		tools := make(map[string]struct{}, len(implementation.ToolKeys))
+		for _, key := range implementation.ToolKeys {
+			if key == "" {
+				return nil, fmt.Errorf("componentcatalog: implementation %q has an empty Tool key", implementation.ID)
+			}
+			if _, duplicate := tools[key]; duplicate {
+				return nil, fmt.Errorf("componentcatalog: implementation %q repeats Tool key %q", implementation.ID, key)
+			}
+			tools[key] = struct{}{}
+		}
+		implementations[implementation.ID] = implementation
+	}
+	for _, implementation := range implementations {
+		for _, conflict := range implementation.Conflicts {
+			if _, ok := implementations[conflict]; !ok || conflict == implementation.ID {
+				return nil, fmt.Errorf("componentcatalog: implementation %q has invalid conflict %q", implementation.ID, conflict)
+			}
+		}
+	}
+	return implementations, nil
+}
+
+func (c Catalog) validatePresets(implementations map[string]Implementation) error {
+	presets := make(map[string]struct{}, len(c.Presets))
+	for _, preset := range c.Presets {
+		if !componentIDPattern.MatchString(preset.ID) || preset.Title == "" || len(preset.Implementations) == 0 {
+			return fmt.Errorf("componentcatalog: invalid preset %q", preset.ID)
+		}
+		if _, duplicate := presets[preset.ID]; duplicate {
+			return fmt.Errorf("componentcatalog: duplicate preset %q", preset.ID)
+		}
+		selectedComponents := make(map[string]int)
+		selectedImplementations := make(map[string]struct{})
+		for _, id := range preset.Implementations {
+			implementation, ok := implementations[id]
+			if !ok || !implementation.Available {
+				return fmt.Errorf("componentcatalog: preset %q selects unavailable implementation %q", preset.ID, id)
+			}
+			if _, duplicate := selectedImplementations[id]; duplicate {
+				return fmt.Errorf("componentcatalog: preset %q repeats implementation %q", preset.ID, id)
+			}
+			selectedImplementations[id] = struct{}{}
+			selectedComponents[implementation.ComponentID]++
+		}
+		for _, id := range preset.Implementations {
+			for _, dependency := range implementations[id].Dependencies {
+				if selectedComponents[dependency] == 0 {
+					return fmt.Errorf("componentcatalog: preset %q omits dependency %q", preset.ID, dependency)
+				}
+			}
+			for _, conflict := range implementations[id].Conflicts {
+				if _, selected := selectedImplementations[conflict]; selected {
+					return fmt.Errorf("componentcatalog: preset %q selects conflicting implementations %q and %q", preset.ID, id, conflict)
+				}
+			}
+		}
+		for _, component := range c.Components {
+			for _, requirement := range component.Profiles {
+				if requirement.Name == "standard-agent" && selectedComponents[component.ID] < requirement.Minimum {
+					return fmt.Errorf("componentcatalog: preset %q omits standard requirement %q", preset.ID, component.ID)
+				}
+			}
+			if component.Kind == KindOne && selectedComponents[component.ID] > 1 {
+				return fmt.Errorf("componentcatalog: preset %q selects multiple implementations for One component %q", preset.ID, component.ID)
+			}
+		}
+		seenTools := make(map[string]struct{}, len(preset.ToolKeys))
+		availableTools := make(map[string]struct{})
+		for id := range selectedImplementations {
+			for _, key := range implementations[id].ToolKeys {
+				availableTools[key] = struct{}{}
+			}
+		}
+		for _, key := range preset.ToolKeys {
+			if key == "" {
+				return fmt.Errorf("componentcatalog: preset %q has an empty Tool key", preset.ID)
+			}
+			if _, duplicate := seenTools[key]; duplicate {
+				return fmt.Errorf("componentcatalog: preset %q repeats Tool key %q", preset.ID, key)
+			}
+			if _, available := availableTools[key]; !available {
+				return fmt.Errorf("componentcatalog: preset %q exposes unknown Tool key %q", preset.ID, key)
+			}
+			seenTools[key] = struct{}{}
+		}
+		presets[preset.ID] = struct{}{}
+	}
 	return nil
 }
 
 func Standard() Catalog {
-	result := Catalog{StandardVersion: standardCatalog.StandardVersion, Components: make([]Component, len(standardCatalog.Components))}
+	result := Catalog{
+		StandardVersion: standardCatalog.StandardVersion,
+		Components:      make([]Component, len(standardCatalog.Components)),
+		Implementations: make([]Implementation, len(standardCatalog.Implementations)),
+		Presets:         make([]Preset, len(standardCatalog.Presets)),
+	}
 	for index, component := range standardCatalog.Components {
 		result.Components[index] = cloneComponent(component)
+	}
+	for index, implementation := range standardCatalog.Implementations {
+		result.Implementations[index] = cloneImplementation(implementation)
+	}
+	for index, preset := range standardCatalog.Presets {
+		result.Presets[index] = clonePreset(preset)
 	}
 	return result
 }
@@ -191,6 +379,20 @@ func cloneComponent(component Component) Component {
 	component.Evidence.AssemblyEvidence = slices.Clone(component.Evidence.AssemblyEvidence)
 	component.Evidence.KnownGaps = slices.Clone(component.Evidence.KnownGaps)
 	return component
+}
+
+func cloneImplementation(implementation Implementation) Implementation {
+	implementation.Dependencies = slices.Clone(implementation.Dependencies)
+	implementation.Conflicts = slices.Clone(implementation.Conflicts)
+	implementation.Configuration = slices.Clone(implementation.Configuration)
+	implementation.ToolKeys = slices.Clone(implementation.ToolKeys)
+	return implementation
+}
+
+func clonePreset(preset Preset) Preset {
+	preset.Implementations = slices.Clone(preset.Implementations)
+	preset.ToolKeys = slices.Clone(preset.ToolKeys)
+	return preset
 }
 
 func profile(minimum int) []ProfileRequirement {
@@ -275,6 +477,45 @@ var standardCatalog = Catalog{StandardVersion: StandardVersion, Components: []Co
 	entry("operations", "trace.sink", "TraceSink", KindChain, MaturityContracted, module+"/observe", true, nil, "optional", "Receives correlated Runtime, Run, model-attempt, and tool lifecycle facts.", "可选", "接收相互关联的 Runtime、Run、模型 Attempt 和工具生命周期事实。"),
 	entry("operations", "metric.sink", "MetricSink", KindChain, MaturityContracted, module+"/observe", true, nil, "optional", "Receives normalized counters and duration measurements with detached attributes.", "可选", "接收带隔离属性副本的标准化计数与耗时度量。"),
 	entry("operations", "health.contributor", "HealthContributor", KindChain, MaturityMapped, "", false, nil, "optional", "Reports component readiness and health without exposing configuration values.", "可选", "报告组件就绪状态与健康状况，但不暴露配置值。"),
+}, Implementations: []Implementation{
+	{ID: "standard.loop", ComponentID: "agent.loop", Package: module + "/standardagent", Symbol: "standardagent.NewApplication default", Available: true},
+	{ID: "session.file", ComponentID: "session.store", Package: module + "/session", Symbol: "session.NewFileModule", Available: true, Configuration: []ConfigurationField{
+		{Key: "session-directory", Description: "Absolute durable Session directory outside the Workspace", Required: true},
+	}},
+	{ID: "model.openaicompat.executor", ComponentID: "model.executor", Package: module + "/model/openaicompat", Symbol: "openaicompat.NewModule", Available: true, Dependencies: []string{"credential.resolver"}, Configuration: []ConfigurationField{
+		{Key: "provider-key", Description: "Stable provider selection key", Required: true},
+		{Key: "provider-url", Description: "Credential-free absolute OpenAI-compatible base URL", Required: true},
+		{Key: "model-id", Description: "Provider model identifier", Required: true},
+		{Key: "credential-ref", Description: "Non-secret late-bound credential reference", Required: true},
+	}},
+	{ID: "model.openaicompat.counter", ComponentID: "model.token-counter", Package: module + "/model/openaicompat", Symbol: "openaicompat.NewModule default", Available: true},
+	{ID: "gateway.cli", ComponentID: "gateway.channel", Package: module + "/interaction/cli", Symbol: "cli.New", Available: true},
+	{ID: "credential.encrypted-file", ComponentID: "credential.resolver", Package: module + "/credential", Symbol: "credential.NewEncryptedFileResolver", Available: true, Configuration: []ConfigurationField{
+		{Key: "credential-file", Description: "Absolute encrypted credential file outside the Workspace", Required: true},
+		{Key: "credential-key-environment", Description: "Environment variable containing the independent decryption key", Required: true},
+	}},
+	{ID: "workspace.local", ComponentID: "workspace.manager", Package: module + "/workspace/local", Symbol: "local.NewModule", Available: true, Configuration: []ConfigurationField{
+		{Key: "workspace", Description: "Absolute local Workspace root", Required: true},
+	}},
+	{ID: "artifact.file", ComponentID: "artifact.store", Package: module + "/artifact/file", Symbol: "file.NewModule", Available: true, Configuration: []ConfigurationField{
+		{Key: "artifact-directory", Description: "Absolute immutable Artifact directory outside the Workspace", Required: true},
+	}},
+	{ID: "tool.files", ComponentID: "tool", Package: module + "/tool/files", Symbol: "files.NewModule", Available: true, Dependencies: []string{"workspace.manager", "policy.guard"}, ToolKeys: []string{"file_read", "file_write", "file_edit"}},
+	{ID: "tool.bash", ComponentID: "tool", Package: module + "/tool/bash", Symbol: "bash.NewModule", Available: true, Dependencies: []string{"workspace.manager", "policy.guard"}, ToolKeys: []string{"bash"}},
+	{ID: "tool.session-history", ComponentID: "tool", Package: module + "/tool/sessionhistory", Symbol: "sessionhistory.NewModule", Available: true, Dependencies: []string{"session.store"}, ToolKeys: []string{"session_history"}},
+	{ID: "policy.tool-rules", ComponentID: "policy.guard", Package: module + "/policy", Symbol: "policy.NewToolRuleGuard", Available: true, Dependencies: []string{"approval.service"}},
+	{ID: "approval.configured", ComponentID: "approval.service", Package: module + "/policy", Symbol: "policy.ApprovalFunc", Available: true, Configuration: []ConfigurationField{
+		{Key: "approval-environment", Description: "Environment variable explicitly enabling effectful actions", Required: true},
+	}},
+}, Presets: []Preset{
+	{ID: "local-coding", Title: "Local coding Agent", Implementations: []string{
+		"standard.loop", "session.file", "model.openaicompat.executor", "model.openaicompat.counter", "gateway.cli",
+		"credential.encrypted-file", "workspace.local", "artifact.file", "tool.files", "tool.bash", "tool.session-history",
+		"policy.tool-rules", "approval.configured",
+	}, ToolKeys: []string{"bash", "file_read", "file_write", "file_edit", "session_history"}},
+	{ID: "minimal-chat", Title: "Minimal chat Agent", Implementations: []string{
+		"standard.loop", "session.file", "model.openaicompat.executor", "model.openaicompat.counter", "gateway.cli", "credential.encrypted-file",
+	}},
 }}
 
 func init() {

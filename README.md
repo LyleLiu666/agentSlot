@@ -63,10 +63,11 @@ adapter resolves its bearer credential afresh for every physical retry.
 It holds only `HistoryReader`, returns a model-safe revision/sequence projection,
 preserves complete logical Steps under the inline output budget, and defaults
 to the current Workspace. Current-Session and explicitly authorized full-access
-ceilings are available at construction. The planned `agentslot init` terminal
-wizard will consume ComponentCatalog and generate explicit Go assembly code;
-its default local-coding preset keeps writes, shell commands, and external side
-effects behind approval. The wizard is not yet a current CLI.
+ceilings are available at construction. The `agentslot init` terminal wizard
+consumes ComponentCatalog and generates explicit Go assembly code. Its default
+`local-coding` preset keeps writes, shell commands, and external side effects
+behind approval; `minimal-chat` installs no Tools, Workspace, Artifact, or
+Approval components. The generator reads and writes no credential material.
 
 The generic core remains product-neutral. A standard LLM Agent explicitly uses
 `standardagent.NewApplication`, which returns the same `*agentslot.Application`
@@ -98,6 +99,27 @@ All implemented public boundaries remain at least `Contracted`.
 `model.token-counter` is Contracted and independently replaceable from
 `model.executor`. `session.store` is `Conformant` against the exact `v0.0.10`
 contract; no ecosystem is yet `Proven`.
+
+## Generate an explicit Agent project
+
+A released `agentslot` binary pins its own exact AgentSlot version. A source
+checkout must supply the release explicitly:
+
+```bash
+go run ./cmd/agentslot init --agentslot-version v0.0.10 ./my-agent
+```
+
+An interactive terminal selects a preset and collects only non-secret provider,
+model, `CredentialRef`, Workspace, and storage settings. Non-interactive use
+defaults to `local-coding` and exposes the same choices as flags. Repeat
+`--add-implementation` or `--remove-implementation` to customize the Catalog
+selection; required dependencies are either added with a visible reason or
+rejected before any file is written.
+
+The generated project contains a fixed `go.mod`, explicit Module assembly,
+standard Profile requirements, a strict Tool allowlist, approval policy, and a
+build test. It contains no local `replace` directive and never overwrites an
+existing target directory.
 
 ## Core model
 

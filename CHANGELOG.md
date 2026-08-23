@@ -59,6 +59,18 @@ when real consumers expose a flawed boundary.
   scope. The Tool preserves complete logical Steps while fitting its inline
   output budget and returns `result_too_large` instead of silently clipping one
   oversized Step.
+- Added crash-safe local reference implementations for `workspace.manager` and
+  `artifact.store`. Workspace roots stay private behind opaque scoped
+  boundaries; immutable Artifacts use content-derived IDs, self-describing
+  files, atomic rename, file and directory sync, and no backing-path exposure.
+- Extended ComponentCatalog with constructible implementation identities,
+  non-secret configuration fields, dependencies, conflicts, Tool keys, and
+  deterministic `local-coding` and `minimal-chat` presets.
+- Added `agentslot init`. It generates reviewable, version-pinned Go assembly
+  without local replaces or credential values, refuses existing targets,
+  validates Workspace/storage separation before writing, supports explicit
+  implementation customization, and reports automatically selected
+  dependencies. Generated preset fixtures pass build, race, and vet checks.
 
 ### Changed
 

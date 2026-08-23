@@ -7,7 +7,11 @@ composable LLM agent. The versioned `ComponentCatalog` in the
 [`componentcatalog`](componentcatalog) package is its structured source. The
 catalog and this view are primary AgentSlot assets, not a list of whatever
 interfaces happen to exist in one implementation. The catalog is documentation
-data and never participates in Runtime assembly.
+data and never participates in Runtime assembly. It also records publicly
+constructible implementation identities, non-secret generation settings,
+dependencies, conflicts, Tool keys, and the two deterministic `agentslot init`
+presets. This scaffold metadata selects explicit source code; it is not a
+Runtime service locator or hidden default.
 
 The map answers four questions for component authors and application authors:
 
