@@ -6,7 +6,15 @@ when real consumers expose a flawed boundary.
 
 ## Unreleased
 
-No changes yet.
+### Added
+
+- Added the versioned public `componentcatalog` package as the structured
+  source for all 41 standard component ecosystems, including localized
+  responsibilities, cardinality, profile requirements, contract availability,
+  maturity, evidence identities, and known gaps.
+- Added deterministic English and Chinese component-map generation plus a
+  repository drift test. The catalog is documentation data only and does not
+  participate in Runtime assembly.
 
 ## v0.0.10 - 2026-08-22
 

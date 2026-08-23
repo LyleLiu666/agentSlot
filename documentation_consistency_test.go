@@ -1,11 +1,13 @@
 package agentslot_test
 
 import (
+	"bytes"
 	"os"
 	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/LyleLiu666/agentSlot/componentcatalog"
 	"github.com/LyleLiu666/agentSlot/loop"
 )
 
@@ -36,6 +38,31 @@ func TestComponentMapsStaySynchronized(t *testing.T) {
 	}
 }
 
+func TestComponentMapsAreGeneratedFromCatalog(t *testing.T) {
+	tests := []struct {
+		path   string
+		locale componentcatalog.Locale
+	}{
+		{path: "COMPONENT_MAP.md", locale: componentcatalog.LocaleEnglish},
+		{path: "COMPONENT_MAP.zh-CN.md", locale: componentcatalog.LocaleChinese},
+	}
+	for _, tc := range tests {
+		t.Run(tc.path, func(t *testing.T) {
+			current, err := os.ReadFile(tc.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			generated, err := componentcatalog.RewriteMarkdown(tc.locale, current)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(current, generated) {
+				t.Fatalf("%s drifted from ComponentCatalog; run go generate ./componentcatalog", tc.path)
+			}
+		})
+	}
+}
+
 func TestPublicDocsDescribeAgentLoopAsAStandardProfileSlot(t *testing.T) {
 	readme := readDocument(t, "README.md")
 
@@ -49,6 +76,15 @@ func TestPublicDocsDescribeAgentLoopAsAStandardProfileSlot(t *testing.T) {
 	componentSlots := componentMapSlots(t, "COMPONENT_MAP.zh-CN.md")
 	if _, exists := componentSlots[loop.AgentLoopSlot.ID()]; !exists {
 		t.Fatalf("Chinese component map does not contain %s", loop.AgentLoopSlot.ID())
+	}
+}
+
+func TestPublicDocsNameComponentCatalogAsTheStructuredSource(t *testing.T) {
+	for _, path := range []string{"README.md", "COMPONENT_MAP.md", "COMPONENT_MAP.zh-CN.md"} {
+		document := readDocument(t, path)
+		if !strings.Contains(document, "ComponentCatalog") || !strings.Contains(document, "componentcatalog") {
+			t.Fatalf("%s does not identify ComponentCatalog and its Go package", path)
+		}
 	}
 }
 

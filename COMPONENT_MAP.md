@@ -2,9 +2,12 @@
 
 [English](COMPONENT_MAP.md) | [简体中文](COMPONENT_MAP.zh-CN.md)
 
-This document is the authoritative map of the customization seams in a
-composable LLM agent. It is a primary AgentSlot asset, not a list of whatever
-interfaces happen to exist in one implementation.
+This document is the generated public map of the customization seams in a
+composable LLM agent. The versioned `ComponentCatalog` in the
+[`componentcatalog`](componentcatalog) package is its structured source. The
+catalog and this view are primary AgentSlot assets, not a list of whatever
+interfaces happen to exist in one implementation. The catalog is documentation
+data and never participates in Runtime assembly.
 
 The map answers four questions for component authors and application authors:
 
@@ -59,11 +62,11 @@ Its description uses `AssemblyDescription` and the `agentslot.assembly/v0` schem
 
 | Slot ID | Standard contract | Kind | Required cardinality | Responsibility |
 | --- | --- | --- | --- | --- |
-| `agent.loop` | `AgentLoop` | `One` | exactly 1 | Owns the Agent execution strategy through run-scoped Runtime actions while Runtime retains identity, transactions, budgets, cancellation, recovery, and fact ownership. |
-| `session.store` | `SessionStore` | `One` | exactly 1 | Persists the Session aggregate—History, Context, Queue, RunJournal, SessionModelConfig, revisions, and atomic CAS transactions—and lists resumable Sessions through bounded Agent/Workspace cursor pages. |
-| `model.executor` | `ModelExecutor` | `One` | exactly 1 | Executes one logical model call while containing provider-specific physical attempts, streaming recovery, opaque continuation state, and final failure semantics. |
-| `model.token-counter` | planned `TokenCounter` | `One` | exactly 1 in the approved target; not yet enforced | Produces one authoritative pre-call planning count for the complete provider-visible request; fails closed when no defensible safe count is available. |
-| `gateway.channel` | `GatewayChannel` | `Many` | at least 1 | Binds a TUI, Web, desktop, function, HTTP, inbound ACP, or another caller-facing channel to the fixed Gateway. |
+| `agent.loop` | `AgentLoop` | `One` | exactly 1 | Owns replaceable Agent execution strategy through constrained Runtime actions; the current `Run.Step` contract is scheduled for redesign and does not define the Slot's final capability ceiling. |
+| `session.store` | `SessionStore` | `One` | exactly 1 | Persists the whole Session aggregate, including SessionModelConfig, and its atomic revision/CAS transactions; lists resumable Sessions through bounded, deterministic, lifecycle-scoped cursor pages within an Agent/Workspace scope; History remains the unique append-only fact view inside that aggregate. |
+| `model.executor` | `ModelExecutor` | `One` | exactly 1 | Validates selected-model capabilities, executes one logical model call, contains retries and continuation, reports post-call usage, and durably records each physical attempt through the restricted AttemptRecorder. |
+| `model.token-counter` | `TokenCounter` | `One` | exactly 1 | Counts the complete provider-visible request for pre-call planning, using an exact tokenizer or a validated conservative bound and failing closed when neither is defensible. |
+| `gateway.channel` | `GatewayChannel` | `Many` | at least 1 | Binds one caller-facing protocol, function API, or UI to the fixed Gateway and receives only `GatewayAccess`; gRPC, WebSocket, SSH, and inbound ACP are alternative implementations of this Slot. |
 
 `AgentRuntime` and the in-process Gateway remain framework control-plane
 behavior, not Slots. The selected `AgentLoop` controls execution strategy through
@@ -210,7 +213,7 @@ evaluation takes precedence. Goal state remains outside conversation History.
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
 | `model.executor` | `ModelExecutor` | `One` | globally required | Validates selected-model capabilities, executes one logical model call, contains retries and continuation, reports post-call usage, and durably records each physical attempt through the restricted AttemptRecorder. | Contracted |
-| `model.token-counter` | planned `TokenCounter` | `One` | globally required by the approved target profile; not yet enforced | Counts the complete provider-visible request for pre-call planning, using an exact tokenizer or a validated conservative bound and failing closed when neither is defensible. | Mapped |
+| `model.token-counter` | `TokenCounter` | `One` | globally required by the approved target profile; not yet enforced | Counts the complete provider-visible request for pre-call planning, using an exact tokenizer or a validated conservative bound and failing closed when neither is defensible. | Mapped |
 | `model.attempt.observer` | `AttemptObserver` | `Chain` | optional | Synchronously records or rejects one physical provider attempt before dispatch and after completion; unlike passive telemetry it may fail closed. | Contracted |
 | `model.provider` | `ModelProvider` | `Many` | optional; required only by an Executor that declares it | Implements named provider access for Executors that compose local adapters. | Mapped |
 | `model.selector` | `ModelSelector` | `One` | optional; conditional for dynamic routing | Selects a provider/model using explicit request and policy inputs. | Mapped |

@@ -15,8 +15,13 @@ Typed component slots and deterministic composition for agent systems.
 
 > A module unifies registration and lifecycle. A slot defines the component ecosystem, interface, cardinality, and ordering rule.
 
-The English and Chinese component maps remain the authoritative public
-inventory and maturity scorecard.
+The versioned `ComponentCatalog` in the public
+[`componentcatalog`](componentcatalog) package is the structured source for
+Slot identity, cardinality, profile requirements, contract availability,
+maturity, and evidence gaps. The English and Chinese component maps are its
+generated public views and remain the human-readable maturity scorecard. The
+catalog contains no component instances and is never consulted by Runtime
+assembly.
 
 The standard AgentRuntime fixes Session ownership, CAS, cancellation, and
 Gateway control. Its Run-control policy is the unique replaceable `agent.loop`
