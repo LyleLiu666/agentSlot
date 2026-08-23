@@ -44,6 +44,9 @@ type ToolInvocation struct {
 	SessionID   agent.SessionID
 	AgentID     agent.AgentID
 	WorkspaceID agent.WorkspaceID
+	// Actor is the trusted caller identity assigned by the fixed Runtime. For
+	// model-requested tools it is the current Agent, never a model argument.
+	Actor agent.ActorIdentity
 	// WorkspaceBoundary is the opaque binding returned by an installed
 	// Workspace Manager. It is nil when the optional Manager is absent.
 	WorkspaceBoundary workspace.Boundary

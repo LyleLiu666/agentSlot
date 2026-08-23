@@ -117,7 +117,7 @@ func TestToolResultValidatesStandardArtifactReferencesAndInlineBudget(t *testing
 }
 
 func TestToolInvocationCarriesSessionIdentity(t *testing.T) {
-	invocation := tool.ToolInvocation{SessionID: agent.SessionID("session-1"), AgentID: "agent-1", WorkspaceID: "workspace-1", RunID: "run-1", StepID: "step-1", MaxInlineOutputBytes: 4096}
+	invocation := tool.ToolInvocation{SessionID: agent.SessionID("session-1"), AgentID: "agent-1", WorkspaceID: "workspace-1", Actor: agent.ActorIdentity{Kind: agent.ActorAgent, ID: "agent-1"}, RunID: "run-1", StepID: "step-1", MaxInlineOutputBytes: 4096}
 	if invocation.SessionID != "session-1" || invocation.AgentID != "agent-1" || invocation.WorkspaceID != "workspace-1" || invocation.RunID != "run-1" || invocation.StepID != "step-1" || invocation.MaxInlineOutputBytes != 4096 {
 		t.Fatalf("invocation identity lost: %#v", invocation)
 	}

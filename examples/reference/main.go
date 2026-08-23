@@ -28,6 +28,7 @@ import (
 	"github.com/LyleLiu666/agentSlot/tool/bash"
 	"github.com/LyleLiu666/agentSlot/tool/files"
 	httptool "github.com/LyleLiu666/agentSlot/tool/http"
+	"github.com/LyleLiu666/agentSlot/tool/sessionhistory"
 )
 
 type referenceConfig struct {
@@ -170,7 +171,7 @@ func buildReferenceApplication(config referenceConfig, channels ...agentslot.Mod
 		return nil, err
 	}
 	modules := []agentslot.Module{
-		sessions, provider, bashTool, fileTools, httpTool, policyModule, observations,
+		sessions, provider, bashTool, fileTools, httpTool, sessionhistory.NewModule(sessionhistory.Config{Scope: sessionhistory.ScopeSameWorkspace}), policyModule, observations,
 		interaction.NewModelCommandModule(),
 	}
 	if credentialModule != nil {
@@ -181,7 +182,7 @@ func buildReferenceApplication(config referenceConfig, channels ...agentslot.Mod
 		Name: "reference-agent", DefaultModelConfig: defaultModel,
 		RuntimeConfig: standardagent.AgentRuntimeConfig{
 			SystemPrompt:             "You are a careful coding agent. Use installed tools only when they materially help the user.",
-			ToolKeys:                 []string{bash.Key, files.ReadKey, files.WriteKey, files.EditKey, httptool.Key},
+			ToolKeys:                 []string{bash.Key, files.ReadKey, files.WriteKey, files.EditKey, httptool.Key, sessionhistory.Key},
 			ContextRetentionMode:     config.contextRetentionMode,
 			MaxTokensPerRun:          config.maxTokensPerRun,
 			MaxInlineToolResultBytes: 64 << 10,

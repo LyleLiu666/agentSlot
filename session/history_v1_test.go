@@ -277,6 +277,9 @@ func TestHistoryPageUsesExclusiveSequenceCursorAndKeepsStepsWhole(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	if page.AgentID != created.Session.AgentID || page.WorkspaceID != created.Session.WorkspaceID || page.Revision != created.Revision {
+		t.Fatalf("history page identity = %#v", page)
+	}
 	if len(page.Facts) != 2 || page.Facts[0].StepID != "step-2" || !page.HasMore {
 		t.Fatalf("latest page = %#v", page)
 	}

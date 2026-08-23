@@ -309,12 +309,12 @@ must not create, load, recover, or start a Session Runtime.
 The standard Compactor contract is replaceable: any “summary plus last three
 inbound messages” algorithm is a default implementation, not a framework
 invariant.
-The approved `session_history` target is a keyed standard Tool rather than a
-new Slot. It returns a model-safe, revision-traceable projection through a
-narrow read-only History boundary. Its configurable ceiling is current Session,
-same Workspace, or explicit full access; same Workspace is the default and an
-AuthorizationProvider may only narrow it. This Tool and configuration are not
-yet published APIs.
+`session_history` is a keyed standard Tool rather than a new Slot. It returns a
+model-safe, revision/sequence-traceable projection through a narrow read-only
+History boundary, preserves complete logical Steps under the ToolResult budget,
+and never opens Artifact content automatically. Its configurable ceiling is
+current Session, same Workspace, or explicitly authorized full access; same
+Workspace is the default, and its public Authorizer hook can only narrow it.
 The `memory` package fixes portable scope and memory-kind vocabularies and
 provides optional recall/remember/forget tools plus a pre-recall ContextSource.
 Its Store contract preserves four typed candidate payloads, source and

@@ -206,7 +206,7 @@ func assertReferenceSessionFacts(t *testing.T, directory string, sessionID agent
 		t.Fatalf("persisted model config = %#v", snapshot.ModelConfig)
 	}
 	request := snapshot.Context.Request
-	if snapshot.Context.Version != 2 || len(snapshot.RetainedContexts) != 0 || request.Config != snapshot.ModelConfig || len(request.Tools) != 5 ||
+	if snapshot.Context.Version != 2 || len(snapshot.RetainedContexts) != 0 || request.Config != snapshot.ModelConfig || len(request.Tools) != 6 ||
 		len(request.Inputs) == 0 || request.Inputs[0].SystemPrompt == nil {
 		t.Fatalf("latest complete Context = %#v", snapshot.Context)
 	}

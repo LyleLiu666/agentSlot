@@ -59,12 +59,14 @@ material inside one physical-operation callback, and may copy only the opaque,
 non-reversible identity into billing or audit facts. The OpenAI-compatible
 adapter resolves its bearer credential afresh for every physical retry.
 
-The planned `session_history` capability is a standard keyed Tool, not another
-Slot. Its default read ceiling is the current Workspace, with explicit current-
-Session and full-access product modes. The planned `agentslot init` terminal
+`session_history` is a standard keyed, read-only Tool rather than another Slot.
+It holds only `HistoryReader`, returns a model-safe revision/sequence projection,
+preserves complete logical Steps under the inline output budget, and defaults
+to the current Workspace. Current-Session and explicitly authorized full-access
+ceilings are available at construction. The planned `agentslot init` terminal
 wizard will consume ComponentCatalog and generate explicit Go assembly code;
 its default local-coding preset keeps writes, shell commands, and external side
-effects behind approval. Neither capability is a current CLI or Go API.
+effects behind approval. The wizard is not yet a current CLI.
 
 The generic core remains product-neutral. A standard LLM Agent explicitly uses
 `standardagent.NewApplication`, which returns the same `*agentslot.Application`

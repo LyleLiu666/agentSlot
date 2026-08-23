@@ -95,6 +95,9 @@ func TestRuntimeSuppliesTrustedWorkspaceScopeInsteadOfToolArguments(t *testing.T
 		if invocation.AgentID != scope.AgentID || invocation.WorkspaceID != scope.WorkspaceID {
 			t.Fatalf("trusted invocation scope = %q/%q, want %q/%q", invocation.AgentID, invocation.WorkspaceID, scope.AgentID, scope.WorkspaceID)
 		}
+		if invocation.Actor.Kind != agent.ActorAgent || invocation.Actor.ID != string(scope.AgentID) {
+			t.Fatalf("trusted invocation actor = %#v", invocation.Actor)
+		}
 		if invocation.WorkspaceBoundary == nil || invocation.WorkspaceBoundary.Scope() != scope {
 			t.Fatalf("WorkspaceBoundary = %#v, want exact trusted scope", invocation.WorkspaceBoundary)
 		}

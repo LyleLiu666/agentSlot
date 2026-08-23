@@ -267,9 +267,10 @@ Store 生命周期及完全相同的 Agent/Workspace 作用域。列出 Session 
 恢复或启动 Session Runtime。
 标准 Compactor 契约允许整体替换；“摘要 + 最近三条 inbound”只是默认实现，
 不是框架不变量。
-获准的 `session_history` 目标是标准具名 Tool，不新增 Slot。它通过窄只读 History 边界返回
-可追溯 revision 的模型安全视图；读取上限可配置为当前 Session、同 Workspace 或显式 full
-access，默认同 Workspace，AuthorizationProvider 只能进一步收紧。该 Tool 和配置尚未发布。
+`session_history` 已实现为标准具名 Tool，不新增 Slot。它通过窄只读 History 边界返回可追溯
+revision/sequence 的模型安全视图，在 ToolResult 预算内保留完整逻辑 Step，并且不自动打开
+Artifact 内容。读取上限可配置为当前 Session、同 Workspace 或显式授权的 full access；默认同
+Workspace，公开 Authorizer 钩子只能进一步收紧。
 `memory` 包固定可移植的 scope 与 memory kind 词汇，并提供可选的
 recall/remember/forget 工具和预召回 ContextSource。Store 契约完整保留四种 typed
 candidate payload、来源与可信度、执行 provenance、显式 visibility/writeback 治理、

@@ -134,7 +134,14 @@ func (s *MemoryStore) HistoryPage(ctx context.Context, request HistoryPageReques
 	if !ok {
 		return HistoryPage{}, agent.NewCodedError(agent.ErrorNotFound, agent.CodeSessionNotFound, "session.history_page", "session not found", nil)
 	}
-	return historyPage(aggregate.snapshot.History, request)
+	page, err := historyPage(aggregate.snapshot.History, request)
+	if err != nil {
+		return HistoryPage{}, err
+	}
+	page.AgentID = aggregate.snapshot.Session.AgentID
+	page.WorkspaceID = aggregate.snapshot.Session.WorkspaceID
+	page.Revision = aggregate.snapshot.Revision
+	return page, nil
 }
 
 func (s *MemoryStore) Load(ctx context.Context, ref SessionRef) (Snapshot, error) {

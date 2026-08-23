@@ -147,7 +147,9 @@ func (d *toolDispatcher) invoke(ctx context.Context, call agent.ToolCall, before
 	}()
 	result = installed.value.Invoke(ctx, tool.ToolInvocation{
 		Call:      tool.Call{ID: call.ID, Name: call.Name, Arguments: append([]byte(nil), call.Arguments...)},
-		SessionID: call.SessionID, AgentID: scope.AgentID, WorkspaceID: scope.WorkspaceID, WorkspaceBoundary: boundary, MaxInlineOutputBytes: d.maxInlineOutputBytes, RunID: call.RunID, StepID: call.StepID,
+		SessionID: call.SessionID, AgentID: scope.AgentID, WorkspaceID: scope.WorkspaceID,
+		Actor:             agent.ActorIdentity{Kind: agent.ActorAgent, ID: string(scope.AgentID)},
+		WorkspaceBoundary: boundary, MaxInlineOutputBytes: d.maxInlineOutputBytes, RunID: call.RunID, StepID: call.StepID,
 	})
 	if result.Status == tool.ResultUnknown {
 		return failedToolResult(call.ID, "invalid_tool_result", "outcome_unknown is reserved for crash recovery"), true

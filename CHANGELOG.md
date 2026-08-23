@@ -51,6 +51,14 @@ when real consumers expose a flawed boundary.
   construction accepts a Resolver, while Modules explicitly depend on
   `credential.resolver` and resolve the configured Ref for every physical HTTP
   attempt.
+- Added the keyed, read-only `session_history` Tool with current-Session,
+  same-Workspace, and explicitly authorized full-access ceilings. It uses only
+  a narrow HistoryReader and returns safe revision/sequence projections without
+  provider attempt identities, continuation state, actors, or Context internals.
+- Session history pages now atomically report revision and Agent/Workspace
+  scope. The Tool preserves complete logical Steps while fitting its inline
+  output budget and returns `result_too_large` instead of silently clipping one
+  oversized Step.
 
 ### Changed
 
