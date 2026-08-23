@@ -84,11 +84,12 @@ never selects a Loop or any other domain component.
 
 ## Status
 
-AgentSlot is a pre-1.0 foundation. `v0.0.10` is the current validation release
-and is intended to be consumed by real Agent projects. It includes the
-contracted Goal, Memory, Workflow, Billing, Agent Loop, immutable Artifact
-Store, and bounded Session-list pagination boundaries developed after the first
-complete reference Agent path. It is not a
+AgentSlot is a pre-1.0 foundation. `v0.1.0` is the current validation release
+and is intended to be consumed by real Agent projects. It adds independent
+token counting, controlled Loop actions, late-bound credentials, trusted
+Workspace boundaries, bounded Tool results, durable Artifact and Workspace
+references, safe Session history access, explicit project generation, and
+remote gRPC/ACP Gateway channels. It is not a
 stable-production claim, and public APIs may still change based on integration
 feedback. The composition core works today; the standard
 component map is normative, while its ecosystems remain at their explicitly
@@ -106,7 +107,7 @@ A released `agentslot` binary pins its own exact AgentSlot version. A source
 checkout must supply the release explicitly:
 
 ```bash
-go run ./cmd/agentslot init --agentslot-version v0.0.10 ./my-agent
+go run ./cmd/agentslot init --agentslot-version v0.1.0 ./my-agent
 ```
 
 An interactive terminal selects a preset and collects only non-secret provider,

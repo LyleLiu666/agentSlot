@@ -94,6 +94,41 @@ func TestExplicitAgentLoopReplacesStandardDefaultWithoutRuntimeBranch(t *testing
 	}
 }
 
+func TestLegacyStepLoopRemainsUsableThroughControlledRuntime(t *testing.T) {
+	replacement := &legacyStepLoop{}
+	module, err := loop.NewModule("test.legacy-step-loop", replacement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installed := &countingTool{definition: testToolDefinition(t, "echo")}
+	executor := model.NewFakeModelExecutor(
+		model.FakeExecution{Events: []model.ModelEvent{{Kind: model.EventComplete, Output: &model.Completion{ToolCalls: []model.ToolCallRequest{{Name: "echo", Arguments: []byte(`{"value":"one"}`)}}}}}},
+		model.FakeExecution{Events: []model.ModelEvent{complete("done")}},
+	)
+	access, stop := startRuntimeTestApplicationWithConfig(t, executor, AgentRuntimeConfig{ToolKeys: []string{"echo"}, MaxInlineToolResultBytes: 1024}, module, toolModule{key: "echo", value: installed})
+	defer stop()
+	opened := createRuntimeTestSession(t, access)
+	if _, err := access.Send(context.Background(), interaction.SendRequest{SessionID: opened.SessionID, ExpectedRevision: opened.Revision, Input: textInput("run")}); err != nil {
+		t.Fatal(err)
+	}
+	waitRuntimeIdle(t, access, opened.SessionID)
+	if replacement.steps.Load() != 2 || installed.calls.Load() != 1 || len(executor.Requests()) != 2 {
+		t.Fatalf("legacy steps=%d tool calls=%d model requests=%d", replacement.steps.Load(), installed.calls.Load(), len(executor.Requests()))
+	}
+}
+
+type legacyStepLoop struct{ steps atomic.Int64 }
+
+func (l *legacyStepLoop) Run(ctx context.Context, run loop.Run) (loop.Outcome, error) {
+	for {
+		outcome, err := run.Step(ctx)
+		l.steps.Add(1)
+		if err != nil || outcome != loop.OutcomeContinue {
+			return outcome, err
+		}
+	}
+}
+
 type recordingLoop struct {
 	calls   atomic.Int64
 	steps   atomic.Int64

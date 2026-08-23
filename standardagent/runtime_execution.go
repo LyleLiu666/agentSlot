@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	agent "github.com/LyleLiu666/agentSlot/agent"
@@ -150,19 +151,20 @@ func (r *runtimeInstance) runLoopWithPrepared(run *activeRun, step agent.StepID,
 }
 
 type runtimeLoopRun struct {
-	runtime      *runtimeInstance
-	run          *activeRun
-	step         agent.StepID
-	lifecycleMu  sync.Mutex
-	closed       bool
-	active       bool
-	activeDone   chan struct{}
-	stateMu      sync.Mutex
-	terminal     bool
-	outcome      agentloop.Outcome
-	state        agentloop.State
-	nextStep     agent.StepID
-	pendingTools []agent.ToolCall
+	runtime        *runtimeInstance
+	run            *activeRun
+	step           agent.StepID
+	lifecycleMu    sync.Mutex
+	closed         bool
+	active         bool
+	activeDone     chan struct{}
+	stateMu        sync.Mutex
+	terminal       bool
+	outcome        agentloop.Outcome
+	state          agentloop.State
+	nextStep       agent.StepID
+	pendingTools   []agent.ToolCall
+	legacyStepping atomic.Bool
 }
 
 func (r *runtimeLoopRun) SessionID() agent.SessionID { return r.runtime.id() }
@@ -174,6 +176,48 @@ func (r *runtimeLoopRun) State() agentloop.State {
 		return agentloop.StateReadyForModel
 	}
 	return r.state
+}
+
+func (r *runtimeLoopRun) Step(ctx context.Context) (agentloop.Outcome, error) {
+	if !r.legacyStepping.CompareAndSwap(false, true) {
+		return agentloop.OutcomeFailed, errors.New("standardagent: AgentLoop called Run.Step concurrently")
+	}
+	defer r.legacyStepping.Store(false)
+	state := r.State()
+	if state == agentloop.StateContinueReady {
+		var err error
+		state, err = r.Act(ctx, agentloop.Action{Kind: agentloop.ActionContinue})
+		if err != nil {
+			return agentloop.OutcomeFailed, err
+		}
+	}
+	if state == agentloop.StateReadyForModel {
+		var err error
+		state, err = r.Act(ctx, agentloop.Action{Kind: agentloop.ActionRequestModel})
+		if err != nil {
+			return agentloop.OutcomeFailed, err
+		}
+	}
+	if state == agentloop.StateToolsReady {
+		var err error
+		state, err = r.Act(ctx, agentloop.Action{Kind: agentloop.ActionExecuteTools})
+		if err != nil {
+			return agentloop.OutcomeFailed, err
+		}
+	}
+	if state == agentloop.StateContinueReady {
+		return agentloop.OutcomeContinue, nil
+	}
+	outcome := loopOutcomeFromState(state)
+	if !outcome.Terminal() {
+		return agentloop.OutcomeFailed, errors.New("standardagent: Runtime returned an unknown Loop state")
+	}
+	if outcome != agentloop.OutcomeWaiting {
+		if _, err := r.Act(ctx, agentloop.Action{Kind: agentloop.ActionFinish, Outcome: outcome}); err != nil {
+			return agentloop.OutcomeFailed, err
+		}
+	}
+	return outcome, nil
 }
 
 func (r *runtimeLoopRun) Act(ctx context.Context, action agentloop.Action) (agentloop.State, error) {

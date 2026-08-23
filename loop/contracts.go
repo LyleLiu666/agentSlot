@@ -99,6 +99,12 @@ func (s State) Valid() bool {
 type Run interface {
 	SessionID() agent.SessionID
 	RunID() agent.RunID
+	// Step preserves the v0.0.x one-step Loop API on top of the controlled
+	// action protocol. New Loop implementations should use State and Act so
+	// policy decisions remain explicit.
+	//
+	// Deprecated: use State and Act.
+	Step(context.Context) (Outcome, error)
 	// State reports the current framework-owned state, including a recovered
 	// prepared-tool state presented to a newly constructed Loop instance.
 	State() State

@@ -4,7 +4,7 @@ This file records published AgentSlot releases. The project is pre-1.0: a
 validation release is usable through Go modules, but its public API may change
 when real consumers expose a flawed boundary.
 
-## Unreleased
+## v0.1.0 - 2026-08-23
 
 ### Added
 
@@ -39,7 +39,9 @@ when real consumers expose a flawed boundary.
 - Replaced the former one-step AgentLoop driver with ordered, Run-scoped
   Runtime actions for model requests, prepared tool batches, continuation,
   waiting, and termination. A recovered prepared ToolCall re-enters the same
-  public Loop protocol without changing its identity.
+  public Loop protocol without changing its identity. The deprecated
+  `Run.Step` entry point remains source-compatible and delegates to those
+  controlled actions; new Loop implementations should use `State` and `Act`.
 - Runtime rejects concurrent, out-of-order, forged-terminal, and post-terminal
   Loop actions; cancellation, Loop errors, and panics converge to durable Run
   terminal facts without granting the Loop Store or Gateway access.
@@ -87,7 +89,22 @@ when real consumers expose a flawed boundary.
 
 - Removed planning-time `CountTokens` from `ModelExecutor`; execution,
   capability inspection, retry/continuation, and post-call usage remain the
-  Executor's responsibility.
+  Executor's responsibility. The concrete fake and OpenAI-compatible
+  executors retain deprecated `CountTokens` methods for source compatibility;
+  composition resolves the independent `model.token-counter` Slot.
+
+### Migration
+
+- Existing `v0.0.x` consumers remain pinned until they opt in. Standard Agent
+  assemblies must now provide `model.token-counter`; the fake and
+  OpenAI-compatible modules provide matching implementations.
+- OpenAI-compatible provider credentials move from `Config.APIKey` to a
+  non-secret `CredentialRef` plus `credential.resolver`. This is intentionally
+  not shimmed because retaining the old field would retain credential material
+  inside the Executor.
+- Existing AgentLoop implementations using `Run.Step` continue to compile and
+  run. New implementations should migrate to the explicit `State`/`Act`
+  protocol to control model, tool, continuation, waiting, and finish actions.
 
 ## v0.0.10 - 2026-08-22
 

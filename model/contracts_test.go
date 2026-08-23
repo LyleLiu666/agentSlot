@@ -103,6 +103,19 @@ func TestTokenCounterIsIndependentOneTypedSlot(t *testing.T) {
 	}
 }
 
+func TestFakeExecutorKeepsConcreteCountTokensCompatibility(t *testing.T) {
+	executor := model.NewFakeModelExecutor()
+	request := model.ModelRequest{}
+	want, err := model.NewFakeTokenCounter().CountTokens(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := executor.CountTokens(context.Background(), request)
+	if err != nil || got != want {
+		t.Fatalf("CountTokens() = %d, %v; want %d, nil", got, err, want)
+	}
+}
+
 func TestNewTokenCounterModuleValidatesAndContributesExplicitCounter(t *testing.T) {
 	if _, err := model.NewTokenCounterModule("", counter{}); err == nil {
 		t.Fatal("empty module ID accepted")

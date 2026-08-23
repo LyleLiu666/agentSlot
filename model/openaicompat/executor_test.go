@@ -103,6 +103,20 @@ func TestExecutorCountsImageSemanticsInsteadOfBase64PayloadBytes(t *testing.T) {
 	}
 }
 
+func TestExecutorKeepsConcreteCountTokensCompatibility(t *testing.T) {
+	executor := newExecutor(t, "https://example.invalid", "")
+	counter := newTokenCounter(t, "https://example.invalid", "")
+	request := requestWithUser("compatibility")
+	want, err := counter.CountTokens(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := executor.CountTokens(context.Background(), request)
+	if err != nil || got != want {
+		t.Fatalf("CountTokens() = %d, %v; want %d, nil", got, err, want)
+	}
+}
+
 func TestExecutorFallbackUsageDoesNotBillBase64TransportAsTokens(t *testing.T) {
 	png, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlN8AAAAASUVORK5CYII=")
 	if err != nil {

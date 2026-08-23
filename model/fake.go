@@ -140,6 +140,15 @@ func (FakeTokenCounter) CountTokens(_ context.Context, request ModelRequest) (in
 	return fakeTokenEstimate(request), nil
 }
 
+// CountTokens preserves the concrete FakeModelExecutor API used before token
+// counting became an independently replaceable Slot. Runtime composition must
+// resolve TokenCounterSlot instead of relying on this convenience method.
+//
+// Deprecated: install NewFakeTokenCounter through TokenCounterSlot.
+func (*FakeModelExecutor) CountTokens(ctx context.Context, request ModelRequest) (int, error) {
+	return FakeTokenCounter{}.CountTokens(ctx, request)
+}
+
 func fakeTokenEstimate(request ModelRequest) int {
 	count := 0
 	for _, input := range request.Inputs {

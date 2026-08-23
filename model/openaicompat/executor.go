@@ -237,6 +237,16 @@ func (c *TokenCounter) CountTokens(ctx context.Context, request model.ModelReque
 	return c.executor.countTokens(ctx, request)
 }
 
+// CountTokens preserves the concrete Executor API used before token counting
+// became an independently replaceable Slot. Runtime composition must resolve
+// model.TokenCounterSlot instead of relying on this convenience method.
+//
+// Deprecated: construct TokenCounter with NewTokenCounter or resolve
+// model.TokenCounterSlot from an Assembly.
+func (e *Executor) CountTokens(ctx context.Context, request model.ModelRequest) (int, error) {
+	return e.countTokens(ctx, request)
+}
+
 func (e *Executor) countTokens(ctx context.Context, request model.ModelRequest) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
