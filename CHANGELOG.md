@@ -36,6 +36,13 @@ when real consumers expose a flawed boundary.
 - Runtime now converts invalid or oversized Tool results into a durable
   structured contract failure, stops the Run, aborts later serial calls, and
   never silently truncates or retries the possibly effectful Tool.
+- Replaced the former one-step AgentLoop driver with ordered, Run-scoped
+  Runtime actions for model requests, prepared tool batches, continuation,
+  waiting, and termination. A recovered prepared ToolCall re-enters the same
+  public Loop protocol without changing its identity.
+- Runtime rejects concurrent, out-of-order, forged-terminal, and post-terminal
+  Loop actions; cancellation, Loop errors, and panics converge to durable Run
+  terminal facts without granting the Loop Store or Gateway access.
 
 ### Changed
 

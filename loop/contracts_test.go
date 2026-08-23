@@ -19,6 +19,7 @@ func TestAgentLoopContractUsesStableSlotAndFiniteOutcomes(t *testing.T) {
 		loop.OutcomeFailed,
 		loop.OutcomeCanceled,
 		loop.OutcomeBudgetExceeded,
+		loop.OutcomeWaiting,
 	} {
 		if !outcome.Valid() {
 			t.Fatalf("outcome %q is invalid", outcome)
@@ -26,6 +27,40 @@ func TestAgentLoopContractUsesStableSlotAndFiniteOutcomes(t *testing.T) {
 	}
 	if loop.Outcome("invented").Valid() {
 		t.Fatal("invented outcome is valid")
+	}
+}
+
+func TestControlledExecutionUsesFiniteActionsAndStates(t *testing.T) {
+	validActions := []loop.Action{
+		{Kind: loop.ActionRequestModel},
+		{Kind: loop.ActionExecuteTools},
+		{Kind: loop.ActionContinue},
+		{Kind: loop.ActionFinish, Outcome: loop.OutcomeCompleted},
+		{Kind: loop.ActionWait},
+	}
+	for _, action := range validActions {
+		if err := action.Validate(); err != nil {
+			t.Fatalf("valid action %#v rejected: %v", action, err)
+		}
+	}
+	for _, action := range []loop.Action{
+		{},
+		{Kind: loop.ActionRequestModel, Outcome: loop.OutcomeCompleted},
+		{Kind: loop.ActionFinish, Outcome: loop.OutcomeContinue},
+		{Kind: loop.ActionWait, Outcome: loop.OutcomeWaiting},
+	} {
+		if err := action.Validate(); err == nil {
+			t.Fatalf("invalid action %#v accepted", action)
+		}
+	}
+	for _, state := range []loop.State{
+		loop.StateReadyForModel, loop.StateToolsReady, loop.StateContinueReady,
+		loop.StateCompleted, loop.StateFailed, loop.StateCanceled,
+		loop.StateBudgetExceeded, loop.StateWaiting,
+	} {
+		if !state.Valid() {
+			t.Fatalf("state %q is invalid", state)
+		}
 	}
 }
 

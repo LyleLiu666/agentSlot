@@ -34,10 +34,11 @@ AgentSlot makes those cardinalities explicit and validates the assembled system
 before startup.
 
 The standard profile includes an independent `model.token-counter` for
-authoritative pre-call planning counts. It also broadens
-`agent.loop` from the current Step driver into a constrained execution-strategy
-Slot. TokenCounter is now a public, required contract; the AgentLoop redesign
-remains an approved target boundary rather than a current API.
+authoritative pre-call planning counts. `agent.loop` is a constrained
+execution-strategy Slot: a Loop receives only the current Run identity, state,
+and ordered actions for model requests, prepared tool batches, continuation,
+waiting, and termination. Runtime retains Session truth, budgets, cancellation,
+recovery, and terminal commits.
 
 `gateway.channel` is also the protocol extension seam. gRPC, WebSocket, SSH,
 and inbound ACP may be implemented independently without adding a transport
