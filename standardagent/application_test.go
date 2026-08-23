@@ -45,6 +45,21 @@ func TestNewApplicationBuildsStandardProfileAndAttachesGateway(t *testing.T) {
 	}
 }
 
+func TestStandardApplicationRequiresIndependentTokenCounter(t *testing.T) {
+	entry := &captureChannel{}
+	application := NewApplication(ApplicationSpec{
+		Name: "missing-token-counter", DefaultModelConfig: testDefaultModel(),
+		Modules: []agentslot.Module{
+			executorOnlyComponentsModule{store: newSeededStore(), executor: fakeExecutor{}},
+			NewGatewayChannelModule("entrypoint.missing-token-counter", "test", entry),
+		},
+	})
+	_, err := application.Build()
+	if !errors.Is(err, agentslot.ErrRequirementUnsatisfied) {
+		t.Fatalf("Build() error = %v, want ErrRequirementUnsatisfied", err)
+	}
+}
+
 func TestGatewayViewReturnsCurrentAuthoritativeRevision(t *testing.T) {
 	store := newSeededStore()
 	entry := &captureChannel{}
@@ -555,6 +570,19 @@ type componentsModule struct {
 	executor model.ModelExecutor
 }
 
+type executorOnlyComponentsModule struct {
+	store    session.SessionStore
+	executor model.ModelExecutor
+}
+
+func (m executorOnlyComponentsModule) ID() string { return "test.executor-only-components" }
+func (m executorOnlyComponentsModule) Register(reg agentslot.Registrar) error {
+	return reg.Contribute(
+		agentslot.Set(session.StoreSlot, m.store),
+		agentslot.Set(model.ExecutorSlot, m.executor),
+	)
+}
+
 type rawChannelModule struct {
 	channel interaction.GatewayChannel
 }
@@ -574,6 +602,7 @@ func (m componentsModule) Register(reg agentslot.Registrar) error {
 	return reg.Contribute(
 		agentslot.Set(session.StoreSlot, m.store),
 		agentslot.Set(model.ExecutorSlot, executor),
+		agentslot.Set(model.TokenCounterSlot, model.NewFakeTokenCounter()),
 	)
 }
 
@@ -677,4 +706,3 @@ func (fakeExecutor) Inspect(context.Context, model.Config) (model.ExecutionCapab
 		Reasoning: []model.Reasoning{model.ReasoningDefault}, ContextWindowTokens: 1000, MaxOutputTokens: 100,
 	}, nil
 }
-func (fakeExecutor) CountTokens(context.Context, model.ModelRequest) (int, error) { return 0, nil }

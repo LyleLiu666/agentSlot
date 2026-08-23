@@ -16,7 +16,7 @@ func TestRenderDomainTableUsesCatalogFacts(t *testing.T) {
 	if got := strings.Count(table, "\n| `"); got != 7 {
 		t.Fatalf("model row count = %d, want 7\n%s", got, table)
 	}
-	for _, fragment := range []string{"`model.token-counter`", "`TokenCounter`", "Mapped", "failing closed"} {
+	for _, fragment := range []string{"`model.token-counter`", "`TokenCounter`", "Contracted", "failing closed"} {
 		if !strings.Contains(table, fragment) {
 			t.Fatalf("model table lacks %q:\n%s", fragment, table)
 		}

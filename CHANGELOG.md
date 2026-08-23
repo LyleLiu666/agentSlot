@@ -15,6 +15,19 @@ when real consumers expose a flawed boundary.
 - Added deterministic English and Chinese component-map generation plus a
   repository drift test. The catalog is documentation data only and does not
   participate in Runtime assembly.
+- Added the independent `model.token-counter` typed Slot and made it the fifth
+  required ecosystem in the standard Agent profile. Context planning now
+  fails closed before provider dispatch when counting fails or returns a
+  negative value.
+- Added explicit fake and OpenAI-compatible TokenCounter implementations. The
+  OpenAI-compatible provider module contributes its counter as a replaceable
+  default while keeping post-call usage estimation private to its Executor.
+
+### Changed
+
+- Removed planning-time `CountTokens` from `ModelExecutor`; execution,
+  capability inspection, retry/continuation, and post-call usage remain the
+  Executor's responsibility.
 
 ## v0.0.10 - 2026-08-22
 

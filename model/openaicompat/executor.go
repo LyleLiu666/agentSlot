@@ -60,13 +60,30 @@ type Executor struct {
 	sequence           atomic.Uint64
 }
 
+// TokenCounter owns planning-time measurement for the exact wire projection
+// produced by this adapter. It is deliberately exposed separately from
+// Executor so applications can replace counting without replacing execution.
+type TokenCounter struct {
+	executor *Executor
+}
+
 var (
 	_ model.ModelExecutor = (*Executor)(nil)
 	_ model.ModelCatalog  = (*Executor)(nil)
+	_ model.TokenCounter  = (*TokenCounter)(nil)
 )
 
 func New(config Config) (*Executor, error) {
 	return newExecutor(config, false)
+}
+
+// NewTokenCounter constructs the counter paired with this provider adapter.
+func NewTokenCounter(config Config) (*TokenCounter, error) {
+	executor, err := newExecutor(config, false)
+	if err != nil {
+		return nil, err
+	}
+	return &TokenCounter{executor: executor}, nil
 }
 
 func newExecutor(config Config, allowMissingArtifactStore bool) (*Executor, error) {
@@ -169,7 +186,7 @@ func (e *Executor) Execute(ctx context.Context, request model.ModelRequest, reco
 	if err != nil {
 		return nil, agent.NewError(agent.ErrorInvalidInput, "openaicompat.execute", "invalid logical model request", err)
 	}
-	inputTokenEstimate, err := e.CountTokens(ctx, request)
+	inputTokenEstimate, err := e.countTokens(ctx, request)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +213,14 @@ func (e *Executor) Inspect(ctx context.Context, config model.Config) (model.Exec
 	return cloneCapabilities(configured.Capabilities), nil
 }
 
-func (e *Executor) CountTokens(ctx context.Context, request model.ModelRequest) (int, error) {
+func (c *TokenCounter) CountTokens(ctx context.Context, request model.ModelRequest) (int, error) {
+	if c == nil || c.executor == nil {
+		return 0, errors.New("openaicompat: TokenCounter is not initialized")
+	}
+	return c.executor.countTokens(ctx, request)
+}
+
+func (e *Executor) countTokens(ctx context.Context, request model.ModelRequest) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -276,6 +300,7 @@ func (m executorModule) RequiredSlots() []agentslot.Requirement {
 
 func (m executorModule) Register(reg agentslot.Registrar) error {
 	executorContribution := agentslot.Set(model.ExecutorSlot, model.ModelExecutor(m.catalog))
+	counterContribution := agentslot.SetDefault(model.TokenCounterSlot, model.TokenCounter(&TokenCounter{executor: m.catalog}))
 	if m.needsArtifactStore {
 		executorContribution = agentslot.SetWith(model.ExecutorSlot, func(resolver agentslot.Resolver) (model.ModelExecutor, error) {
 			store, err := agentslot.ResolveOne(resolver, artifact.StoreSlot)
@@ -286,9 +311,19 @@ func (m executorModule) Register(reg agentslot.Registrar) error {
 			config.ArtifactStore = store
 			return New(config)
 		})
+		counterContribution = agentslot.SetDefaultWith(model.TokenCounterSlot, func(resolver agentslot.Resolver) (model.TokenCounter, error) {
+			store, err := agentslot.ResolveOne(resolver, artifact.StoreSlot)
+			if err != nil {
+				return nil, err
+			}
+			config := m.config
+			config.ArtifactStore = store
+			return NewTokenCounter(config)
+		})
 	}
 	return reg.Contribute(
 		executorContribution,
+		counterContribution,
 		agentslot.Add(model.CatalogSlot, m.catalog.providerKey, model.ModelCatalog(m.catalog)),
 	)
 }

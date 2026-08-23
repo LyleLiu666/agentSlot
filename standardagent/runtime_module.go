@@ -54,6 +54,7 @@ func (m *runtimeModule) RequiredSlots() []agentslot.Requirement {
 		agentslot.RequireOne(agentloop.AgentLoopSlot),
 		agentslot.RequireOne(session.StoreSlot),
 		agentslot.RequireOne(model.ExecutorSlot),
+		agentslot.RequireOne(model.TokenCounterSlot),
 		agentslot.OptionalMany(tool.ToolSlot),
 		agentslot.OptionalMany(model.CatalogSlot),
 		agentslot.OptionalChain(model.AttemptObserverSlot),
@@ -99,6 +100,10 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 				return nil, err
 			}
 			executor, err := agentslot.ResolveOne(resolver, model.ExecutorSlot)
+			if err != nil {
+				return nil, err
+			}
+			counter, err := agentslot.ResolveOne(resolver, model.TokenCounterSlot)
 			if err != nil {
 				return nil, err
 			}
@@ -194,7 +199,7 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 			}
 			state := newApplicationRuntime(runtimeDependencies{
 				agentLoop: selectedLoop,
-				manager:   manager, store: store, executor: executor, attemptObservers: attemptObservers,
+				manager:   manager, store: store, executor: executor, counter: counter, attemptObservers: attemptObservers,
 				commands: commands, commandDescriptors: commandDescriptors,
 				tools: selectedTools, dispatcher: dispatcher, catalogs: catalogs, config: cloneAgentRuntimeConfig(m.config), sources: sources,
 				compactor: compactor, hooks: hooks, goalStore: goalStore, goalEvaluator: goalEvaluator, commitObservers: commitObservers,
@@ -230,6 +235,7 @@ type runtimeDependencies struct {
 	manager            *session.Manager
 	store              session.SessionStore
 	executor           model.ModelExecutor
+	counter            model.TokenCounter
 	attemptObservers   []model.AttemptObserver
 	commands           []agentslot.Named[interaction.InteractionCommand]
 	commandDescriptors []interaction.CommandDescriptor
@@ -256,6 +262,7 @@ type runtimeComponents struct {
 	agentLoop        agentloop.AgentLoop
 	store            session.SessionStore
 	executor         model.ModelExecutor
+	counter          model.TokenCounter
 	attemptObservers []model.AttemptObserver
 	tools            []agentslot.Named[tool.Tool]
 	sources          []agentcontext.ContextSource
@@ -276,6 +283,7 @@ func (d runtimeDependencies) runtimeComponents(observations *observationHub) *ru
 		agentLoop:        d.agentLoop,
 		store:            d.store,
 		executor:         d.executor,
+		counter:          d.counter,
 		attemptObservers: append([]model.AttemptObserver(nil), d.attemptObservers...),
 		tools:            append([]agentslot.Named[tool.Tool](nil), d.tools...),
 		sources:          append([]agentcontext.ContextSource(nil), d.sources...),

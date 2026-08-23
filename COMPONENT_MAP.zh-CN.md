@@ -24,15 +24,15 @@
 | --- | ---: |
 | 已映射的标准组件生态位 | 41 |
 | 已标准化的领域词汇 | 9 |
-| 已定义契约的 AgentSlot 自有领域接口 | 29 |
+| 已定义契约的 AgentSlot 自有领域接口 | 30 |
 | 通过一致性验证的组件生态位 | 1 |
 | 已由独立实现证明的组件生态位 | 0 |
 | 已进入标准装配的组件生态位 | 0 |
 
 独立的组装协议目前导出了五个 Go 接口：`Module`、`SlotRequirer`、
 `Registrar`、`Contribution` 和 `Lifecycle`。它们是框架机制，不能代替
-地图中 41 个 Agent 领域组件生态位；其中 29 个已经具备公开合同，1 个已通过一致性验证，
-其余 28 个保持已定义契约，另外 12 个保持已映射，尚无生态位达到 Proven。
+地图中 41 个 Agent 领域组件生态位；其中 30 个已经具备公开合同，1 个已通过一致性验证，
+其余 29 个保持已定义契约，另外 11 个保持已映射，尚无生态位达到 Proven。
 
 表中 9 组有限领域词汇分别是：Agent Loop 结果、模型能力、工具调用、策略/审批、观察、
 Goal、Memory、Workflow 和 Billing。这个数字只统计为了互操作而固定的有限词汇和事实，不统计普通常量。
@@ -44,10 +44,8 @@ Goal、Memory、Workflow 和 Billing。这个数字只统计为了互操作而�
 AgentLoop 默认实现；通用
 `agentslot.NewApplication` 不会根据已安装 Slot 隐式推断标准 Agent。
 
-当前已发布的 Go Profile 要求四个已经实现的生态位。获准的下一版合同将增加可独立替换的
-`model.token-counter`，形成下表五个生态位的目标 Profile。在该合同和标准装配代码发布前，
-`model.token-counter` 仍为“已映射”，当前应用继续按已发布四件套运行；下表目标不能被理解为
-已经可用的 Go API。
+Go Profile 要求下表五个已经实现的生态位。Token 计数与模型执行可独立替换；计数器缺失
+或失败时，Runtime 会阻止 Provider 请求，而不是悄悄使用无法自证的估算。
 
 `Assembly` 是当前 Go 实现导出的不可变 Build 结果。其描述对象为
 `AssemblyDescription`，格式标识为 `agentslot.assembly/v0`。
@@ -112,7 +110,7 @@ flowchart LR
     R --> L["AgentLoop（1）"]
     L -. "Run-scoped actions" .-> R
     R --> ME["ModelExecutor（1）"]
-    R -. "获准目标" .-> TC["TokenCounter（1，已映射）"]
+    R --> TC["TokenCounter（1）"]
     ME -. "可选依赖" .-> MP["ModelProvider（0..n）"]
     R -. "可选" .-> T["工具与技能"]
     R -. "可选" .-> C["Context 组件"]
@@ -135,7 +133,7 @@ flowchart LR
 | **已证明（Proven）** | 至少两个语义上独立的实现通过同版一致性套件；同一实现的不同包装只能算一个。 |
 | **已装配（Assembled）** | LAS 或后续获准的真实消费者能够通过 Slot 替换已证明的实现，不包含具体类型分支。 |
 
-当前已有 29 个领域生态位至少进入**已定义契约（Contracted）**：它们拥有公开
+当前已有 30 个领域生态位至少进入**已定义契约（Contracted）**：它们拥有公开
 领域接口、typed Slot 和合同测试。仓库已经包含内存/崩溃安全文件
 SessionStore、确定性 Fake/OpenAI Chat Compatible Executor、Bash/文件/HTTP 工具、
 进程内/CLI GatewayChannel、确定性的工具策略与审批组件，以及 JSON Lines 观察模块；固定
@@ -145,7 +143,7 @@ Runtime 与选中的 AgentLoop 不按具体类型分支即可消费它们。
 黑盒套件针对 AgentSlot `v0.0.10` 的精确提交
 `c6b42a767d5422464ebc2978bf408b7d15eb5125`，完整通过公共行为和持久重开场景，0 失败、
 0 跳过。MemoryStore 只作进程生命周期内参考自检；MemoryStore/FileStore 又共享同一实现
-代码库，因此这里只算一个实现结果，不能作为 Proven 证据。其余 28 个领域生态位保持
+代码库，因此这里只算一个实现结果，不能作为 Proven 证据。其余 29 个领域生态位保持
 **已定义契约**，其他生态位仍处于**已映射**阶段。
 
 当前成绩为 1 个 Conformant、0 个 Proven、0 个 Assembled。
@@ -183,7 +181,7 @@ Goal 状态不写进会话 History。
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
 | `model.executor` | `ModelExecutor` | `One` | 全局必需 | 校验所选模型能力、执行一次逻辑模型调用、封装重试和续传、报告调用后 Usage，并通过受限 AttemptRecorder 持久记录每次真实请求。 | 已定义契约 |
-| `model.token-counter` | `TokenCounter` | `One` | 获准目标 Profile 全局必需；当前尚未强制 | 为调用前规划计量完整 Provider 可见请求；使用精确 tokenizer 或经过验证的保守上界，两者都不可信时 fail closed。 | 已映射 |
+| `model.token-counter` | `TokenCounter` | `One` | 全局恰好 1 个 | 为调用前规划计量完整 Provider 可见请求；使用精确 tokenizer 或经过验证的保守上界，两者都不可信时 fail closed。 | 已定义契约 |
 | `model.attempt.observer` | `AttemptObserver` | `Chain` | 可选 | 在每次真实 Provider 请求发送前和结束后同步记录或拒绝；与被动遥测不同，它可以 fail closed。 | 已定义契约 |
 | `model.provider` | `ModelProvider` | `Many` | 可选；仅由声明依赖的 Executor 要求 | 为组合本地适配器的 Executor 提供具名 Provider 访问。 | 已映射 |
 | `model.selector` | `ModelSelector` | `One` | 可选；动态路由时按条件要求 | 根据明确的请求和策略输入选择 Provider/模型。 | 已映射 |

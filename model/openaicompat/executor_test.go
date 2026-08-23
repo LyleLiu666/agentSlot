@@ -42,7 +42,7 @@ func TestExecutorProjectsImageAttachmentsIntoOpenAIContent(t *testing.T) {
 		_, _ = writer.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer server.Close()
-	executor := newExecutorConfig(t, openaicompat.Config{
+	config := openaicompat.Config{
 		ProviderKey: "openai", BaseURL: server.URL, MaxAttempts: 1,
 		ArtifactStore: &fixtureArtifactStore{entries: map[string]fixtureArtifact{
 			"artifact-image": {metadata: artifact.Metadata{ID: "artifact-image", MediaType: "image/png", Name: "image.png", Size: 4}, body: []byte{0x89, 'P', 'N', 'G'}},
@@ -54,7 +54,8 @@ func TestExecutorProjectsImageAttachmentsIntoOpenAIContent(t *testing.T) {
 			},
 			Reasoning: []model.Reasoning{model.ReasoningDefault}, ContextWindowTokens: 100, MaxOutputTokens: 20,
 		}}},
-	})
+	}
+	executor := newExecutorConfig(t, config)
 	request := requestWithUser("what is this?")
 	request.Config.ModelID = "vision"
 	request.Inputs[0].Message.Parts = append(request.Inputs[0].Message.Parts, agent.MessagePart{
@@ -76,7 +77,7 @@ func TestExecutorCountsImageSemanticsInsteadOfBase64PayloadBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 	png = append(png, bytes.Repeat([]byte{0}, 100_000)...)
-	executor := newExecutorConfig(t, openaicompat.Config{
+	config := openaicompat.Config{
 		ProviderKey: "openai", BaseURL: "https://example.invalid", MaxAttempts: 1,
 		ArtifactStore: &fixtureArtifactStore{entries: map[string]fixtureArtifact{
 			"artifact-image": {metadata: artifact.Metadata{ID: "artifact-image", MediaType: "image/png", Name: "image.png", Size: int64(len(png))}, body: png},
@@ -85,13 +86,14 @@ func TestExecutorCountsImageSemanticsInsteadOfBase64PayloadBytes(t *testing.T) {
 			Media:     model.Capabilities{InputModalities: []model.Modality{model.ModalityText, model.ModalityImage}, OutputModalities: []model.Modality{model.ModalityText}},
 			Reasoning: []model.Reasoning{model.ReasoningDefault}, ContextWindowTokens: 4_096, MaxOutputTokens: 512,
 		}}},
-	})
+	}
+	counter := newTokenCounterConfig(t, config)
 	request := requestWithUser("describe")
 	request.Config.ModelID = "vision"
 	request.Inputs[0].Message.Parts = append(request.Inputs[0].Message.Parts, agent.MessagePart{
 		Kind: agent.PartAttachment, AttachmentID: "artifact-image", MediaType: "image/png", Name: "image.png",
 	})
-	tokens, err := executor.CountTokens(context.Background(), request)
+	tokens, err := counter.CountTokens(context.Background(), request)
 	if err != nil {
 		t.Fatalf("CountTokens: %v", err)
 	}
@@ -180,6 +182,43 @@ func TestImageCapableModuleRequiresArtifactStoreAtBuildTime(t *testing.T) {
 	}
 	if _, err := builder.Build(agentslot.RequireOne(model.ExecutorSlot)); err != nil {
 		t.Fatalf("Build with artifact store: %v", err)
+	}
+}
+
+type fixedCounterModule struct{}
+
+func (fixedCounterModule) ID() string { return "test.fixed-counter" }
+func (fixedCounterModule) Register(reg agentslot.Registrar) error {
+	return reg.Contribute(agentslot.Set(model.TokenCounterSlot, model.TokenCounter(model.TokenCounterFunc(func(context.Context, model.ModelRequest) (int, error) {
+		return 7, nil
+	}))))
+}
+
+func TestProviderModuleCounterIsAReplaceableDefault(t *testing.T) {
+	provider, err := openaicompat.NewModule(standardConfig("https://example.invalid", "secret-not-used-by-counter"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder := agentslot.NewBuilder()
+	if err := builder.Install(provider); err != nil {
+		t.Fatal(err)
+	}
+	if err := builder.Install(fixedCounterModule{}); err != nil {
+		t.Fatal(err)
+	}
+	assembly, err := builder.Build(
+		agentslot.RequireOne(model.ExecutorSlot),
+		agentslot.RequireOne(model.TokenCounterSlot),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counter, ok := agentslot.Get(assembly, model.TokenCounterSlot)
+	if !ok {
+		t.Fatal("TokenCounter missing")
+	}
+	if got, err := counter.CountTokens(context.Background(), requestWithUser("ignored")); err != nil || got != 7 {
+		t.Fatalf("explicit CountTokens() = %d, %v; want 7", got, err)
 	}
 }
 
@@ -432,11 +471,12 @@ func TestExecutorCatalogInspectAndTokenCountAreDetachedAndDeterministic(t *testi
 		t.Fatal("catalog returned shared capability slices")
 	}
 	request := requestWithUser("count this")
-	first, err := executor.CountTokens(context.Background(), request)
+	counter := newTokenCounter(t, "https://example.invalid/v1", "")
+	first, err := counter.CountTokens(context.Background(), request)
 	if err != nil || first <= 0 {
 		t.Fatalf("CountTokens = %d, %v", first, err)
 	}
-	second, _ := executor.CountTokens(context.Background(), request)
+	second, _ := counter.CountTokens(context.Background(), request)
 	if first != second {
 		t.Fatalf("token estimates differ: %d / %d", first, second)
 	}
@@ -460,7 +500,11 @@ func TestExecutorRejectsInvalidConfigurationAndSelection(t *testing.T) {
 
 func newExecutor(t *testing.T, baseURL, apiKey string) *openaicompat.Executor {
 	t.Helper()
-	return newExecutorConfig(t, openaicompat.Config{
+	return newExecutorConfig(t, standardConfig(baseURL, apiKey))
+}
+
+func standardConfig(baseURL, apiKey string) openaicompat.Config {
+	return openaicompat.Config{
 		ProviderKey: "openai", BaseURL: baseURL, APIKey: apiKey, MaxAttempts: 1,
 		Models: []openaicompat.Model{{
 			ID: "chat-model", Title: "Chat Model",
@@ -469,7 +513,7 @@ func newExecutor(t *testing.T, baseURL, apiKey string) *openaicompat.Executor {
 				Reasoning: []model.Reasoning{model.ReasoningDefault, model.ReasoningHigh}, ContextWindowTokens: 16_384, MaxOutputTokens: 4_096,
 			},
 		}},
-	})
+	}
 }
 
 func newExecutorWithAttempts(t *testing.T, baseURL string, attempts int) *openaicompat.Executor {
@@ -494,6 +538,21 @@ func newExecutorConfig(t *testing.T, config openaicompat.Config) *openaicompat.E
 		t.Fatalf("New: %v", err)
 	}
 	return executor
+}
+
+func newTokenCounter(t *testing.T, baseURL, apiKey string) *openaicompat.TokenCounter {
+	t.Helper()
+	config := standardConfig(baseURL, apiKey)
+	return newTokenCounterConfig(t, config)
+}
+
+func newTokenCounterConfig(t *testing.T, config openaicompat.Config) *openaicompat.TokenCounter {
+	t.Helper()
+	counter, err := openaicompat.NewTokenCounter(config)
+	if err != nil {
+		t.Fatalf("NewTokenCounter: %v", err)
+	}
+	return counter
 }
 
 func requestWithUser(text string) model.ModelRequest {
@@ -559,3 +618,4 @@ func (r *attemptRecorder) records() ([]model.AttemptStart, []model.AttemptFinish
 
 var _ model.ModelExecutor = (*openaicompat.Executor)(nil)
 var _ model.ModelCatalog = (*openaicompat.Executor)(nil)
+var _ model.TokenCounter = (*openaicompat.TokenCounter)(nil)

@@ -541,11 +541,21 @@ func startRuntimeTestApplicationWithConfig(t *testing.T, executor model.ModelExe
 	}
 }
 
-type executorModule struct{ executor model.ModelExecutor }
+type executorModule struct {
+	executor model.ModelExecutor
+	counter  model.TokenCounter
+}
 
 func (executorModule) ID() string { return "test.executor" }
 func (m executorModule) Register(reg agentslot.Registrar) error {
-	return reg.Contribute(agentslot.Set(model.ExecutorSlot, m.executor))
+	counter := m.counter
+	if counter == nil {
+		counter = model.NewFakeTokenCounter()
+	}
+	return reg.Contribute(
+		agentslot.Set(model.ExecutorSlot, m.executor),
+		agentslot.Set(model.TokenCounterSlot, counter),
+	)
 }
 
 type toolModule struct {

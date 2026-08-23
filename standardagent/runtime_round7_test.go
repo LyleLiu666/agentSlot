@@ -126,6 +126,35 @@ func TestRuntimeRejectsOversizedContextBeforeProviderCall(t *testing.T) {
 	}
 }
 
+func TestRuntimeFailsClosedWhenIndependentTokenCounterFails(t *testing.T) {
+	counterFailure := errors.New("tokenizer unavailable")
+	executor := newRound7Executor(
+		func(model.Config) (model.ExecutionCapabilities, error) { return textCapabilities(100), nil },
+		func(model.ModelRequest) (int, error) { return 0, counterFailure },
+		model.FakeExecution{Events: []model.ModelEvent{complete("must not run")}},
+	)
+	access, _, stop := startRound7Application(t, executor, AgentRuntimeConfig{})
+	defer stop()
+	opened := createRuntimeTestSession(t, access)
+	if _, err := access.Send(context.Background(), interaction.SendRequest{
+		SessionID: opened.SessionID, ExpectedRevision: opened.Revision, Input: textInput("hello"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitRuntimeIdle(t, access, opened.SessionID)
+	if got := len(executor.fake.Requests()); got != 0 {
+		t.Fatalf("provider called %d times after TokenCounter failure", got)
+	}
+	snapshot, err := access.View(context.Background(), interaction.SessionViewRequest{SessionID: opened.SessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := historyRunFacts(snapshot.RecentHistory)
+	if len(runs) != 2 || runs[1].Kind != session.RunFailed {
+		t.Fatalf("run facts after TokenCounter failure = %#v", runs)
+	}
+}
+
 func TestRuntimeCanExplicitlySelectNoTools(t *testing.T) {
 	executor := newRound7Executor(nil, nil, model.FakeExecution{Events: []model.ModelEvent{complete("done")}})
 	installed := &countingTool{definition: testToolDefinition(t, "echo")}
@@ -297,11 +326,13 @@ func (e *round7Executor) Inspect(ctx context.Context, config model.Config) (mode
 	}
 	return e.fake.Inspect(ctx, config)
 }
-func (e *round7Executor) CountTokens(ctx context.Context, request model.ModelRequest) (int, error) {
-	if e.count != nil {
-		return e.count(request)
-	}
-	return e.fake.CountTokens(ctx, request)
+func (e *round7Executor) tokenCounter() model.TokenCounter {
+	return model.TokenCounterFunc(func(ctx context.Context, request model.ModelRequest) (int, error) {
+		if e.count != nil {
+			return e.count(request)
+		}
+		return model.NewFakeTokenCounter().CountTokens(ctx, request)
+	})
 }
 
 func textCapabilities(limit int) model.ExecutionCapabilities {
@@ -324,7 +355,11 @@ func startRound7Application(t *testing.T, executor model.ModelExecutor, config A
 	t.Helper()
 	store := session.NewMemoryStore()
 	entry := &captureChannel{}
-	modules := []agentslot.Module{sessionPairModule{store: store}, executorModule{executor: executor}}
+	counter := model.NewFakeTokenCounter()
+	if round7, ok := executor.(*round7Executor); ok {
+		counter = round7.tokenCounter()
+	}
+	modules := []agentslot.Module{sessionPairModule{store: store}, executorModule{executor: executor, counter: counter}}
 	modules = append(modules, extras...)
 	modules = append(modules, NewGatewayChannelModule("entrypoint.round7", "round7", entry))
 	running, err := NewApplication(ApplicationSpec{Name: "round7", Modules: modules, RuntimeConfig: config, DefaultModelConfig: model.Config{ModelID: "default", Reasoning: model.ReasoningDefault}}).Start(context.Background())

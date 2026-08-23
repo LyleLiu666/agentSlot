@@ -36,6 +36,17 @@ type FakeModelExecutor struct {
 
 var _ ModelExecutor = (*FakeModelExecutor)(nil)
 
+// FakeTokenCounter is a deterministic development counter for logical fake
+// requests. It is not a provider tokenizer and must not be used as a fallback
+// for a real provider adapter.
+type FakeTokenCounter struct{}
+
+var _ TokenCounter = FakeTokenCounter{}
+
+// NewFakeTokenCounter returns the counter paired with FakeModelExecutor in
+// tests and examples. Applications must still install it explicitly.
+func NewFakeTokenCounter() TokenCounter { return FakeTokenCounter{} }
+
 // NewFakeModelExecutor returns an executor that consumes scripts in FIFO
 // order. A call made after the scripts are exhausted fails explicitly.
 func NewFakeModelExecutor(executions ...FakeExecution) *FakeModelExecutor {
@@ -125,7 +136,11 @@ func (*FakeModelExecutor) Inspect(_ context.Context, config Config) (ExecutionCa
 	}, nil
 }
 
-func (*FakeModelExecutor) CountTokens(_ context.Context, request ModelRequest) (int, error) {
+func (FakeTokenCounter) CountTokens(_ context.Context, request ModelRequest) (int, error) {
+	return fakeTokenEstimate(request), nil
+}
+
+func fakeTokenEstimate(request ModelRequest) int {
 	count := 0
 	for _, input := range request.Inputs {
 		switch {
@@ -147,7 +162,7 @@ func (*FakeModelExecutor) CountTokens(_ context.Context, request ModelRequest) (
 	for _, definition := range request.Tools {
 		count += portableTokenEstimate(definition.Name) + portableTokenEstimate(definition.Description) + portableTokenEstimate(string(definition.InputSchema.JSON()))
 	}
-	return count, nil
+	return count
 }
 
 func portableTokenEstimate(value string) int {
@@ -296,7 +311,7 @@ func (s *fakeModelStream) finish(ctx context.Context, id agent.AttemptID, outcom
 		usage = s.defaultUsage
 	}
 	if usage == (TokenUsage{}) {
-		input, _ := (&FakeModelExecutor{}).CountTokens(context.Background(), s.request)
+		input := fakeTokenEstimate(s.request)
 		output := int64((s.outputBytes[id] + 3) / 4)
 		usage = TokenUsage{InputTokens: int64(input), OutputTokens: output, TotalTokens: int64(input) + output, Estimated: true, EstimateSource: "model.fake.portable_estimate"}
 	}

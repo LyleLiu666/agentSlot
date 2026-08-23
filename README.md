@@ -25,21 +25,19 @@ assembly.
 
 The standard AgentRuntime fixes Session ownership, CAS, cancellation, and
 Gateway control. Its Run-control policy is the unique replaceable `agent.loop`
-Slot. The other replaceable parts include one SessionStore, one
-ModelExecutor, zero or more Tools, ordered Context and Hook
+Slot. The other replaceable parts include one SessionStore, one ModelExecutor,
+one independent TokenCounter, zero or more Tools, ordered Context and Hook
 components, one or more GatewayChannels, optional keyed InteractionCommands,
 Goal completion evaluation, long-term Memory, multi-agent Workflow,
 Policy/Approval, synchronous usage/billing guards, and passive observation chains.
 AgentSlot makes those cardinalities explicit and validates the assembled system
 before startup.
 
-The approved next standard-profile revision adds an independent
-`model.token-counter` for authoritative pre-call planning counts and broadens
+The standard profile includes an independent `model.token-counter` for
+authoritative pre-call planning counts. It also broadens
 `agent.loop` from the current Step driver into a constrained execution-strategy
-Slot. These are documented target boundaries, not APIs in the current release:
-the published Go profile still runs with its current four required ecosystems,
-and the component map records `model.token-counter` as Mapped until its contract
-and assembly enforcement are implemented.
+Slot. TokenCounter is now a public, required contract; the AgentLoop redesign
+remains an approved target boundary rather than a current API.
 
 `gateway.channel` is also the protocol extension seam. gRPC, WebSocket, SSH,
 and inbound ACP may be implemented independently without adding a transport
@@ -88,8 +86,8 @@ recorded maturity. Every published tag is immutable; later changes receive a
 new semantic version.
 
 All implemented public boundaries remain at least `Contracted`.
-`model.token-counter` is the newly approved Mapped target and has no public Go
-contract yet. `session.store` is `Conformant` against the exact `v0.0.10`
+`model.token-counter` is Contracted and independently replaceable from
+`model.executor`. `session.store` is `Conformant` against the exact `v0.0.10`
 contract; no ecosystem is yet `Proven`.
 
 ## Core model

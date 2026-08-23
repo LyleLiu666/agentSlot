@@ -26,16 +26,16 @@ Current repository reality:
 | --- | ---: |
 | Mapped standard component ecosystems | 41 |
 | Standardized domain vocabularies | 9 |
-| Contracted AgentSlot-owned domain interfaces | 29 |
+| Contracted AgentSlot-owned domain interfaces | 30 |
 | Conformant component ecosystems | 1 |
 | Proven component ecosystems | 0 |
 | Assembled standard component ecosystems | 0 |
 
 The generic composition protocol exports five Go interfaces: `Module`,
-`SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. Twenty-nine
-domain contracts are now defined across the standard leaf packages; one is
-Conformant, the other twenty-eight remain Contracted, and none is Proven.
-The other twelve ecosystems remain Mapped.
+`SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. Thirty domain
+contracts are now defined across the standard leaf packages; one is
+Conformant, the other twenty-nine remain Contracted, and none is Proven.
+The other eleven ecosystems remain Mapped.
 
 The nine counted vocabulary families are Agent Loop outcomes, model capability,
 tool calls, policy/approval, observation, Goal, Memory, Workflow, and Billing. This count
@@ -50,12 +50,9 @@ default. The generic
 `agentslot.NewApplication` never infers a standard Agent profile from installed
 Slots.
 
-The currently published Go profile requires four implemented ecosystems. The
-approved next contract revision adds the independently replaceable
-`model.token-counter`, producing the five-ecosystem target below. Until that
-contract and standard assembly change ship, `model.token-counter` remains
-Mapped and current applications continue to use the published four-component
-profile; this target description must not be read as an available Go API.
+The Go profile requires the five implemented ecosystems below. Token counting
+is independently replaceable from model execution; a missing or failed counter
+prevents provider dispatch rather than silently using an indefensible estimate.
 
 `Assembly` is the immutable build result exposed by the current Go implementation.
 Its description uses `AssemblyDescription` and the `agentslot.assembly/v0` schema.
@@ -134,7 +131,7 @@ flowchart LR
     R --> L["AgentLoop (1)"]
     L -. "run-scoped actions" .-> R
     R --> ME["ModelExecutor (1)"]
-    R -. "approved target" .-> TC["TokenCounter (1, mapped)"]
+    R --> TC["TokenCounter (1)"]
     ME -. "optional dependency" .-> MP["ModelProvider (0..n)"]
     R -. "optional" .-> T["Tools and skills"]
     R -. "optional" .-> C["Context components"]
@@ -158,7 +155,7 @@ method-level contract is an engineering result.
 | **Proven** | At least two semantically independent implementations pass the same suite version. Wrappers over the same implementation count once. |
 | **Assembled** | LAS or another approved real consumer exchanges proven implementations through the Slot without concrete-type branches. |
 
-Twenty-nine domain rows are now at least **Contracted**: each has a public
+Thirty domain rows are now at least **Contracted**: each has a public
 domain interface, typed Slot, and contract tests. The repository now contains
 in-memory and crash-safe file Session stores, deterministic Fake and
 OpenAI Chat Compatible executors, Bash/file/HTTP tools, in-process and CLI
@@ -172,7 +169,7 @@ the exact AgentSlot `v0.0.10` commit
 `c6b42a767d5422464ebc2978bf408b7d15eb5125`, with no failures or skips.
 MemoryStore remains a process-lifetime reference check, and MemoryStore/FileStore
 share one implementation codebase, so this is one implementation result rather
-than Proven evidence. The other twenty-eight domain rows remain **Contracted**;
+than Proven evidence. The other twenty-nine domain rows remain **Contracted**;
 every other row remains **Mapped**.
 
 The current score is 1 Conformant, 0 Proven, and 0 Assembled.
@@ -213,7 +210,7 @@ evaluation takes precedence. Goal state remains outside conversation History.
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
 | `model.executor` | `ModelExecutor` | `One` | globally required | Validates selected-model capabilities, executes one logical model call, contains retries and continuation, reports post-call usage, and durably records each physical attempt through the restricted AttemptRecorder. | Contracted |
-| `model.token-counter` | `TokenCounter` | `One` | globally required by the approved target profile; not yet enforced | Counts the complete provider-visible request for pre-call planning, using an exact tokenizer or a validated conservative bound and failing closed when neither is defensible. | Mapped |
+| `model.token-counter` | `TokenCounter` | `One` | globally requires exactly 1 | Counts the complete provider-visible request for pre-call planning, using an exact tokenizer or a validated conservative bound and failing closed when neither is defensible. | Contracted |
 | `model.attempt.observer` | `AttemptObserver` | `Chain` | optional | Synchronously records or rejects one physical provider attempt before dispatch and after completion; unlike passive telemetry it may fail closed. | Contracted |
 | `model.provider` | `ModelProvider` | `Many` | optional; required only by an Executor that declares it | Implements named provider access for Executors that compose local adapters. | Mapped |
 | `model.selector` | `ModelSelector` | `One` | optional; conditional for dynamic routing | Selects a provider/model using explicit request and policy inputs. | Mapped |

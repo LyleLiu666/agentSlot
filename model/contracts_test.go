@@ -21,7 +21,10 @@ func (executor) Execute(context.Context, model.ModelRequest, model.AttemptRecord
 func (executor) Inspect(context.Context, model.Config) (model.ExecutionCapabilities, error) {
 	return testCapabilities(), nil
 }
-func (executor) CountTokens(context.Context, model.ModelRequest) (int, error) { return 0, nil }
+
+type counter struct{}
+
+func (counter) CountTokens(context.Context, model.ModelRequest) (int, error) { return 17, nil }
 
 type attemptRecorder struct {
 	started  []model.AttemptStart
@@ -72,6 +75,59 @@ func TestModelExecutorIsOneTypedSlot(t *testing.T) {
 	}
 	if _, ok := agentslot.Get(assembly, model.ExecutorSlot); !ok {
 		t.Fatal("model.executor contribution missing")
+	}
+}
+
+type counterModule struct{}
+
+func (counterModule) ID() string { return "model.token-counter" }
+func (counterModule) Register(reg agentslot.Registrar) error {
+	return reg.Contribute(agentslot.Set(model.TokenCounterSlot, model.TokenCounter(counter{})))
+}
+
+func TestTokenCounterIsIndependentOneTypedSlot(t *testing.T) {
+	builder := agentslot.NewBuilder()
+	if err := builder.Install(counterModule{}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	assembly, err := builder.Build(agentslot.RequireOne(model.TokenCounterSlot))
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	resolved, ok := agentslot.Get(assembly, model.TokenCounterSlot)
+	if !ok {
+		t.Fatal("model.token-counter contribution missing")
+	}
+	if got, err := resolved.CountTokens(context.Background(), model.ModelRequest{}); err != nil || got != 17 {
+		t.Fatalf("CountTokens() = %d, %v; want 17", got, err)
+	}
+}
+
+func TestNewTokenCounterModuleValidatesAndContributesExplicitCounter(t *testing.T) {
+	if _, err := model.NewTokenCounterModule("", counter{}); err == nil {
+		t.Fatal("empty module ID accepted")
+	}
+	if _, err := model.NewTokenCounterModule("counter", nil); err == nil {
+		t.Fatal("nil TokenCounter accepted")
+	}
+	module, err := model.NewTokenCounterModule("counter", counter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder := agentslot.NewBuilder()
+	if err := builder.Install(module); err != nil {
+		t.Fatal(err)
+	}
+	assembly, err := builder.Build(agentslot.RequireOne(model.TokenCounterSlot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, ok := agentslot.Get(assembly, model.TokenCounterSlot)
+	if !ok {
+		t.Fatal("TokenCounter missing")
+	}
+	if got, err := resolved.CountTokens(context.Background(), model.ModelRequest{}); err != nil || got != 17 {
+		t.Fatalf("CountTokens() = %d, %v; want 17", got, err)
 	}
 }
 
