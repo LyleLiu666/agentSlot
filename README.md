@@ -28,6 +28,34 @@ Policy/Approval, synchronous usage/billing guards, and passive observation chain
 AgentSlot makes those cardinalities explicit and validates the assembled system
 before startup.
 
+The approved next standard-profile revision adds an independent
+`model.token-counter` for authoritative pre-call planning counts and broadens
+`agent.loop` from the current Step driver into a constrained execution-strategy
+Slot. These are documented target boundaries, not APIs in the current release:
+the published Go profile still runs with its current four required ecosystems,
+and the component map records `model.token-counter` as Mapped until its contract
+and assembly enforcement are implemented.
+
+`gateway.channel` is also the protocol extension seam. gRPC, WebSocket, SSH,
+and inbound ACP may be implemented independently without adding a transport
+Slot. Outbound ACP, where this Agent calls another Agent, belongs to
+`agent.provider`; sharing a codec does not merge their lifecycles or evidence.
+
+Several additional target boundaries are approved but not implemented in the
+current release. Workspace is an optional resource-isolation scope rather than
+a filesystem-root API. Long-lived tool content reuses `artifact.store`; the
+duplicate `tool.output-store` map entry has been removed, and a future
+ToolResult revision will carry bounded inline output plus standard Artifact
+references. `credential.resolver` remains Mapped while its late-binding,
+non-disclosure contract is validated across more than one credential shape.
+
+The planned `session_history` capability is a standard keyed Tool, not another
+Slot. Its default read ceiling is the current Workspace, with explicit current-
+Session and full-access product modes. The planned `agentslot init` terminal
+wizard will consume ComponentCatalog and generate explicit Go assembly code;
+its default local-coding preset keeps writes, shell commands, and external side
+effects behind approval. Neither capability is a current CLI or Go API.
+
 The generic core remains product-neutral. A standard LLM Agent explicitly uses
 `standardagent.NewApplication`, which returns the same `*agentslot.Application`
 and automatically mounts the fixed AgentRuntime/Gateway layer, an inspectable
@@ -54,8 +82,10 @@ component map is normative, while its ecosystems remain at their explicitly
 recorded maturity. Every published tag is immutable; later changes receive a
 new semantic version.
 
-All newer boundaries remain at least `Contracted`. `session.store` is now
-`Conformant` against the exact `v0.0.10` contract; no ecosystem is yet `Proven`.
+All implemented public boundaries remain at least `Contracted`.
+`model.token-counter` is the newly approved Mapped target and has no public Go
+contract yet. `session.store` is `Conformant` against the exact `v0.0.10`
+contract; no ecosystem is yet `Proven`.
 
 ## Core model
 

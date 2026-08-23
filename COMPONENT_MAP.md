@@ -32,6 +32,7 @@ The generic composition protocol exports five Go interfaces: `Module`,
 `SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. Twenty-nine
 domain contracts are now defined across the standard leaf packages; one is
 Conformant, the other twenty-eight remain Contracted, and none is Proven.
+The other twelve ecosystems remain Mapped.
 
 The nine counted vocabulary families are Agent Loop outcomes, model capability,
 tool calls, policy/approval, observation, Goal, Memory, Workflow, and Billing. This count
@@ -46,22 +47,28 @@ default. The generic
 `agentslot.NewApplication` never infers a standard Agent profile from installed
 Slots.
 
-An AgentSlot application conforms to the runnable standard agent profile only
-when its Assembly contains all four of these component ecosystems:
+The currently published Go profile requires four implemented ecosystems. The
+approved next contract revision adds the independently replaceable
+`model.token-counter`, producing the five-ecosystem target below. Until that
+contract and standard assembly change ship, `model.token-counter` remains
+Mapped and current applications continue to use the published four-component
+profile; this target description must not be read as an available Go API.
 
 `Assembly` is the immutable build result exposed by the current Go implementation.
 Its description uses `AssemblyDescription` and the `agentslot.assembly/v0` schema.
 
 | Slot ID | Standard contract | Kind | Required cardinality | Responsibility |
 | --- | --- | --- | --- | --- |
-| `agent.loop` | `AgentLoop` | `One` | exactly 1 | Owns each durable Run's advance/continue/stop decision over the framework Step protocol. |
+| `agent.loop` | `AgentLoop` | `One` | exactly 1 | Owns the Agent execution strategy through run-scoped Runtime actions while Runtime retains identity, transactions, budgets, cancellation, recovery, and fact ownership. |
 | `session.store` | `SessionStore` | `One` | exactly 1 | Persists the Session aggregate—History, Context, Queue, RunJournal, SessionModelConfig, revisions, and atomic CAS transactions—and lists resumable Sessions through bounded Agent/Workspace cursor pages. |
 | `model.executor` | `ModelExecutor` | `One` | exactly 1 | Executes one logical model call while containing provider-specific physical attempts, streaming recovery, opaque continuation state, and final failure semantics. |
-| `gateway.channel` | `GatewayChannel` | `Many` | at least 1 | Binds a TUI, Web, desktop, function, HTTP, ACP, or another caller-facing channel to the fixed Gateway. |
+| `model.token-counter` | planned `TokenCounter` | `One` | exactly 1 in the approved target; not yet enforced | Produces one authoritative pre-call planning count for the complete provider-visible request; fails closed when no defensible safe count is available. |
+| `gateway.channel` | `GatewayChannel` | `Many` | at least 1 | Binds a TUI, Web, desktop, function, HTTP, inbound ACP, or another caller-facing channel to the fixed Gateway. |
 
 `AgentRuntime` and the in-process Gateway remain framework control-plane
-behavior, not Slots. The selected `AgentLoop` controls Run progression without
-owning Session truth, Gateway routing, or transaction invariants. Creating or explicitly resuming a Session
+behavior, not Slots. The selected `AgentLoop` controls execution strategy through
+constrained, run-scoped actions without owning Session truth, Gateway routing,
+or transaction invariants. Creating or explicitly resuming a Session
 initializes one Runtime bound to that Session; listing or viewing Sessions does
 not. One started application Runtime and all AgentRuntimes registered beneath it
 live in one process. The same Session has one Runtime in that registry, that
@@ -122,8 +129,9 @@ flowchart LR
     SM --> SS["SessionStore Slot (1)"]
     REG -->|"CreateSession / ResumeSession"| R["framework AgentRuntime"]
     R --> L["AgentLoop (1)"]
-    L -. "advance Step" .-> R
+    L -. "run-scoped actions" .-> R
     R --> ME["ModelExecutor (1)"]
+    R -. "approved target" .-> TC["TokenCounter (1, mapped)"]
     ME -. "optional dependency" .-> MP["ModelProvider (0..n)"]
     R -. "optional" .-> T["Tools and skills"]
     R -. "optional" .-> C["Context components"]
@@ -176,8 +184,8 @@ Slots, and several modules may contribute to one `Many` or `Chain` Slot.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `agent.loop` | `AgentLoop` | `One` | globally requires exactly 1 | Controls sequential Step advancement and returns one finite terminal Run outcome; the standard Loop is an explicit conditional default. | Contracted |
-| `gateway.channel` | `GatewayChannel` | `Many` | globally requires at least 1 | Binds one caller-facing protocol, function API, or UI to the fixed Gateway and receives only `GatewayAccess`. | Contracted |
+| `agent.loop` | `AgentLoop` | `One` | globally requires exactly 1 | Owns replaceable Agent execution strategy through constrained Runtime actions; the current `Run.Step` contract is scheduled for redesign and does not define the Slot's final capability ceiling. | Contracted |
+| `gateway.channel` | `GatewayChannel` | `Many` | globally requires at least 1 | Binds one caller-facing protocol, function API, or UI to the fixed Gateway and receives only `GatewayAccess`; gRPC, WebSocket, SSH, and inbound ACP are alternative implementations of this Slot. | Contracted |
 | `interaction.command` | `InteractionCommand` | `Many` | optional | Registers a keyed UI-neutral command with the fixed Gateway; Channels render the shared descriptor as slash commands, menus, buttons, forms, or command palettes. | Contracted |
 | `agent.hook` | `AgentHook` | `Chain` | optional | Proposes controlled follow-on input before run completion; it cannot mutate Session state or become a second Runtime controller. | Contracted |
 | `goal.store` | `goal.Store` | `One` | optional; installed with `goal.evaluator` | Owns one CAS-protected objective lifecycle per Session, separate from append-only conversation History. | Contracted |
@@ -201,7 +209,8 @@ evaluation takes precedence. Goal state remains outside conversation History.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `model.executor` | `ModelExecutor` | `One` | globally required | Validates selected-model capabilities, counts complete requests, executes one logical model call, returns optional opaque continuation state, and durably records each physical attempt through the restricted AttemptRecorder. | Contracted |
+| `model.executor` | `ModelExecutor` | `One` | globally required | Validates selected-model capabilities, executes one logical model call, contains retries and continuation, reports post-call usage, and durably records each physical attempt through the restricted AttemptRecorder. | Contracted |
+| `model.token-counter` | planned `TokenCounter` | `One` | globally required by the approved target profile; not yet enforced | Counts the complete provider-visible request for pre-call planning, using an exact tokenizer or a validated conservative bound and failing closed when neither is defensible. | Mapped |
 | `model.attempt.observer` | `AttemptObserver` | `Chain` | optional | Synchronously records or rejects one physical provider attempt before dispatch and after completion; unlike passive telemetry it may fail closed. | Contracted |
 | `model.provider` | `ModelProvider` | `Many` | optional; required only by an Executor that declares it | Implements named provider access for Executors that compose local adapters. | Mapped |
 | `model.selector` | `ModelSelector` | `One` | optional; conditional for dynamic routing | Selects a provider/model using explicit request and policy inputs. | Mapped |
@@ -239,7 +248,6 @@ wire objects.
 | `tool` | `Tool` | `Many` | optional globally; profiles may require keys | Declares and invokes a named capability available to AgentRuntime. | Contracted |
 | `skill` | `Skill` | `Many` | optional | Supplies discoverable instructions, resources, or component bundles without pretending natural-language keyword matching is semantic routing. | Mapped |
 | `tool.middleware` | `ToolMiddleware` | `Chain` | optional | Wraps invocation for policy, telemetry, normalization, or recovery. | Mapped |
-| `tool.output-store` | `ToolOutputStore` | `One` | optional | Stores oversized or binary tool results and returns stable references. | Mapped |
 
 The [`tool` package](tool) fixes the portable tool-call vocabulary:
 
@@ -258,6 +266,14 @@ keyword and size limits; they may not reinterpret the standard schema.
 Common file read/write/edit and controlled shell execution belong in an
 official optional component pack. They must remain disableable, and their risk
 decisions must use policy/approval components rather than concrete UI checks.
+
+The approved target ToolResult adds an explicit inline-output budget and a
+standard list of `artifact.store` metadata references. Tools handle the budget
+normally; fixed Runtime validates it before History persistence and never
+silently truncates or automatically retries a violating, possibly effectful
+call. The published ToolResult does not yet expose these fields. Capture,
+preview, truncation, search, and paged reading remain Tool/package behavior and
+do not form a second `tool.output-store` ecosystem.
 
 ### 4. Context, history, and memory
 
@@ -293,6 +309,12 @@ must not create, load, recover, or start a Session Runtime.
 The standard Compactor contract is replaceable: any “summary plus last three
 inbound messages” algorithm is a default implementation, not a framework
 invariant.
+The approved `session_history` target is a keyed standard Tool rather than a
+new Slot. It returns a model-safe, revision-traceable projection through a
+narrow read-only History boundary. Its configurable ceiling is current Session,
+same Workspace, or explicit full access; same Workspace is the default and an
+AuthorizationProvider may only narrow it. This Tool and configuration are not
+yet published APIs.
 The `memory` package fixes portable scope and memory-kind vocabularies and
 provides optional recall/remember/forget tools plus a pre-recall ContextSource.
 Its Store contract preserves four typed candidate payloads, source and
@@ -308,10 +330,10 @@ prompt text, invent missing facts, or silently discard a supplied fact.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `workspace.manager` | `WorkspaceManager` | `One` | optional | Defines the files, roots, isolation, and lifetime visible to an agent session or run. | Mapped |
+| `workspace.manager` | `WorkspaceManager` | `One` | optional | Resolves and isolates the trusted resource boundary visible to a Session or Run; a Workspace may be a local directory, container, remote resource, cloud notes, or object storage, while concrete operations remain separate components. | Mapped |
 | `execution.environment` | `ExecutionEnvironment` | `Many` | optional | Executes commands or code in a named local, container, sandbox, or remote environment. | Mapped |
-| `artifact.store` | `ArtifactStore` | `One` | optional; required by components that consume attachments | Persists immutable inbound or generated content and resolves stable metadata/references without placing binary data or local paths in History. | Contracted |
-| `credential.resolver` | `CredentialResolver` | `One` | optional | Resolves scoped credentials without placing secret values in Assemblies or component descriptions. | Mapped |
+| `artifact.store` | `ArtifactStore` | `One` | optional; required by components that consume attachments | Persists immutable inbound or generated content—including tool content deliberately retained long-term—and resolves stable metadata/references without placing binary data, local paths, or credentials in History. | Contracted |
+| `credential.resolver` | `CredentialResolver` | `One` | optional | Late-resolves a product-supplied CredentialRef at an outbound physical-request boundary without placing raw secret values in Assembly descriptions, Session facts, observations, usage, billing, or audit. | Mapped |
 
 ### 6. Policy, authorization, and human approval
 

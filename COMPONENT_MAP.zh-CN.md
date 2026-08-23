@@ -30,7 +30,7 @@
 独立的组装协议目前导出了五个 Go 接口：`Module`、`SlotRequirer`、
 `Registrar`、`Contribution` 和 `Lifecycle`。它们是框架机制，不能代替
 地图中 41 个 Agent 领域组件生态位；其中 29 个已经具备公开合同，1 个已通过一致性验证，
-其余 28 个保持已定义契约，尚无生态位达到 Proven。
+其余 28 个保持已定义契约，另外 12 个保持已映射，尚无生态位达到 Proven。
 
 表中 9 组有限领域词汇分别是：Agent Loop 结果、模型能力、工具调用、策略/审批、观察、
 Goal、Memory、Workflow 和 Billing。这个数字只统计为了互操作而固定的有限词汇和事实，不统计普通常量。
@@ -42,21 +42,24 @@ Goal、Memory、Workflow 和 Billing。这个数字只统计为了互操作而�
 AgentLoop 默认实现；通用
 `agentslot.NewApplication` 不会根据已安装 Slot 隐式推断标准 Agent。
 
-只有最终 Assembly（应用装配结果）同时包含以下四类组件时，一个 AgentSlot 应用才符合
-“可运行标准 Agent Profile”：
+当前已发布的 Go Profile 要求四个已经实现的生态位。获准的下一版合同将增加可独立替换的
+`model.token-counter`，形成下表五个生态位的目标 Profile。在该合同和标准装配代码发布前，
+`model.token-counter` 仍为“已映射”，当前应用继续按已发布四件套运行；下表目标不能被理解为
+已经可用的 Go API。
 
 `Assembly` 是当前 Go 实现导出的不可变 Build 结果。其描述对象为
 `AssemblyDescription`，格式标识为 `agentslot.assembly/v0`。
 
 | Slot ID | 标准契约 | 类型 | 必需基数 | 职责 |
 | --- | --- | --- | --- | --- |
-| `agent.loop` | `AgentLoop` | `One` | 恰好 1 个 | 通过框架 Step 协议决定每个持久 Run 如何推进、继续或停止。 |
+| `agent.loop` | `AgentLoop` | `One` | 恰好 1 个 | 通过受限的 Run-scoped Runtime actions 决定 Agent 执行策略；Runtime 继续拥有身份、事务、预算、取消、恢复和事实。 |
 | `session.store` | `SessionStore` | `One` | 恰好 1 个 | 持久化 Session 聚合中的 History、Context、Queue、RunJournal、SessionModelConfig、revision 和原子 CAS 事务，并通过有界的 Agent/Workspace 游标分页列出可恢复 Session。 |
 | `model.executor` | `ModelExecutor` | `One` | 恰好 1 个 | 执行一次逻辑模型调用，并封装 Provider 专属的真实请求、流恢复、不透明续传状态和最终失败语义。 |
-| `gateway.channel` | `GatewayChannel` | `Many` | 至少 1 个 | 把 TUI、Web、桌面端、函数、HTTP、ACP 或其他调用 Channel 绑定到固定 Gateway。 |
+| `model.token-counter` | 计划中的 `TokenCounter` | `One` | 获准目标中恰好 1 个；当前尚未强制 | 为完整 Provider 可见请求提供一个调用前权威规划计数；无法给出可信安全计数时 fail closed。 |
+| `gateway.channel` | `GatewayChannel` | `Many` | 至少 1 个 | 把 TUI、Web、桌面端、函数、HTTP、入站 ACP 或其他调用 Channel 绑定到固定 Gateway。 |
 
 `AgentRuntime` 与进程内 Gateway 仍是框架固定的控制面，不是 Slot。选中的
-`AgentLoop` 负责 Run 推进，但不拥有 Session 真相、Gateway 路由或事务不变量。创建或显式恢复 Session 时初始化一个绑定该 Session 的 Runtime；仅列出或
+`AgentLoop` 通过受限的 Run-scoped actions 负责执行策略，但不拥有 Session 真相、Gateway 路由或事务不变量。创建或显式恢复 Session 时初始化一个绑定该 Session 的 Runtime；仅列出或
 浏览 Session 不创建。一个启动后的应用级 Runtime 及其登记的全部 AgentRuntime 位于
 同一进程；同一 Session 在该注册表中只有一个 Runtime，idle 时继续驻留，只在显式
 Close 或应用停止时释放。GatewayChannel 只能调用固定 Gateway 的与传输协议无关接口，
@@ -105,8 +108,9 @@ flowchart LR
     SM --> SS["SessionStore Slot（1）"]
     REG -->|"CreateSession / ResumeSession"| R["框架 AgentRuntime"]
     R --> L["AgentLoop（1）"]
-    L -. "推进 Step" .-> R
+    L -. "Run-scoped actions" .-> R
     R --> ME["ModelExecutor（1）"]
+    R -. "获准目标" .-> TC["TokenCounter（1，已映射）"]
     ME -. "可选依赖" .-> MP["ModelProvider（0..n）"]
     R -. "可选" .-> T["工具与技能"]
     R -. "可选" .-> C["Context 组件"]
@@ -154,8 +158,8 @@ Runtime 与选中的 AgentLoop 不按具体类型分支即可消费它们。
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `agent.loop` | `AgentLoop` | `One` | 全局恰好 1 个 | 顺序推进 Step，并返回有限的 Run 终态；标准 Loop 是显式安装的条件默认值。 | 已定义契约 |
-| `gateway.channel` | `GatewayChannel` | `Many` | 全局至少 1 个 | 把调用方协议、函数 API 或 UI 绑定到固定 Gateway，并且只能取得 `GatewayAccess`。 | 已定义契约 |
+| `agent.loop` | `AgentLoop` | `One` | 全局恰好 1 个 | 通过受限 Runtime actions 承载可替换的 Agent 执行策略；当前 `Run.Step` 合同需要重构，不能代表 Slot 最终能力上限。 | 已定义契约 |
+| `gateway.channel` | `GatewayChannel` | `Many` | 全局至少 1 个 | 把调用方协议、函数 API 或 UI 绑定到固定 Gateway，并且只能取得 `GatewayAccess`；gRPC、WebSocket、SSH 和入站 ACP 都是该 Slot 的不同实现。 | 已定义契约 |
 | `interaction.command` | `InteractionCommand` | `Many` | 可选 | 向固定 Gateway 注册具名、UI-neutral 的结构化命令；Channel 把共享描述渲染为 Slash、菜单、按钮、表单或命令面板。 | 已定义契约 |
 | `agent.hook` | `AgentHook` | `Chain` | 可选 | 在 Run 完成前提出受控的后续输入；不能修改 Session 状态，也不能成为第二个 Runtime 控制者。 | 已定义契约 |
 | `goal.store` | `goal.Store` | `One` | 可选；与 `goal.evaluator` 同时安装 | 为每个 Session 保存一份受 CAS 保护的目标生命周期，与仅追加的会话 History 分离。 | 已定义契约 |
@@ -176,7 +180,8 @@ Goal 状态不写进会话 History。
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `model.executor` | `ModelExecutor` | `One` | 全局必需 | 校验所选模型能力、计量完整请求并执行一次逻辑模型调用，可返回不透明续传状态；通过受限 AttemptRecorder 持久记录每次真实请求。 | 已定义契约 |
+| `model.executor` | `ModelExecutor` | `One` | 全局必需 | 校验所选模型能力、执行一次逻辑模型调用、封装重试和续传、报告调用后 Usage，并通过受限 AttemptRecorder 持久记录每次真实请求。 | 已定义契约 |
+| `model.token-counter` | 计划中的 `TokenCounter` | `One` | 获准目标 Profile 全局必需；当前尚未强制 | 为调用前规划计量完整 Provider 可见请求；使用精确 tokenizer 或经过验证的保守上界，两者都不可信时 fail closed。 | 已映射 |
 | `model.attempt.observer` | `AttemptObserver` | `Chain` | 可选 | 在每次真实 Provider 请求发送前和结束后同步记录或拒绝；与被动遥测不同，它可以 fail closed。 | 已定义契约 |
 | `model.provider` | `ModelProvider` | `Many` | 可选；仅由声明依赖的 Executor 要求 | 为组合本地适配器的 Executor 提供具名 Provider 访问。 | 已映射 |
 | `model.selector` | `ModelSelector` | `One` | 可选；动态路由时按条件要求 | 根据明确的请求和策略输入选择 Provider/模型。 | 已映射 |
@@ -208,7 +213,6 @@ OpenAI 专属的网络数据结构。
 | `tool` | `Tool` | `Many` | 全局可选；Profile 可要求指定键 | 声明并调用一个可供 AgentRuntime 使用的具名能力。 | 已定义契约 |
 | `skill` | `Skill` | `Many` | 可选 | 提供可发现的指令、资源或组件包，不能用自然语言关键字匹配冒充语义路由。 | 已映射 |
 | `tool.middleware` | `ToolMiddleware` | `Chain` | 可选 | 为调用过程增加策略、遥测、标准化或恢复处理。 | 已映射 |
-| `tool.output-store` | `ToolOutputStore` | `One` | 可选 | 存储超大或二进制工具结果，并返回稳定引用。 | 已映射 |
 
 [`tool` 包](tool)已经固定可移植的工具调用词汇：
 
@@ -226,6 +230,11 @@ OpenAI 专属的网络数据结构。
 通用文件读取、写入、编辑以及受控 Shell 执行，应放在官方可选组件包中。
 这些能力必须可以关闭；风险决策必须通过策略/审批组件完成，不能检查具体 UI
 类型来决定。
+
+获准的目标 ToolResult 将增加明确的内联输出预算和标准 `artifact.store` 元数据引用列表。
+Tool 正常处理预算，固定 Runtime 在写入 History 前再次校验；不得静默截断，也不得自动重试
+可能已经产生副作用的违规调用。当前已发布 ToolResult 尚无这些字段。Capture、预览、截断、
+搜索和分页读取继续属于 Tool/工具包，不形成第二个 `tool.output-store` 生态位。
 
 ### 4. 上下文、历史与记忆
 
@@ -258,6 +267,9 @@ Store 生命周期及完全相同的 Agent/Workspace 作用域。列出 Session 
 恢复或启动 Session Runtime。
 标准 Compactor 契约允许整体替换；“摘要 + 最近三条 inbound”只是默认实现，
 不是框架不变量。
+获准的 `session_history` 目标是标准具名 Tool，不新增 Slot。它通过窄只读 History 边界返回
+可追溯 revision 的模型安全视图；读取上限可配置为当前 Session、同 Workspace 或显式 full
+access，默认同 Workspace，AuthorizationProvider 只能进一步收紧。该 Tool 和配置尚未发布。
 `memory` 包固定可移植的 scope 与 memory kind 词汇，并提供可选的
 recall/remember/forget 工具和预召回 ContextSource。Store 契约完整保留四种 typed
 candidate payload、来源与可信度、执行 provenance、显式 visibility/writeback 治理、
@@ -270,10 +282,10 @@ candidate payload、来源与可信度、执行 provenance、显式 visibility/w
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `workspace.manager` | `WorkspaceManager` | `One` | 可选 | 定义 Agent Session 或 Run 可见的文件、根目录、隔离和生命周期。 | 已映射 |
+| `workspace.manager` | `WorkspaceManager` | `One` | 可选 | 解析并隔离 Session 或 Run 可见的可信资源边界；Workspace 可以是本地目录、容器、远程资源、云笔记或对象存储，具体操作继续属于独立组件。 | 已映射 |
 | `execution.environment` | `ExecutionEnvironment` | `Many` | 可选 | 在具名的本地、容器、沙箱或远程环境中执行命令或代码。 | 已映射 |
-| `artifact.store` | `ArtifactStore` | `One` | 可选；消费附件的组件必须依赖 | 持久化不可变的输入附件或生成内容，通过稳定元数据和引用读取；History 不保存二进制内容或本地路径。 | 已定义契约 |
-| `credential.resolver` | `CredentialResolver` | `One` | 可选 | 解析有作用域的凭证，不在 Assembly 或组件描述中放入密钥值。 | 已映射 |
+| `artifact.store` | `ArtifactStore` | `One` | 可选；消费附件的组件必须依赖 | 持久化不可变的输入附件、生成内容及明确长期保留的工具内容，通过稳定元数据和引用读取；History 不保存二进制、本地路径或凭据。 | 已定义契约 |
+| `credential.resolver` | `CredentialResolver` | `One` | 可选 | 在真实外部请求边界晚绑定产品提供的 CredentialRef，不把原始密钥写入 Assembly 描述、Session 事实、观察、Usage、Billing 或审计。 | 已映射 |
 
 ### 6. 策略、授权与人工审批
 
