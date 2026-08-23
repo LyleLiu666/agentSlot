@@ -48,10 +48,11 @@ Workspace is now a Contracted optional resource-isolation scope rather than a
 filesystem-root API. Runtime propagates the Session-owned Agent/Workspace
 identity to policy and Tool calls; an installed Manager resolves an opaque
 boundary and rejects missing resources without falling back to process state.
-Long-lived tool content reuses `artifact.store`; the
-duplicate `tool.output-store` map entry has been removed, and a future
-ToolResult revision will carry bounded inline output plus standard Artifact
-references. `credential.resolver` remains Mapped while its late-binding,
+Long-lived tool content reuses `artifact.store`; the duplicate
+`tool.output-store` map entry has been removed. ToolInvocation now carries an
+explicit inline-output byte budget, ToolResult carries standard Artifact
+metadata references, and Runtime rejects violations before continuing the Run.
+`credential.resolver` remains Mapped while its late-binding,
 non-disclosure contract is validated across more than one credential shape.
 
 The planned `session_history` capability is a standard keyed Tool, not another
@@ -304,7 +305,9 @@ contribution that would bypass GatewayAccess binding or lifecycle ordering.
 Tools, ModelProviders, Context components, and AgentHooks are optional globally;
 an installed ModelExecutor may explicitly require one or more ModelProviders.
 Installed Tools are not implicitly authorized: `AgentRuntimeConfig.ToolKeys` is
-a strict allowlist, and nil, empty, or omitted values expose no Tools. AgentHook
+a strict allowlist, and nil, empty, or omitted values expose no Tools. Selecting
+any Tool also requires a positive `MaxInlineToolResultBytes`; Runtime supplies
+that budget to every invocation and fails the Run on a violating result. AgentHook
 only proposes follow-on input before Run completion; applied Session commits are
 observed separately through the asynchronous `session.commit.observer` chain.
 `interaction.command` is an optional `Many` Slot for structured commands that

@@ -29,6 +29,13 @@ when real consumers expose a flawed boundary.
   values derived from the authoritative Session. Installed Workspace managers
   reject missing boundaries before Session creation or recovery and never
   fall back to process-global resources.
+- Added an explicit per-invocation inline ToolResult byte budget and standard
+  immutable Artifact metadata references. History and Fork preserve those
+  references while OpenAI-compatible model projection exposes only safe
+  metadata.
+- Runtime now converts invalid or oversized Tool results into a durable
+  structured contract failure, stops the Run, aborts later serial calls, and
+  never silently truncates or retries the possibly effectful Tool.
 
 ### Changed
 

@@ -22,7 +22,7 @@ func TestToolDispatcherRunsParallelSafeBatchBeforeSerialCall(t *testing.T) {
 		{Key: "first", Value: &dispatcherTool{name: "first", safety: tool.ParallelSafe, started: firstStarted, release: release, schema: schema}},
 		{Key: "second", Value: &dispatcherTool{name: "second", safety: tool.ParallelSafe, started: secondStarted, release: release, schema: schema}},
 		{Key: "serial", Value: &dispatcherTool{name: "serial", safety: tool.Serial, started: serialStarted, schema: schema}},
-	}, nil, nil)
+	}, nil, nil, 1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestToolDispatcherReturnsSafeFailuresForUnknownAndInvalidArguments(t *testi
 	schema := dispatcherSchema(t)
 	dispatcher, err := newToolDispatcher([]agentslot.Named[tool.Tool]{{
 		Key: "known", Value: &dispatcherTool{name: "known", safety: tool.Serial, started: make(chan struct{}), schema: schema},
-	}}, nil, nil)
+	}}, nil, nil, 1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestToolDispatcherReturnsSafeFailuresForUnknownAndInvalidArguments(t *testi
 func TestToolDispatcherRejectsSlotKeyDefinitionDrift(t *testing.T) {
 	_, err := newToolDispatcher([]agentslot.Named[tool.Tool]{{
 		Key: "slot-key", Value: &dispatcherTool{name: "different", safety: tool.Serial, started: make(chan struct{}), schema: dispatcherSchema(t)},
-	}}, nil, nil)
+	}}, nil, nil, 1024)
 	if err == nil {
 		t.Fatal("dispatcher accepted Tool key/definition drift")
 	}
@@ -98,7 +98,7 @@ func TestToolDispatcherRequiresApprovalWithoutGivingPolicyMutationAuthority(t *t
 		Key: "effect", Value: &dispatcherTool{
 			name: "effect", safety: tool.Serial, started: make(chan struct{}), schema: dispatcherSchema(t), arguments: arguments,
 		},
-	}}, []policy.PolicyGuard{guard}, approval)
+	}}, []policy.PolicyGuard{guard}, approval, 1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestToolDispatcherFailsClosedForPolicyAndApprovalFailures(t *testing.T) {
 			started := make(chan struct{})
 			dispatcher, err := newToolDispatcher([]agentslot.Named[tool.Tool]{{
 				Key: "effect", Value: &dispatcherTool{name: "effect", safety: tool.Serial, started: started, schema: dispatcherSchema(t)},
-			}}, []policy.PolicyGuard{test.guard}, test.approval)
+			}}, []policy.PolicyGuard{test.guard}, test.approval, 1024)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -165,7 +165,7 @@ type dispatcherTool struct {
 }
 
 func dispatchForTest(dispatcher *toolDispatcher, calls []agent.ToolCall) []tool.ToolResult {
-	return dispatcher.dispatchPrepared(context.Background(), calls, nil, workspace.Scope{AgentID: "test-agent", WorkspaceID: "test-workspace"}, nil)
+	return dispatcher.dispatchPrepared(context.Background(), calls, nil, workspace.Scope{AgentID: "test-agent", WorkspaceID: "test-workspace"}, nil).results
 }
 
 func (t *dispatcherTool) Definition() tool.Definition {

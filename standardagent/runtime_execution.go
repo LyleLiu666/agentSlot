@@ -98,16 +98,20 @@ func (r *runtimeInstance) restorePreparedRun(snapshot session.Snapshot) error {
 }
 
 func (r *runtimeInstance) resumePreparedCalls(run *activeRun, calls []agent.ToolCall) {
-	results := r.components.dispatcher.dispatchPrepared(run.ctx, calls, func(call agent.ToolCall) error {
+	dispatched := r.components.dispatcher.dispatchPrepared(run.ctx, calls, func(call agent.ToolCall) error {
 		return r.markToolExecuting(run, call)
 	}, r.workspaceScope(), r.workspaceBoundary)
-	next, canceled, err := r.commitToolResults(run, calls, results)
+	next, canceled, err := r.commitToolResults(run, calls, dispatched.results)
 	if err != nil {
 		r.finishRun(run, stepFailed)
 		return
 	}
 	if canceled {
 		r.finishRun(run, stepCanceled)
+		return
+	}
+	if dispatched.contractViolation {
+		r.finishRun(run, stepFailed)
 		return
 	}
 	r.runLoop(run, next)
@@ -297,15 +301,18 @@ func (r *runtimeInstance) executeStep(run *activeRun, step agent.StepID) (stepOu
 				return stepFailed, ""
 			}
 			if len(calls) > 0 {
-				results := r.components.dispatcher.dispatchPrepared(run.ctx, calls, func(call agent.ToolCall) error {
+				dispatched := r.components.dispatcher.dispatchPrepared(run.ctx, calls, func(call agent.ToolCall) error {
 					return r.markToolExecuting(run, call)
 				}, r.workspaceScope(), r.workspaceBoundary)
-				next, canceled, err := r.commitToolResults(run, calls, results)
+				next, canceled, err := r.commitToolResults(run, calls, dispatched.results)
 				if err != nil {
 					return stepFailed, ""
 				}
 				if canceled {
 					return stepCanceled, ""
+				}
+				if dispatched.contractViolation {
+					return stepFailed, ""
 				}
 				return stepContinue, next
 			}
@@ -1073,6 +1080,7 @@ func cloneRuntimeConfig(source model.Config) model.Config {
 func cloneRuntimeToolResult(source tool.ToolResult) tool.ToolResult {
 	copy := source
 	copy.Output = append([]byte(nil), source.Output...)
+	copy.Artifacts = append(source.Artifacts[:0:0], source.Artifacts...)
 	if source.Error != nil {
 		errorCopy := *source.Error
 		copy.Error = &errorCopy

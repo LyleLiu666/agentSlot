@@ -35,6 +35,8 @@ type AgentRuntimeConfig struct {
 	Context              ContextConfig
 	ContextRetentionMode ContextRetentionMode
 	MaxTokensPerRun      int64
+	// MaxInlineToolResultBytes is required when ToolKeys is non-empty.
+	MaxInlineToolResultBytes int
 }
 
 type ContextRetentionMode string
@@ -64,6 +66,7 @@ func NewApplication(spec ApplicationSpec) *agentslot.Application {
 		agentslot.RequireOne(loop.AgentLoopSlot),
 		agentslot.RequireOne(session.StoreSlot),
 		agentslot.RequireOne(model.ExecutorSlot),
+		agentslot.RequireOne(model.TokenCounterSlot),
 		agentslot.RequireMany(interaction.ChannelSlot, 1),
 	}
 	requirements = append(requirements, spec.Requirements...)

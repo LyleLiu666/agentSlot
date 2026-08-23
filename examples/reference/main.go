@@ -159,10 +159,11 @@ func buildReferenceApplication(config referenceConfig, channels ...agentslot.Mod
 	application := standardagent.NewApplication(standardagent.ApplicationSpec{
 		Name: "reference-agent", DefaultModelConfig: defaultModel,
 		RuntimeConfig: standardagent.AgentRuntimeConfig{
-			SystemPrompt:         "You are a careful coding agent. Use installed tools only when they materially help the user.",
-			ToolKeys:             []string{bash.Key, files.ReadKey, files.WriteKey, files.EditKey, httptool.Key},
-			ContextRetentionMode: config.contextRetentionMode,
-			MaxTokensPerRun:      config.maxTokensPerRun,
+			SystemPrompt:             "You are a careful coding agent. Use installed tools only when they materially help the user.",
+			ToolKeys:                 []string{bash.Key, files.ReadKey, files.WriteKey, files.EditKey, httptool.Key},
+			ContextRetentionMode:     config.contextRetentionMode,
+			MaxTokensPerRun:          config.maxTokensPerRun,
+			MaxInlineToolResultBytes: 64 << 10,
 		},
 		Modules: modules,
 	})

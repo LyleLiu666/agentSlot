@@ -409,6 +409,7 @@ func cloneInput(source Input) Input {
 	if source.ToolResult != nil {
 		result := *source.ToolResult
 		result.Output = append([]byte(nil), source.ToolResult.Output...)
+		result.Artifacts = append(source.ToolResult.Artifacts[:0:0], source.ToolResult.Artifacts...)
 		if source.ToolResult.Error != nil {
 			errorCopy := *source.ToolResult.Error
 			result.Error = &errorCopy

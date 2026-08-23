@@ -70,8 +70,8 @@ Session-to-Runtime 注册表和固定 Gateway。框架内部 Runtime 协调器�
 同一注册表中的全部 Runtime 位于同一进程；仅持久化但尚未打开的 Session 不占用
 Runtime。这是标准架构边界，不是第一版的妥协。
 
-一个不可变 AgentRuntimeConfig 快照为 Runtime 生命周期提供 SystemPrompt、ToolKeys
-和 Context 配置。Agent 级默认模型只初始化新 Session；每个 Session 通过
+一个不可变 AgentRuntimeConfig 快照为 Runtime 生命周期提供 SystemPrompt、ToolKeys、
+MaxInlineToolResultBytes 和 Context 配置。Agent 级默认模型只初始化新 Session；每个 Session 通过
 SessionModelConfig 持久保存当前 Provider、Model、Reasoning 和模型参数。该配置可以
 在 Runtime idle 时显式修改，并在每个 Run 开始时冻结快照。SystemPrompt 和工具
 Schema 在模型请求中装配，不能仅因为模型可见就反复写成 History 事实。
@@ -231,9 +231,9 @@ OpenAI 专属的网络数据结构。
 这些能力必须可以关闭；风险决策必须通过策略/审批组件完成，不能检查具体 UI
 类型来决定。
 
-获准的目标 ToolResult 将增加明确的内联输出预算和标准 `artifact.store` 元数据引用列表。
+ToolInvocation 携带明确的内联输出预算，ToolResult 携带标准 `artifact.store` 元数据引用列表。
 Tool 正常处理预算，固定 Runtime 在写入 History 前再次校验；不得静默截断，也不得自动重试
-可能已经产生副作用的违规调用。当前已发布 ToolResult 尚无这些字段。Capture、预览、截断、
+可能已经产生副作用的违规调用。Capture、预览、截断、
 搜索和分页读取继续属于 Tool/工具包，不形成第二个 `tool.output-store` 生态位。
 
 ### 4. 上下文、历史与记忆

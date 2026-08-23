@@ -353,6 +353,9 @@ func (m sessionPairModule) Register(reg agentslot.Registrar) error {
 
 func startRound7Application(t *testing.T, executor model.ModelExecutor, config AgentRuntimeConfig, extras ...agentslot.Module) (interaction.GatewayAccess, *session.MemoryStore, func()) {
 	t.Helper()
+	if len(config.ToolKeys) > 0 && config.MaxInlineToolResultBytes == 0 {
+		config.MaxInlineToolResultBytes = testMaxInlineToolResultBytes
+	}
 	store := session.NewMemoryStore()
 	entry := &captureChannel{}
 	counter := model.NewFakeTokenCounter()

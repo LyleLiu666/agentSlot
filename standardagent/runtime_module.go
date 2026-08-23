@@ -86,6 +86,9 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 			if m.config.MaxTokensPerRun < 0 {
 				return nil, fmt.Errorf("standardagent: MaxTokensPerRun cannot be negative")
 			}
+			if m.config.MaxInlineToolResultBytes < 0 {
+				return nil, fmt.Errorf("standardagent: MaxInlineToolResultBytes cannot be negative")
+			}
 			if !m.config.ContextRetentionMode.Valid() {
 				return nil, fmt.Errorf("standardagent: invalid ContextRetentionMode %q", m.config.ContextRetentionMode)
 			}
@@ -133,6 +136,9 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 			if err != nil {
 				return nil, err
 			}
+			if len(selectedTools) > 0 && m.config.MaxInlineToolResultBytes == 0 {
+				return nil, fmt.Errorf("standardagent: MaxInlineToolResultBytes must be positive when tools are selected")
+			}
 			guards, err := agentslot.ResolveChain(resolver, policy.GuardSlot)
 			if err != nil {
 				return nil, err
@@ -141,7 +147,7 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 			if err != nil {
 				return nil, err
 			}
-			dispatcher, err := newToolDispatcher(selectedTools, guards, approval)
+			dispatcher, err := newToolDispatcher(selectedTools, guards, approval, m.config.MaxInlineToolResultBytes)
 			if err != nil {
 				return nil, err
 			}

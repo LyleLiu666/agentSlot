@@ -84,8 +84,8 @@ one registry lives in the same process, while persisted Sessions that have not
 been opened occupy no Runtime. This is the standard architecture boundary, not
 a first-version compromise.
 
-An immutable AgentRuntimeConfig snapshot supplies SystemPrompt, ToolKeys, and
-Context settings for one Runtime lifetime. An Agent-level default initializes
+An immutable AgentRuntimeConfig snapshot supplies SystemPrompt, ToolKeys,
+MaxInlineToolResultBytes, and Context settings for one Runtime lifetime. An Agent-level default initializes
 new Sessions, while each Session durably owns its current provider, model,
 reasoning, and model parameters as SessionModelConfig. That model configuration
 may be changed explicitly while the Runtime is idle and is snapshotted for each
@@ -267,11 +267,11 @@ Common file read/write/edit and controlled shell execution belong in an
 official optional component pack. They must remain disableable, and their risk
 decisions must use policy/approval components rather than concrete UI checks.
 
-The approved target ToolResult adds an explicit inline-output budget and a
-standard list of `artifact.store` metadata references. Tools handle the budget
-normally; fixed Runtime validates it before History persistence and never
-silently truncates or automatically retries a violating, possibly effectful
-call. The published ToolResult does not yet expose these fields. Capture,
+ToolInvocation carries an explicit inline-output budget and ToolResult carries
+a standard list of `artifact.store` metadata references. Tools handle the
+budget normally; fixed Runtime validates it before History persistence and
+never silently truncates or automatically retries a violating, possibly
+effectful call. Capture,
 preview, truncation, search, and paged reading remain Tool/package behavior and
 do not form a second `tool.output-store` ecosystem.
 

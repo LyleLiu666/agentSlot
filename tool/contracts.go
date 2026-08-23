@@ -7,6 +7,7 @@ import (
 
 	agentslot "github.com/LyleLiu666/agentSlot"
 	agent "github.com/LyleLiu666/agentSlot/agent"
+	"github.com/LyleLiu666/agentSlot/artifact"
 	"github.com/LyleLiu666/agentSlot/workspace"
 )
 
@@ -46,8 +47,11 @@ type ToolInvocation struct {
 	// WorkspaceBoundary is the opaque binding returned by an installed
 	// Workspace Manager. It is nil when the optional Manager is absent.
 	WorkspaceBoundary workspace.Boundary
-	RunID             agent.RunID
-	StepID            agent.StepID
+	// MaxInlineOutputBytes is the exact byte budget for ToolResult.Output.
+	// Tools may use a lower limit or persist full content before returning.
+	MaxInlineOutputBytes int
+	RunID                agent.RunID
+	StepID               agent.StepID
 }
 
 // ToolResult is the structured durable outcome passed back to the model.
@@ -56,6 +60,9 @@ type ToolResult struct {
 	Status ResultStatus
 	Output json.RawMessage
 	Error  *StructuredError
+	// Artifacts are stable references to immutable content already committed
+	// through an ArtifactStore before this result is returned.
+	Artifacts []artifact.Metadata
 }
 
 // Validate ensures a result has exactly one terminal status and a matching
@@ -66,6 +73,16 @@ func (r ToolResult) Validate() error {
 	}
 	if len(r.Output) > 0 && !json.Valid(r.Output) {
 		return fmt.Errorf("tool: result output must be valid JSON")
+	}
+	seenArtifacts := make(map[string]bool, len(r.Artifacts))
+	for _, reference := range r.Artifacts {
+		if err := reference.Validate(); err != nil {
+			return fmt.Errorf("tool: invalid artifact reference: %w", err)
+		}
+		if seenArtifacts[reference.ID] {
+			return fmt.Errorf("tool: duplicate artifact reference %q", reference.ID)
+		}
+		seenArtifacts[reference.ID] = true
 	}
 	switch r.Status {
 	case ResultSucceeded:
@@ -82,6 +99,22 @@ func (r ToolResult) Validate() error {
 		}
 	default:
 		return fmt.Errorf("tool: unknown result status %q", r.Status)
+	}
+	return nil
+}
+
+// ValidateWithin validates the durable result and enforces the exact inline
+// byte budget supplied with the invocation. It never truncates or rewrites the
+// result.
+func (r ToolResult) ValidateWithin(maxInlineOutputBytes int) error {
+	if maxInlineOutputBytes <= 0 {
+		return fmt.Errorf("tool: inline output budget must be positive")
+	}
+	if err := r.Validate(); err != nil {
+		return err
+	}
+	if len(r.Output) > maxInlineOutputBytes {
+		return fmt.Errorf("tool: inline output is %d bytes and exceeds budget %d", len(r.Output), maxInlineOutputBytes)
 	}
 	return nil
 }

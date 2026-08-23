@@ -1220,8 +1220,13 @@ func sameToolCall(left, right agent.ToolCall) bool {
 }
 
 func sameToolResult(left, right tool.ToolResult) bool {
-	if left.CallID != right.CallID || left.Status != right.Status || !bytes.Equal(left.Output, right.Output) {
+	if left.CallID != right.CallID || left.Status != right.Status || !bytes.Equal(left.Output, right.Output) || len(left.Artifacts) != len(right.Artifacts) {
 		return false
+	}
+	for index := range left.Artifacts {
+		if left.Artifacts[index] != right.Artifacts[index] {
+			return false
+		}
 	}
 	if left.Error == nil || right.Error == nil {
 		return left.Error == nil && right.Error == nil

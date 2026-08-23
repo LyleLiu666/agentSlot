@@ -114,6 +114,9 @@ func TestToolPolicyAndExecutionPublishAuditTraceAndMetricWithoutGivingSinksContr
 
 func startObservedApplication(t *testing.T, executor model.ModelExecutor, records *observationRecords, runtimeConfig AgentRuntimeConfig, extras ...agentslot.Module) (interaction.GatewayAccess, func()) {
 	t.Helper()
+	if len(runtimeConfig.ToolKeys) > 0 && runtimeConfig.MaxInlineToolResultBytes == 0 {
+		runtimeConfig.MaxInlineToolResultBytes = testMaxInlineToolResultBytes
+	}
 	defaultModel := model.Config{ProviderKey: "provider", ModelID: "first", Reasoning: model.ReasoningDefault}
 	memory := session.NewMemoryModule()
 	entry := &captureChannel{}

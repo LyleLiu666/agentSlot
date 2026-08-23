@@ -11,12 +11,15 @@ import (
 
 	agentslot "github.com/LyleLiu666/agentSlot"
 	agent "github.com/LyleLiu666/agentSlot/agent"
+	"github.com/LyleLiu666/agentSlot/artifact"
 	"github.com/LyleLiu666/agentSlot/interaction"
 	"github.com/LyleLiu666/agentSlot/model"
 	"github.com/LyleLiu666/agentSlot/policy"
 	"github.com/LyleLiu666/agentSlot/session"
 	"github.com/LyleLiu666/agentSlot/tool"
 )
+
+const testMaxInlineToolResultBytes = 64 << 10
 
 func TestRuntimeSendCommitsOnlyCompleteModelOutput(t *testing.T) {
 	fake := model.NewFakeModelExecutor(model.FakeExecution{Events: []model.ModelEvent{
@@ -122,7 +125,7 @@ func TestRuntimeResumesPreparedToolCallAfterRecoveryWithoutReplacingItsIdentity(
 	entry := &captureChannel{}
 	application := NewApplication(ApplicationSpec{
 		Name: "approval-recovery", DefaultModelConfig: config,
-		RuntimeConfig: AgentRuntimeConfig{ToolKeys: []string{"effect"}},
+		RuntimeConfig: AgentRuntimeConfig{ToolKeys: []string{"effect"}, MaxInlineToolResultBytes: testMaxInlineToolResultBytes},
 		Modules: []agentslot.Module{
 			componentsModule{store: store, executor: executor},
 			toolModule{key: "effect", value: effect},
@@ -318,6 +321,71 @@ func TestRuntimeCommitsToolCallAndResultThenContinuesModel(t *testing.T) {
 	}
 	if callCount != 1 || resultCount != 1 {
 		t.Fatalf("tool facts = calls %d results %d", callCount, resultCount)
+	}
+}
+
+func TestRuntimeRejectsOversizedToolResultWithoutRetryingSideEffect(t *testing.T) {
+	installed := &budgetProbeTool{definition: testToolDefinition(t, "oversized"), oversize: true}
+	fake := model.NewFakeModelExecutor(
+		model.FakeExecution{Events: []model.ModelEvent{{Kind: model.EventComplete, Output: &model.Completion{ToolCalls: []model.ToolCallRequest{{Name: "oversized", Arguments: []byte(`{"value":"run"}`)}}}}}},
+		model.FakeExecution{Events: []model.ModelEvent{complete("must not continue")}},
+	)
+	access, stop := startRuntimeTestApplicationWithConfig(t, fake, AgentRuntimeConfig{ToolKeys: []string{"oversized"}, MaxInlineToolResultBytes: 16}, toolModule{key: "oversized", value: installed})
+	defer stop()
+	opened := createRuntimeTestSession(t, access)
+	if _, err := access.Send(context.Background(), interaction.SendRequest{SessionID: opened.SessionID, ExpectedRevision: opened.Revision, Input: textInput("run")}); err != nil {
+		t.Fatal(err)
+	}
+	waitRuntimeIdle(t, access, opened.SessionID)
+	if installed.calls.Load() != 1 || installed.budget.Load() != 16 || len(fake.Requests()) != 1 {
+		t.Fatalf("calls=%d budget=%d model requests=%d", installed.calls.Load(), installed.budget.Load(), len(fake.Requests()))
+	}
+	snapshot, err := access.View(context.Background(), interaction.SessionViewRequest{SessionID: opened.SessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := historyToolResultFacts(snapshot.RecentHistory)
+	if len(results) != 1 || results[0].Status != tool.ResultFailed || results[0].Error == nil || results[0].Error.Code != "invalid_tool_result" {
+		t.Fatalf("persisted contract violation = %#v", results)
+	}
+	if lastRunTerminal(snapshot.RecentHistory) != session.RunFailed {
+		t.Fatalf("run terminal = %q, want failed", lastRunTerminal(snapshot.RecentHistory))
+	}
+}
+
+func TestRuntimeAndForkPreserveStandardArtifactReferences(t *testing.T) {
+	reference := artifact.Metadata{ID: "artifact-full-output", MediaType: "text/plain", Name: "full.txt", Size: 4096}
+	installed := &budgetProbeTool{definition: testToolDefinition(t, "bounded"), reference: &reference}
+	fake := model.NewFakeModelExecutor(
+		model.FakeExecution{Events: []model.ModelEvent{{Kind: model.EventComplete, Output: &model.Completion{ToolCalls: []model.ToolCallRequest{{Name: "bounded", Arguments: []byte(`{"value":"run"}`)}}}}}},
+		model.FakeExecution{Events: []model.ModelEvent{complete("done")}},
+	)
+	access, stop := startRuntimeTestApplicationWithConfig(t, fake, AgentRuntimeConfig{ToolKeys: []string{"bounded"}, MaxInlineToolResultBytes: 64}, toolModule{key: "bounded", value: installed})
+	defer stop()
+	opened := createRuntimeTestSession(t, access)
+	if _, err := access.Send(context.Background(), interaction.SendRequest{SessionID: opened.SessionID, ExpectedRevision: opened.Revision, Input: textInput("run")}); err != nil {
+		t.Fatal(err)
+	}
+	waitRuntimeIdle(t, access, opened.SessionID)
+	source, err := access.View(context.Background(), interaction.SessionViewRequest{SessionID: opened.SessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := historyToolResultFacts(source.RecentHistory)
+	if len(results) != 1 || len(results[0].Artifacts) != 1 || results[0].Artifacts[0] != reference {
+		t.Fatalf("source Artifact references = %#v", results)
+	}
+	forked, err := access.ForkSession(context.Background(), interaction.ForkSessionRequest{SourceSessionID: opened.SessionID, AgentID: "agent-1", WorkspaceID: "workspace-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := access.View(context.Background(), interaction.SessionViewRequest{SessionID: forked.SessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	childResults := historyToolResultFacts(child.RecentHistory)
+	if len(childResults) != 1 || len(childResults[0].Artifacts) != 1 || childResults[0].Artifacts[0] != reference {
+		t.Fatalf("fork Artifact references = %#v", childResults)
 	}
 }
 
@@ -522,6 +590,9 @@ func startRuntimeTestApplication(t *testing.T, executor model.ModelExecutor, ext
 
 func startRuntimeTestApplicationWithConfig(t *testing.T, executor model.ModelExecutor, config AgentRuntimeConfig, extra ...agentslot.Module) (interaction.GatewayAccess, func()) {
 	t.Helper()
+	if len(config.ToolKeys) > 0 && config.MaxInlineToolResultBytes == 0 {
+		config.MaxInlineToolResultBytes = testMaxInlineToolResultBytes
+	}
 	memory := session.NewMemoryModule()
 	entry := &captureChannel{}
 	modules := []agentslot.Module{memory, executorModule{executor: executor}}
@@ -571,6 +642,30 @@ func (m toolModule) Register(reg agentslot.Registrar) error {
 type countingTool struct {
 	definition tool.Definition
 	calls      atomic.Int64
+}
+
+type budgetProbeTool struct {
+	definition tool.Definition
+	oversize   bool
+	reference  *artifact.Metadata
+	calls      atomic.Int64
+	budget     atomic.Int64
+}
+
+func (t *budgetProbeTool) Definition() tool.Definition       { return t.definition }
+func (*budgetProbeTool) ParallelSafety() tool.ParallelSafety { return tool.Serial }
+func (t *budgetProbeTool) Invoke(_ context.Context, invocation tool.ToolInvocation) tool.ToolResult {
+	t.calls.Add(1)
+	t.budget.Store(int64(invocation.MaxInlineOutputBytes))
+	output := json.RawMessage(`{"preview":"ok"}`)
+	if t.oversize {
+		output = json.RawMessage(`{"output":"this result is deliberately too large"}`)
+	}
+	result := tool.ToolResult{CallID: invocation.Call.ID, Status: tool.ResultSucceeded, Output: output}
+	if t.reference != nil {
+		result.Artifacts = []artifact.Metadata{*t.reference}
+	}
+	return result
 }
 
 type journalCheckingTool struct {
@@ -635,6 +730,16 @@ func historyMessageFacts(history []session.HistoryFact) []agent.Message {
 		}
 	}
 	return messages
+}
+
+func historyToolResultFacts(history []session.HistoryFact) []tool.ToolResult {
+	var results []tool.ToolResult
+	for _, fact := range history {
+		if fact.ToolResult != nil {
+			results = append(results, *fact.ToolResult)
+		}
+	}
+	return results
 }
 
 func historyRunFacts(history []session.HistoryFact) []session.RunFact {

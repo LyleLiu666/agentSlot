@@ -261,6 +261,22 @@ func TestStandardApplicationRejectsInvalidToolWhitelistAtBuild(t *testing.T) {
 	}
 }
 
+func TestStandardApplicationRequiresExplicitInlineBudgetWhenToolsAreSelected(t *testing.T) {
+	installed := &countingTool{definition: testToolDefinition(t, "echo")}
+	application := NewApplication(ApplicationSpec{
+		Name: "missing-tool-result-budget", DefaultModelConfig: testDefaultModel(),
+		RuntimeConfig: AgentRuntimeConfig{ToolKeys: []string{"echo"}},
+		Modules: []agentslot.Module{
+			componentsModule{store: newSeededStore()},
+			toolModule{key: "echo", value: installed},
+			NewGatewayChannelModule("channel.missing-tool-result-budget", "test", &captureChannel{}),
+		},
+	})
+	if _, err := application.Build(); err == nil {
+		t.Fatal("Build accepted selected tools without MaxInlineToolResultBytes")
+	}
+}
+
 func TestConcurrentResumeCreatesOneRuntimePerSession(t *testing.T) {
 	store := newSeededStore()
 	entry := &captureChannel{}
