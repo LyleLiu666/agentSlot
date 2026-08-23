@@ -137,6 +137,20 @@ deployment remain product configuration through gRPC server options and the
 callbacks. A disconnected `SendAndWait` client does not cancel the durable Run;
 application shutdown still does.
 
+[`interaction/acpchannel`](interaction/acpchannel) implements the stable ACP v1
+inbound surface as `gateway.channel/inbound-acp/v1`. The product-owned transport
+must supply an already-authenticated remote identity and an authorization
+callback. The channel fixes Agent, Workspace, and working-directory scope;
+supports ACP initialize, session new/list/resume/prompt/cancel/close; and maps
+complete durable assistant messages to ACP updates. Peer disconnect does not
+cancel the durable Run, while ACP `session/cancel` does.
+
+The profile advertises only what it implements. It accepts ACP's required text
+and `resource_link` prompt blocks, projecting links to deterministic readable
+text. It does not advertise image, audio, embedded context, session load, MCP,
+ACP authentication, modes, or configuration options. Outbound ACP remains an
+`agent.provider` concern.
+
 ## Core model
 
 | Concept | Meaning |

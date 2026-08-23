@@ -76,6 +76,12 @@ when real consumers expose a flawed boundary.
   History integers, event streaming, classified errors, authentication-derived
   Actor identity, authorization scope, overflow, and disconnect behavior are
   mapped without adding a transport Slot or a second Session owner.
+- Added the stable ACP v1 inbound profile
+  `gateway.channel/inbound-acp/v1`. It binds a transport-authenticated remote
+  identity and fixed Agent/Workspace/CWD scope to Gateway, negotiates only its
+  implemented session and content capabilities, maps complete durable replies
+  to ACP updates, and preserves Runs across peer disconnect while honoring
+  explicit ACP cancellation.
 
 ### Changed
 
