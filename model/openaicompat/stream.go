@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -122,7 +123,7 @@ func (s *eventStream) run(executor *Executor, payload []byte) {
 			s.emit(model.ModelEvent{Kind: model.EventFailed, AttemptID: string(attemptID), Err: model.ErrTokenBudgetExceeded})
 			return
 		}
-		if !waitRetry(s.ctx, executor.retryBackoff, attempt) {
+		if !waitRetry(s.ctx, executor.retryBackoff, result.retryDelay, attempt) {
 			return
 		}
 	}
@@ -132,6 +133,7 @@ type attemptResult struct {
 	completion        model.Completion
 	emitted           bool
 	retryable         bool
+	retryDelay        time.Duration
 	usage             model.TokenUsage
 	providerRequestID string
 	outputBytes       int
@@ -165,8 +167,12 @@ func (s *eventStream) attempt(executor *Executor, payload []byte, attemptID stri
 	providerRequestID := response.Header.Get("x-request-id")
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
-		retryable := response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= 500
-		return attemptResult{retryable: retryable, providerRequestID: providerRequestID, errorCode: fmt.Sprintf("http_%d", response.StatusCode), err: fmt.Errorf("provider returned HTTP status %d", response.StatusCode)}
+		retryable := retryableHTTPStatus(response.StatusCode)
+		return attemptResult{
+			retryable: retryable, retryDelay: retryAfter(response.Header.Get("Retry-After"), time.Now()),
+			providerRequestID: providerRequestID, errorCode: fmt.Sprintf("http_%d", response.StatusCode),
+			err: fmt.Errorf("provider returned HTTP status %d", response.StatusCode),
+		}
 	}
 	parser := sseParser{
 		attemptID: attemptID, maxEventBytes: executor.maxEventBytes,
@@ -218,12 +224,39 @@ func (s *eventStream) emit(event model.ModelEvent) bool {
 	}
 }
 
-func waitRetry(ctx context.Context, base time.Duration, attempt int) bool {
-	delay := base
-	for index := 1; index < attempt && delay < 10*time.Second; index++ {
-		delay *= 2
+func retryableHTTPStatus(status int) bool {
+	return status == http.StatusRequestTimeout || status == http.StatusTooManyRequests ||
+		status == http.StatusBadGateway || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
+}
+
+func retryAfter(value string, now time.Time) time.Duration {
+	if value == "" {
+		return 0
 	}
-	if delay > 10*time.Second {
+	if seconds, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64); err == nil {
+		if seconds > 0 {
+			return time.Duration(seconds) * time.Second
+		}
+		return 0
+	}
+	when, err := http.ParseTime(value)
+	if err != nil || !when.After(now) {
+		return 0
+	}
+	return when.Sub(now)
+}
+
+func waitRetry(ctx context.Context, base, providerDelay time.Duration, attempt int) bool {
+	delay := providerDelay
+	if delay <= 0 {
+		delay = base
+	}
+	for index := 1; index < attempt && delay < 10*time.Second; index++ {
+		if providerDelay <= 0 {
+			delay *= 2
+		}
+	}
+	if providerDelay <= 0 && delay > 10*time.Second {
 		delay = 10 * time.Second
 	}
 	timer := time.NewTimer(delay)

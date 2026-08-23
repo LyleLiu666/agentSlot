@@ -4,6 +4,15 @@ This file records published AgentSlot releases. The project is pre-1.0: a
 validation release is usable through Go modules, but its public API may change
 when real consumers expose a flawed boundary.
 
+## v0.1.2 - 2026-08-23
+
+### Fixed
+
+- OpenAI-compatible executors now use the approved structured HTTP retry
+  defaults: 408, 429, 502, 503, and 504 may retry, while 500, 501, 505, and
+  other permanent statuses stop. A valid provider `Retry-After` delay takes
+  precedence over local backoff without changing the configured attempt cap.
+
 ## v0.1.1 - 2026-08-23
 
 ### Fixed
