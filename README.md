@@ -121,6 +121,22 @@ standard Profile requirements, a strict Tool allowlist, approval policy, and a
 build test. It contains no local `replace` directive and never overwrites an
 existing target directory.
 
+## Out-of-process Gateway example
+
+[`interaction/grpcchannel`](interaction/grpcchannel) implements the complete
+`GatewayAccess` surface as `gateway.channel/remote-grpc/v1`. It uses a bounded
+protobuf `BytesValue` envelope so uint64 revisions and History sequences remain
+exact, and provides a matching `GatewayAccess` client. Install the server with
+`standardagent.NewGatewayChannelModule`; the standard wrapper owns its listener
+lifecycle after the fixed Gateway is available.
+
+Authentication and authorization callbacks are mandatory. Authenticated
+`remote_user`, `service`, or `agent` identity replaces every caller-supplied
+Actor value before a write reaches Gateway. TLS, credentials, rate limits, and
+deployment remain product configuration through gRPC server options and the
+callbacks. A disconnected `SendAndWait` client does not cancel the durable Run;
+application shutdown still does.
+
 ## Core model
 
 | Concept | Meaning |

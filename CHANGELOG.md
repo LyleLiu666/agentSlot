@@ -71,6 +71,11 @@ when real consumers expose a flawed boundary.
   validates Workspace/storage separation before writing, supports explicit
   implementation customization, and reports automatically selected
   dependencies. Generated preset fixtures pass build, race, and vet checks.
+- Added the runnable `gateway.channel/remote-grpc/v1` example and matching
+  out-of-process `GatewayAccess` client. All Gateway operations, revision and
+  History integers, event streaming, classified errors, authentication-derived
+  Actor identity, authorization scope, overflow, and disconnect behavior are
+  mapped without adding a transport Slot or a second Session owner.
 
 ### Changed
 

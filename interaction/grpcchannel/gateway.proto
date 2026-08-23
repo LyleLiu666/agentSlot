@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package agentslot.gateway.v1;
+
+import "google/protobuf/wrappers.proto";
+
+// Gateway is the runnable example wire. BytesValue contains the versioned,
+// bounded JSON envelope implemented by this package; using bytes preserves
+// uint64 revisions and History sequences without Struct's float conversion.
+service Gateway {
+  rpc Call(google.protobuf.BytesValue) returns (google.protobuf.BytesValue);
+  rpc Subscribe(google.protobuf.BytesValue) returns (stream google.protobuf.BytesValue);
+}
