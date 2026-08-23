@@ -338,8 +338,9 @@ Gateway 的替代访问路径。Channel 为每个写命令提供持久化 `Actor
 类型化冲突，并且绝不隐式重试。重连重新读取权威 `SessionView`：它包含当前状态、
 Queue、模型配置和最近最多 100 个完整逻辑 Step。更早 History 使用排他的
 `BeforeHistorySequence` 游标向前翻页，每页最多 100 个完整 Step。事实持久化后，
-Gateway 只发送 `SessionID + Revision`，客户端再刷新 View。临时 chunk/reset 可以
-丢失，断线不会取消 Run；如果订阅缓存无法接收持久 revision 通知，则明确关闭订阅，
+Gateway 只发送 `SessionID + Revision`，客户端再刷新 View。临时 chunk/reset 携带
+Runtime 预留、并由最终持久 assistant Message 复用的 `MessageID`，但该关联不会让
+临时正文变成持久事实。临时事件可以丢失，断线不会取消 Run；如果订阅缓存无法接收持久 revision 通知，则明确关闭订阅，
 客户端通过 View 恢复，不能无界占用内存。具体 Channel 或外部消息系统可以私有保存
 可靠投递状态，但它不是标准 Slot 或 Session 事实，也不能改变 Run 完成状态。
 

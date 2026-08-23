@@ -280,6 +280,10 @@ type Event struct {
 	SessionID agent.SessionID
 	RunID     agent.RunID
 	StepID    agent.StepID
+	// MessageID is the Runtime-reserved assistant identity shared by temporary
+	// chunk/reset events and the eventual durable Message. Its presence does
+	// not make temporary output durable; only a later Revision exposes commit.
+	MessageID agent.MessageID
 	// AttemptID identifies temporary output from one physical provider
 	// attempt. It is not a durable Session fact.
 	AttemptID string

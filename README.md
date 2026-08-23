@@ -454,8 +454,10 @@ automatic standard profile, the standard AgentLoop default, and the fixed
 Session AgentRuntime transaction state machine. Send,
 SendAndWait, Steer, RunPending, Cancel, WhenIdle, Close, Queue mutation, and
 model-config commands now execute through the Gateway. `Subscribe` publishes
-live chunk/reset events with Run, Step, and physical Attempt identity; temporary
-output and client cursors are not persisted. Every newly applied commit emits
+live chunk/reset events with Run, Step, physical Attempt, and the Runtime-reserved
+assistant Message identity shared with the eventual durable Message. The
+reserved identity does not make temporary output or client cursors persistent.
+Every newly applied commit emits
 only a `SessionID + Revision` notification, after which the client reads the
 authoritative SessionView. SessionView contains Queue, model configuration,
 state, and at most the latest 100 complete logical Steps; older History uses an

@@ -46,7 +46,9 @@ func TestGatewayStreamsTemporaryOutputAndDurableCommitsInOrder(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	var chunks, attempts []string
+	var chunkMessageIDs []agent.MessageID
 	var resetAttempt string
+	var resetMessageID agent.MessageID
 	var reachedFinalRevision bool
 	for !reachedFinalRevision {
 		event, err := stream.Recv(ctx)
@@ -57,8 +59,10 @@ func TestGatewayStreamsTemporaryOutputAndDurableCommitsInOrder(t *testing.T) {
 		case interaction.EventChunk:
 			chunks = append(chunks, event.Text)
 			attempts = append(attempts, event.AttemptID)
+			chunkMessageIDs = append(chunkMessageIDs, event.MessageID)
 		case interaction.EventReset:
 			resetAttempt = event.AttemptID
+			resetMessageID = event.MessageID
 		case interaction.EventRevision:
 			if event.SessionID != opened.SessionID || event.RunID != "" || event.StepID != "" || event.AttemptID != "" || event.Text != "" {
 				t.Fatalf("durable notification leaked payload: %#v", event)
@@ -68,6 +72,14 @@ func TestGatewayStreamsTemporaryOutputAndDurableCommitsInOrder(t *testing.T) {
 	}
 	if resetAttempt != "attempt-1" || !reflect.DeepEqual(chunks, []string{"par", "done"}) || !reflect.DeepEqual(attempts, []string{"attempt-1", "attempt-2"}) {
 		t.Fatalf("temporary events = chunks %#v attempts %#v reset %q", chunks, attempts, resetAttempt)
+	}
+	messages := historyMessageFacts(view.RecentHistory)
+	if len(messages) != 2 || messages[1].Role != agent.RoleAssistant {
+		t.Fatalf("durable messages = %#v", messages)
+	}
+	if !messages[1].ID.Valid() || resetMessageID != messages[1].ID ||
+		len(chunkMessageIDs) != 2 || chunkMessageIDs[0] != messages[1].ID || chunkMessageIDs[1] != messages[1].ID {
+		t.Fatalf("temporary message IDs = chunks %#v reset %q, durable %q", chunkMessageIDs, resetMessageID, messages[1].ID)
 	}
 }
 

@@ -403,7 +403,9 @@ Queue, model configuration, and at most the latest 100 complete logical Steps.
 Older History is read backwards with an exclusive `BeforeHistorySequence`
 cursor and a maximum of 100 complete Steps per page. After persistence Gateway
 emits only `SessionID + Revision`; clients then refresh the View. Transient
-chunk/reset events may be dropped, and disconnect never cancels the Run. A
+chunk/reset events carry the Runtime-reserved assistant `MessageID` that an
+eventual durable Message will reuse, but that correlation does not make the
+temporary text durable. Transient events may be dropped, and disconnect never cancels the Run. A
 subscriber whose buffer cannot accept a durable revision notification is
 closed explicitly and reconnects through View rather than consuming unbounded
 memory. A concrete Channel or external messaging system may keep private
