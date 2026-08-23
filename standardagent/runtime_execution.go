@@ -53,11 +53,7 @@ func (r *activeRun) signalPrepared(revision agent.Revision) {
 // restorePreparedRun reconstructs only the safe, pre-execution portion of an
 // interrupted Run. SessionStore recovery has already converted every call
 // that may have crossed the execution boundary to outcome_unknown.
-func (r *runtimeInstance) restorePreparedRun() error {
-	snapshot, err := r.session.View(context.Background())
-	if err != nil {
-		return err
-	}
+func (r *runtimeInstance) restorePreparedRun(snapshot session.Snapshot) error {
 	if snapshot.RunState != session.RunRunning {
 		return nil
 	}
@@ -104,7 +100,7 @@ func (r *runtimeInstance) restorePreparedRun() error {
 func (r *runtimeInstance) resumePreparedCalls(run *activeRun, calls []agent.ToolCall) {
 	results := r.components.dispatcher.dispatchPrepared(run.ctx, calls, func(call agent.ToolCall) error {
 		return r.markToolExecuting(run, call)
-	})
+	}, r.workspaceScope(), r.workspaceBoundary)
 	next, canceled, err := r.commitToolResults(run, calls, results)
 	if err != nil {
 		r.finishRun(run, stepFailed)
@@ -303,7 +299,7 @@ func (r *runtimeInstance) executeStep(run *activeRun, step agent.StepID) (stepOu
 			if len(calls) > 0 {
 				results := r.components.dispatcher.dispatchPrepared(run.ctx, calls, func(call agent.ToolCall) error {
 					return r.markToolExecuting(run, call)
-				})
+				}, r.workspaceScope(), r.workspaceBoundary)
 				next, canceled, err := r.commitToolResults(run, calls, results)
 				if err != nil {
 					return stepFailed, ""

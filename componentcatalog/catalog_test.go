@@ -39,11 +39,11 @@ func TestStandardCatalogPreservesApprovedInventory(t *testing.T) {
 	}
 
 	counts := catalog.Counts()
-	if counts.Mapped != 11 || counts.Contracted != 29 || counts.Conformant != 1 || counts.Proven != 0 || counts.Assembled != 0 {
+	if counts.Mapped != 10 || counts.Contracted != 30 || counts.Conformant != 1 || counts.Proven != 0 || counts.Assembled != 0 {
 		t.Fatalf("maturity counts = %#v", counts)
 	}
-	if counts.AtLeastContracted() != 30 {
-		t.Fatalf("at-least-contracted count = %d, want 30", counts.AtLeastContracted())
+	if counts.AtLeastContracted() != 31 {
+		t.Fatalf("at-least-contracted count = %d, want 31", counts.AtLeastContracted())
 	}
 	if component, ok := catalog.Lookup("session.store"); !ok || component.Maturity != MaturityConformant {
 		t.Fatalf("session.store = %#v, %v", component, ok)

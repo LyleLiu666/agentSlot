@@ -28,19 +28,23 @@ type Action struct {
 	Tool *ToolAction
 }
 
+// ToolAction carries the trusted Session scope alongside the detached model
+// proposal so policy never needs to infer ownership from tool arguments.
 type ToolAction struct {
-	ToolKey   string
-	Call      tool.Call
-	SessionID agent.SessionID
-	RunID     agent.RunID
-	StepID    agent.StepID
+	ToolKey     string
+	Call        tool.Call
+	SessionID   agent.SessionID
+	AgentID     agent.AgentID
+	WorkspaceID agent.WorkspaceID
+	RunID       agent.RunID
+	StepID      agent.StepID
 }
 
 func (a Action) Validate() error {
 	if a.Kind != ActionTool || a.Tool == nil {
 		return errors.New("policy: action must contain one tool proposal")
 	}
-	if a.Tool.ToolKey == "" || a.Tool.Call.Name != a.Tool.ToolKey || !a.Tool.Call.ID.Valid() || !a.Tool.SessionID.Valid() || !a.Tool.RunID.Valid() || !a.Tool.StepID.Valid() {
+	if a.Tool.ToolKey == "" || a.Tool.Call.Name != a.Tool.ToolKey || !a.Tool.Call.ID.Valid() || !a.Tool.SessionID.Valid() || !a.Tool.AgentID.Valid() || !a.Tool.WorkspaceID.Valid() || !a.Tool.RunID.Valid() || !a.Tool.StepID.Valid() {
 		return errors.New("policy: tool proposal identity is incomplete")
 	}
 	return nil

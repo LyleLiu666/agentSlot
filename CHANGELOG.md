@@ -22,6 +22,13 @@ when real consumers expose a flawed boundary.
 - Added explicit fake and OpenAI-compatible TokenCounter implementations. The
   OpenAI-compatible provider module contributes its counter as a replaceable
   default while keeping post-call usage estimation private to its Executor.
+- Added the optional `workspace.manager` Slot with a path-neutral Scope and
+  opaque Boundary contract validated by local-filesystem and non-filesystem
+  fixtures.
+- Tool invocations and policy actions now receive trusted AgentID/WorkspaceID
+  values derived from the authoritative Session. Installed Workspace managers
+  reject missing boundaries before Session creation or recovery and never
+  fall back to process-global resources.
 
 ### Changed
 

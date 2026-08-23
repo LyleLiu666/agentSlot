@@ -7,6 +7,7 @@ import (
 
 	agentslot "github.com/LyleLiu666/agentSlot"
 	agent "github.com/LyleLiu666/agentSlot/agent"
+	"github.com/LyleLiu666/agentSlot/workspace"
 )
 
 // ToolSlot is the standard model-callable tool ecosystem.
@@ -34,12 +35,19 @@ type Tool interface {
 }
 
 // ToolInvocation contains stable execution identity and already schema-validated
-// arguments. It does not expose Runtime, SessionStore, or Gateway internals.
+// arguments. AgentID and WorkspaceID are trusted values derived from the
+// authoritative Session; model-supplied arguments cannot replace them. The
+// invocation does not expose Runtime, SessionStore, or Gateway internals.
 type ToolInvocation struct {
-	Call      Call
-	SessionID agent.SessionID
-	RunID     agent.RunID
-	StepID    agent.StepID
+	Call        Call
+	SessionID   agent.SessionID
+	AgentID     agent.AgentID
+	WorkspaceID agent.WorkspaceID
+	// WorkspaceBoundary is the opaque binding returned by an installed
+	// Workspace Manager. It is nil when the optional Manager is absent.
+	WorkspaceBoundary workspace.Boundary
+	RunID             agent.RunID
+	StepID            agent.StepID
 }
 
 // ToolResult is the structured durable outcome passed back to the model.

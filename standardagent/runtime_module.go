@@ -15,6 +15,7 @@ import (
 	"github.com/LyleLiu666/agentSlot/policy"
 	"github.com/LyleLiu666/agentSlot/session"
 	"github.com/LyleLiu666/agentSlot/tool"
+	"github.com/LyleLiu666/agentSlot/workspace"
 )
 
 const (
@@ -71,6 +72,7 @@ func (m *runtimeModule) RequiredSlots() []agentslot.Requirement {
 		agentslot.OptionalChain(observe.AuditSlot),
 		agentslot.OptionalChain(observe.UsageSlot),
 		agentslot.OptionalMany(interaction.CommandSlot),
+		agentslot.OptionalOne(workspace.ManagerSlot),
 	}
 }
 
@@ -197,13 +199,17 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 			if err != nil {
 				return nil, err
 			}
+			workspaceManager, _, err := agentslot.ResolveOptionalOne(resolver, workspace.ManagerSlot)
+			if err != nil {
+				return nil, err
+			}
 			state := newApplicationRuntime(runtimeDependencies{
 				agentLoop: selectedLoop,
 				manager:   manager, store: store, executor: executor, counter: counter, attemptObservers: attemptObservers,
 				commands: commands, commandDescriptors: commandDescriptors,
 				tools: selectedTools, dispatcher: dispatcher, catalogs: catalogs, config: cloneAgentRuntimeConfig(m.config), sources: sources,
 				compactor: compactor, hooks: hooks, goalStore: goalStore, goalEvaluator: goalEvaluator, commitObservers: commitObservers,
-				traces: traces, metrics: metrics, audits: audits, usages: usages,
+				traces: traces, metrics: metrics, audits: audits, usages: usages, workspaceManager: workspaceManager,
 			})
 			m.state = state
 			return state, nil
@@ -253,6 +259,7 @@ type runtimeDependencies struct {
 	metrics            []observe.MetricSink
 	audits             []observe.AuditSink
 	usages             []observe.UsageRecorder
+	workspaceManager   workspace.Manager
 }
 
 // runtimeComponents is one immutable application-level dependency set shared
@@ -275,6 +282,7 @@ type runtimeComponents struct {
 	catalogs         []agentslot.Named[model.ModelCatalog]
 	config           AgentRuntimeConfig
 	observations     *observationHub
+	workspaceManager workspace.Manager
 }
 
 func (d runtimeDependencies) runtimeComponents(observations *observationHub) *runtimeComponents {
@@ -296,6 +304,7 @@ func (d runtimeDependencies) runtimeComponents(observations *observationHub) *ru
 		catalogs:         append([]agentslot.Named[model.ModelCatalog](nil), d.catalogs...),
 		config:           cloneAgentRuntimeConfig(d.config),
 		observations:     observations,
+		workspaceManager: d.workspaceManager,
 	}
 }
 

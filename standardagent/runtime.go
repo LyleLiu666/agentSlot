@@ -16,6 +16,7 @@ import (
 	"github.com/LyleLiu666/agentSlot/model"
 	"github.com/LyleLiu666/agentSlot/observe"
 	"github.com/LyleLiu666/agentSlot/session"
+	"github.com/LyleLiu666/agentSlot/workspace"
 )
 
 type applicationRuntime struct {
@@ -302,13 +303,17 @@ func (c *runtimeCoordinator) create(ctx context.Context, request interaction.Cre
 			return interaction.SessionOpened{}, invalidInput("gateway.create_session", err.Error())
 		}
 	}
+	boundary, err := c.resolveWorkspace(ctx, workspace.Scope{AgentID: request.AgentID, WorkspaceID: request.WorkspaceID})
+	if err != nil {
+		return interaction.SessionOpened{}, err
+	}
 	s, err := c.manager.Create(ctx, session.CreateRequest{
 		AgentID: request.AgentID, WorkspaceID: request.WorkspaceID, ModelConfig: request.ModelConfig,
 	})
 	if err != nil {
 		return interaction.SessionOpened{}, err
 	}
-	candidate, err := newRuntimeInstance(s, c.components)
+	candidate, err := newRuntimeInstance(ctx, s, c.components, boundary)
 	if err != nil {
 		return interaction.SessionOpened{}, err
 	}
@@ -323,11 +328,22 @@ func (c *runtimeCoordinator) resume(ctx context.Context, request interaction.Res
 		return interaction.SessionOpened{}, invalidInput("gateway.resume_session", "SessionID is required")
 	}
 	runtime, err := c.registry.getOrCreate(ctx, request.SessionID, func() (runtimeAccess, error) {
+		var boundary workspace.Boundary
+		if c.components.workspaceManager != nil {
+			snapshot, err := c.components.store.Load(ctx, session.SessionRef{SessionID: request.SessionID})
+			if err != nil {
+				return nil, err
+			}
+			boundary, err = c.resolveWorkspace(ctx, workspace.Scope{AgentID: snapshot.Session.AgentID, WorkspaceID: snapshot.Session.WorkspaceID})
+			if err != nil {
+				return nil, err
+			}
+		}
 		s, err := c.manager.Resume(ctx, session.ResumeRequest{SessionID: request.SessionID})
 		if err != nil {
 			return nil, err
 		}
-		runtime, err := newRuntimeInstance(s, c.components)
+		runtime, err := newRuntimeInstance(ctx, s, c.components, boundary)
 		if err != nil {
 			return nil, err
 		}
@@ -354,6 +370,10 @@ func (c *runtimeCoordinator) fork(ctx context.Context, request interaction.ForkS
 			return interaction.SessionOpened{}, invalidInput("gateway.fork_session", err.Error())
 		}
 	}
+	boundary, err := c.resolveWorkspace(ctx, workspace.Scope{AgentID: request.AgentID, WorkspaceID: request.WorkspaceID})
+	if err != nil {
+		return interaction.SessionOpened{}, err
+	}
 	s, err := c.manager.Fork(ctx, session.ForkRequest{
 		SourceSessionID: request.SourceSessionID,
 		CutoffSequence:  request.CutoffSequence,
@@ -363,7 +383,7 @@ func (c *runtimeCoordinator) fork(ctx context.Context, request interaction.ForkS
 	if err != nil {
 		return interaction.SessionOpened{}, err
 	}
-	candidate, err := newRuntimeInstance(s, c.components)
+	candidate, err := newRuntimeInstance(ctx, s, c.components, boundary)
 	if err != nil {
 		return interaction.SessionOpened{}, err
 	}
@@ -382,6 +402,10 @@ func (c *runtimeCoordinator) summary(ctx context.Context, request interaction.Su
 			return interaction.SessionOpened{}, invalidInput("gateway.start_session_from_summary", err.Error())
 		}
 	}
+	boundary, err := c.resolveWorkspace(ctx, workspace.Scope{AgentID: request.AgentID, WorkspaceID: request.WorkspaceID})
+	if err != nil {
+		return interaction.SessionOpened{}, err
+	}
 	s, err := c.manager.StartFromSummary(ctx, session.SummaryRequest{
 		SourceSessionID: request.SourceSessionID,
 		AgentID:         request.AgentID, WorkspaceID: request.WorkspaceID,
@@ -390,7 +414,7 @@ func (c *runtimeCoordinator) summary(ctx context.Context, request interaction.Su
 	if err != nil {
 		return interaction.SessionOpened{}, err
 	}
-	candidate, err := newRuntimeInstance(s, c.components)
+	candidate, err := newRuntimeInstance(ctx, s, c.components, boundary)
 	if err != nil {
 		return interaction.SessionOpened{}, err
 	}
@@ -406,6 +430,13 @@ func (c *runtimeCoordinator) runtime(id agent.SessionID) (runtimeAccess, error) 
 		return nil, agent.NewCodedError(agent.ErrorNotFound, agent.CodeSessionNotOpen, "gateway.runtime", "session is not open", nil)
 	}
 	return runtime, nil
+}
+
+func (c *runtimeCoordinator) resolveWorkspace(ctx context.Context, scope workspace.Scope) (workspace.Boundary, error) {
+	if c.components.workspaceManager == nil {
+		return nil, nil
+	}
+	return workspace.Resolve(ctx, c.components.workspaceManager, scope)
 }
 
 func (c *runtimeCoordinator) registerNew(ctx context.Context, runtime runtimeAccess) error {
@@ -515,8 +546,11 @@ type runtimeAccess interface {
 }
 
 type runtimeInstance struct {
-	session    session.Session
-	components *runtimeComponents
+	session           session.Session
+	components        *runtimeComponents
+	agentID           agent.AgentID
+	workspaceID       agent.WorkspaceID
+	workspaceBoundary workspace.Boundary
 
 	mu             sync.Mutex
 	state          runtimeLifecycle
@@ -531,12 +565,29 @@ type runtimeInstance struct {
 	events         *eventHub
 }
 
-func newRuntimeInstance(s session.Session, components *runtimeComponents) (*runtimeInstance, error) {
+func newRuntimeInstance(ctx context.Context, s session.Session, components *runtimeComponents, boundary workspace.Boundary) (*runtimeInstance, error) {
 	if nilSession(s) {
 		return nil, agent.NewError(agent.ErrorInternal, "standardagent.runtime", "framework Manager returned a nil Session", nil)
 	}
 	if components == nil {
 		return nil, agent.NewError(agent.ErrorInternal, "standardagent.runtime", "Runtime components were not assembled", nil)
+	}
+	snapshot, err := s.View(ctx)
+	if err != nil {
+		return nil, err
+	}
+	scope := workspace.Scope{AgentID: snapshot.Session.AgentID, WorkspaceID: snapshot.Session.WorkspaceID}
+	if snapshot.Session.ID != s.ID() || scope.Validate() != nil {
+		return nil, agent.NewError(agent.ErrorInternal, "standardagent.runtime", "framework Manager returned invalid Session identity", nil)
+	}
+	if components.workspaceManager != nil && boundary == nil {
+		boundary, err = workspace.Resolve(ctx, components.workspaceManager, scope)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if boundary != nil && boundary.Scope() != scope {
+		return nil, agent.NewError(agent.ErrorInternal, "standardagent.runtime", "Workspace boundary does not match Session identity", nil)
 	}
 	prefixBytes := make([]byte, 8)
 	if _, err := rand.Read(prefixBytes); err != nil {
@@ -545,7 +596,7 @@ func newRuntimeInstance(s session.Session, components *runtimeComponents) (*runt
 	idleSignal := make(chan struct{})
 	close(idleSignal)
 	runtime := &runtimeInstance{
-		session: s, components: components, state: runtimeIdle,
+		session: s, components: components, agentID: scope.AgentID, workspaceID: scope.WorkspaceID, workspaceBoundary: boundary, state: runtimeIdle,
 		idleSignal: idleSignal, closeDone: make(chan struct{}), prefix: hex.EncodeToString(prefixBytes), events: newEventHub(),
 	}
 	runtime.revisionValue.Store(uint64(s.Revision()))
@@ -557,7 +608,7 @@ func newRuntimeInstance(s session.Session, components *runtimeComponents) (*runt
 		Kind: observe.TraceRuntimeOpened, At: time.Now().UTC(),
 		Identity: observe.Identity{SessionID: runtime.id(), Actor: serviceObservationActor("agent-runtime")},
 	})
-	if err := runtime.restorePreparedRun(); err != nil {
+	if err := runtime.restorePreparedRun(snapshot); err != nil {
 		runtime.commitObserver.stop()
 		runtime.events.close()
 		return nil, err
@@ -578,6 +629,9 @@ func nilSession(value session.Session) bool {
 	}
 }
 func (r *runtimeInstance) id() agent.SessionID { return r.session.ID() }
+func (r *runtimeInstance) workspaceScope() workspace.Scope {
+	return workspace.Scope{AgentID: r.agentID, WorkspaceID: r.workspaceID}
+}
 func (r *runtimeInstance) revision() agent.Revision {
 	return agent.Revision(r.revisionValue.Load())
 }

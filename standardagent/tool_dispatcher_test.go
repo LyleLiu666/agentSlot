@@ -9,6 +9,7 @@ import (
 	agent "github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/policy"
 	"github.com/LyleLiu666/agentSlot/tool"
+	"github.com/LyleLiu666/agentSlot/workspace"
 )
 
 func TestToolDispatcherRunsParallelSafeBatchBeforeSerialCall(t *testing.T) {
@@ -27,7 +28,7 @@ func TestToolDispatcherRunsParallelSafeBatchBeforeSerialCall(t *testing.T) {
 	}
 	done := make(chan []tool.ToolResult, 1)
 	go func() {
-		done <- dispatcher.dispatch(context.Background(), []agent.ToolCall{
+		done <- dispatchForTest(dispatcher, []agent.ToolCall{
 			dispatcherCall("call-1", "first"), dispatcherCall("call-2", "second"), dispatcherCall("call-3", "serial"),
 		})
 	}()
@@ -66,7 +67,7 @@ func TestToolDispatcherReturnsSafeFailuresForUnknownAndInvalidArguments(t *testi
 	}
 	invalid := dispatcherCall("call-1", "known")
 	invalid.Arguments = []byte(`{"unexpected":true}`)
-	results := dispatcher.dispatch(context.Background(), []agent.ToolCall{invalid, dispatcherCall("call-2", "missing")})
+	results := dispatchForTest(dispatcher, []agent.ToolCall{invalid, dispatcherCall("call-2", "missing")})
 	if results[0].Error == nil || results[0].Error.Code != "invalid_arguments" || results[1].Error == nil || results[1].Error.Code != "tool_not_found" {
 		t.Fatalf("safe failures = %#v", results)
 	}
@@ -101,7 +102,7 @@ func TestToolDispatcherRequiresApprovalWithoutGivingPolicyMutationAuthority(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	result := dispatcher.dispatch(context.Background(), []agent.ToolCall{dispatcherCall("call-1", "effect")})[0]
+	result := dispatchForTest(dispatcher, []agent.ToolCall{dispatcherCall("call-1", "effect")})[0]
 	if result.Status != tool.ResultSucceeded {
 		t.Fatalf("approved result = %#v", result)
 	}
@@ -141,7 +142,7 @@ func TestToolDispatcherFailsClosedForPolicyAndApprovalFailures(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			result := dispatcher.dispatch(context.Background(), []agent.ToolCall{dispatcherCall("call-1", "effect")})[0]
+			result := dispatchForTest(dispatcher, []agent.ToolCall{dispatcherCall("call-1", "effect")})[0]
 			if result.Status != tool.ResultFailed || result.Error == nil || result.Error.Code != test.code {
 				t.Fatalf("result = %#v", result)
 			}
@@ -161,6 +162,10 @@ type dispatcherTool struct {
 	release   <-chan struct{}
 	schema    tool.InputSchema
 	arguments chan<- string
+}
+
+func dispatchForTest(dispatcher *toolDispatcher, calls []agent.ToolCall) []tool.ToolResult {
+	return dispatcher.dispatchPrepared(context.Background(), calls, nil, workspace.Scope{AgentID: "test-agent", WorkspaceID: "test-workspace"}, nil)
 }
 
 func (t *dispatcherTool) Definition() tool.Definition {

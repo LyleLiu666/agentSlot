@@ -44,9 +44,11 @@ and inbound ACP may be implemented independently without adding a transport
 Slot. Outbound ACP, where this Agent calls another Agent, belongs to
 `agent.provider`; sharing a codec does not merge their lifecycles or evidence.
 
-Several additional target boundaries are approved but not implemented in the
-current release. Workspace is an optional resource-isolation scope rather than
-a filesystem-root API. Long-lived tool content reuses `artifact.store`; the
+Workspace is now a Contracted optional resource-isolation scope rather than a
+filesystem-root API. Runtime propagates the Session-owned Agent/Workspace
+identity to policy and Tool calls; an installed Manager resolves an opaque
+boundary and rejects missing resources without falling back to process state.
+Long-lived tool content reuses `artifact.store`; the
 duplicate `tool.output-store` map entry has been removed, and a future
 ToolResult revision will carry bounded inline output plus standard Artifact
 references. `credential.resolver` remains Mapped while its late-binding,
@@ -328,6 +330,12 @@ SessionStore aggregate. Runtime-fixed SystemPrompt, ToolKeys, and Context
 settings do not change during one Runtime lifetime; the Session's provider,
 model, reasoning, and model parameters can be changed explicitly while idle
 and are snapshotted for each Run.
+
+`workspace.Manager` is optional. When installed, create, fork, summary-start,
+and resume resolve the exact Session scope before execution; unknown or
+unavailable boundaries fail explicitly. The portable Boundary exposes only
+its AgentID/WorkspaceID scope—not a root path, URI, credential, or operation—so
+filesystem, shell, note, and object-storage capabilities remain separate.
 
 `SessionStore.ListSessions` returns bounded cursor pages for one exact
 Agent/Workspace scope. Results are ordered by `UpdatedAt` descending and then
