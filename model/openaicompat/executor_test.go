@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -534,6 +535,70 @@ func TestExecutorDoesNotRetryNonRetryableHTTPErrorOrLeakBody(t *testing.T) {
 	_, finishes := recorder.records()
 	if len(finishes) != 1 || finishes[0].ErrorCode != "http_400" || !finishes[0].Usage.Estimated {
 		t.Fatalf("failed attempt = %#v", finishes)
+	}
+}
+
+func TestExecutorUsesPortableHTTPRetryClassification(t *testing.T) {
+	for _, item := range []struct {
+		status    int
+		retryable bool
+	}{
+		{http.StatusRequestTimeout, true},
+		{http.StatusBadGateway, true},
+		{http.StatusServiceUnavailable, true},
+		{http.StatusGatewayTimeout, true},
+		{http.StatusInternalServerError, false},
+		{http.StatusNotImplemented, false},
+		{http.StatusHTTPVersionNotSupported, false},
+	} {
+		t.Run(strconv.Itoa(item.status), func(t *testing.T) {
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				if requests.Add(1) == 1 {
+					writer.WriteHeader(item.status)
+					return
+				}
+				_, _ = writer.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"))
+			}))
+			defer server.Close()
+			executor := newExecutorWithAttempts(t, server.URL, 2)
+			stream, err := executor.Execute(context.Background(), requestWithUser("retry policy"), &attemptRecorder{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			events := receiveUntilTerminal(t, stream)
+			wantRequests := int32(1)
+			wantTerminal := model.EventFailed
+			if item.retryable {
+				wantRequests, wantTerminal = 2, model.EventComplete
+			}
+			if requests.Load() != wantRequests || events[len(events)-1].Kind != wantTerminal {
+				t.Fatalf("requests=%d terminal=%q", requests.Load(), events[len(events)-1].Kind)
+			}
+		})
+	}
+}
+
+func TestExecutorHonorsProviderRetryAfter(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		if requests.Add(1) == 1 {
+			writer.Header().Set("Retry-After", "1")
+			writer.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		_, _ = writer.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"))
+	}))
+	defer server.Close()
+	executor := newExecutorWithAttempts(t, server.URL, 2)
+	started := time.Now()
+	stream, err := executor.Execute(context.Background(), requestWithUser("retry after"), &attemptRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := receiveUntilTerminal(t, stream)
+	if events[len(events)-1].Kind != model.EventComplete || requests.Load() != 2 || time.Since(started) < 900*time.Millisecond {
+		t.Fatalf("requests=%d duration=%v events=%#v", requests.Load(), time.Since(started), events)
 	}
 }
 
