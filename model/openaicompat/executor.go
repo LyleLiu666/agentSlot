@@ -73,9 +73,10 @@ type TokenCounter struct {
 }
 
 var (
-	_ model.ModelExecutor = (*Executor)(nil)
-	_ model.ModelCatalog  = (*Executor)(nil)
-	_ model.TokenCounter  = (*TokenCounter)(nil)
+	_                        model.ModelExecutor = (*Executor)(nil)
+	_                        model.ModelCatalog  = (*Executor)(nil)
+	_                        model.TokenCounter  = (*TokenCounter)(nil)
+	errCredentialUnavailable                     = errors.New("openaicompat: provider credential is unavailable")
 )
 
 func New(config Config) (*Executor, error) {

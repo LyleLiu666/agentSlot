@@ -155,7 +155,11 @@ func (s *eventStream) attempt(executor *Executor, payload []byte, attemptID stri
 	request.Header.Set("User-Agent", "AgentSlot-OpenAI-Compatible/1")
 	response, err := executor.send(ctx, request)
 	if err != nil {
-		return attemptResult{retryable: true, errorCode: "transport", err: err}
+		errorCode := "transport"
+		if errors.Is(err, errCredentialUnavailable) {
+			errorCode = "credential_unavailable"
+		}
+		return attemptResult{retryable: true, errorCode: errorCode, err: err}
 	}
 	defer response.Body.Close()
 	providerRequestID := response.Header.Get("x-request-id")
@@ -184,7 +188,7 @@ func (e *Executor) send(ctx context.Context, request *http.Request) (*http.Respo
 		return e.client.Do(request)
 	}
 	if nilCredentialResolver(e.credentials) {
-		return nil, errors.New("openaicompat: provider credential is unavailable")
+		return nil, errCredentialUnavailable
 	}
 	var response *http.Response
 	var sendErr error
@@ -200,7 +204,7 @@ func (e *Executor) send(ctx context.Context, request *http.Request) (*http.Respo
 		return response, sendErr
 	}
 	if resolveErr != nil {
-		return nil, errors.New("openaicompat: provider credential is unavailable")
+		return nil, errCredentialUnavailable
 	}
 	return response, nil
 }
