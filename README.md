@@ -53,8 +53,11 @@ Long-lived tool content reuses `artifact.store`; the duplicate
 `tool.output-store` map entry has been removed. ToolInvocation now carries an
 explicit inline-output byte budget, ToolResult carries standard Artifact
 metadata references, and Runtime rejects violations before continuing the Run.
-`credential.resolver` remains Mapped while its late-binding,
-non-disclosure contract is validated across more than one credential shape.
+`credential.resolver` is now Contracted after validation with bearer and basic
+credential shapes. Outbound adapters retain only a non-secret Ref, resolve
+material inside one physical-operation callback, and may copy only the opaque,
+non-reversible identity into billing or audit facts. The OpenAI-compatible
+adapter resolves its bearer credential afresh for every physical retry.
 
 The planned `session_history` capability is a standard keyed Tool, not another
 Slot. Its default read ceiling is the current Workspace, with explicit current-
@@ -383,9 +386,9 @@ model-facing tool inputs use self-contained JSON Schema Draft 2020-12.
 Caller and Hook input uses `agent.MessageInput`, which carries content only;
 the fixed Runtime allocates MessageID, Session/Run/Step containment, role, and
 timestamp atomically when it creates a durable `agent.Message` fact.
-Twenty-nine standard component contracts are now available in the `loop`,
+Thirty-two standard component contracts are now available in the `loop`,
 `session`, `model`, `tool`, `context`, `hook`, `interaction`, `policy`, `observe`,
-`goal`, `memory`, `workflow`, `billing`, and `artifact`
+`goal`, `memory`, `workflow`, `billing`, `artifact`, `workspace`, and `credential`
 packages. They are at least Contracted; `session.store` has a reusable
 black-box `session.store/v1` result against the exact `v0.0.10` contract and is
 Conformant, while no domain ecosystem is yet Proven.

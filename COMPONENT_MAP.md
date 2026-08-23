@@ -26,16 +26,16 @@ Current repository reality:
 | --- | ---: |
 | Mapped standard component ecosystems | 41 |
 | Standardized domain vocabularies | 9 |
-| Contracted AgentSlot-owned domain interfaces | 31 |
+| Contracted AgentSlot-owned domain interfaces | 32 |
 | Conformant component ecosystems | 1 |
 | Proven component ecosystems | 0 |
 | Assembled standard component ecosystems | 0 |
 
 The generic composition protocol exports five Go interfaces: `Module`,
-`SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. Thirty-one domain
+`SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. Thirty-two domain
 contracts are now defined across the standard leaf packages; one is
-Conformant, the other thirty remain Contracted, and none is Proven.
-The other ten ecosystems remain Mapped.
+Conformant, the other thirty-one remain Contracted, and none is Proven.
+The other nine ecosystems remain Mapped.
 
 The nine counted vocabulary families are Agent Loop outcomes, model capability,
 tool calls, policy/approval, observation, Goal, Memory, Workflow, and Billing. This count
@@ -155,7 +155,7 @@ method-level contract is an engineering result.
 | **Proven** | At least two semantically independent implementations pass the same suite version. Wrappers over the same implementation count once. |
 | **Assembled** | LAS or another approved real consumer exchanges proven implementations through the Slot without concrete-type branches. |
 
-Thirty-one domain rows are now at least **Contracted**: each has a public
+Thirty-two domain rows are now at least **Contracted**: each has a public
 domain interface, typed Slot, and contract tests. The repository now contains
 in-memory and crash-safe file Session stores, deterministic Fake and
 OpenAI Chat Compatible executors, Bash/file/HTTP tools, in-process and CLI
@@ -169,7 +169,7 @@ the exact AgentSlot `v0.0.10` commit
 `c6b42a767d5422464ebc2978bf408b7d15eb5125`, with no failures or skips.
 MemoryStore remains a process-lifetime reference check, and MemoryStore/FileStore
 share one implementation codebase, so this is one implementation result rather
-than Proven evidence. The other thirty domain rows remain **Contracted**;
+than Proven evidence. The other thirty-one domain rows remain **Contracted**;
 every other row remains **Mapped**.
 
 The current score is 1 Conformant, 0 Proven, and 0 Assembled.
@@ -333,7 +333,7 @@ prompt text, invent missing facts, or silently discard a supplied fact.
 | `workspace.manager` | `workspace.Manager` | `One` | optional | Resolves and isolates the trusted resource boundary visible to a Session or Run; a Workspace may be a local directory, container, remote resource, cloud notes, or object storage, while concrete operations remain separate components. | Contracted |
 | `execution.environment` | `ExecutionEnvironment` | `Many` | optional | Executes commands or code in a named local, container, sandbox, or remote environment. | Mapped |
 | `artifact.store` | `ArtifactStore` | `One` | optional; required by components that consume attachments | Persists immutable inbound or generated content—including tool content deliberately retained long-term—and resolves stable metadata/references without placing binary data, local paths, or credentials in History. | Contracted |
-| `credential.resolver` | `CredentialResolver` | `One` | optional | Late-resolves a product-supplied CredentialRef at an outbound physical-request boundary without placing raw secret values in Assembly descriptions, Session facts, observations, usage, billing, or audit. | Mapped |
+| `credential.resolver` | `Resolver` | `One` | optional; required by configured outbound adapters | Late-resolves a product-supplied non-secret Ref inside one physical outbound-operation callback; supports distinct credential shapes while exposing only an opaque non-reversible identity outside that callback. | Contracted |
 
 ### 6. Policy, authorization, and human approval
 

@@ -43,6 +43,14 @@ when real consumers expose a flawed boundary.
 - Runtime rejects concurrent, out-of-order, forged-terminal, and post-terminal
   Loop actions; cancellation, Loop errors, and panics converge to durable Run
   terminal facts without granting the Loop Store or Gateway access.
+- Added the optional `credential.resolver` contract with non-secret Ref,
+  callback-scoped bearer/basic material, and an opaque non-reversible identity.
+  Development memory and AES-256-GCM encrypted-file implementations validate
+  two distinct credential shapes and rotation without rebuilding an Assembly.
+- OpenAI-compatible Executors no longer retain an API key string. Direct
+  construction accepts a Resolver, while Modules explicitly depend on
+  `credential.resolver` and resolve the configured Ref for every physical HTTP
+  attempt.
 
 ### Changed
 

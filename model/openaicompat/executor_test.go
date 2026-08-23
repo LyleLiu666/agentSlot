@@ -18,6 +18,7 @@ import (
 	agentslot "github.com/LyleLiu666/agentSlot"
 	agent "github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/artifact"
+	"github.com/LyleLiu666/agentSlot/credential"
 	"github.com/LyleLiu666/agentSlot/model"
 	"github.com/LyleLiu666/agentSlot/model/openaicompat"
 )
@@ -185,6 +186,55 @@ func TestImageCapableModuleRequiresArtifactStoreAtBuildTime(t *testing.T) {
 	}
 }
 
+func TestCredentialRefMakesResolverAnExplicitModuleDependency(t *testing.T) {
+	config := standardConfig("https://example.invalid", "")
+	config.CredentialRef = credential.Ref{ID: "provider"}
+	provider, err := openaicompat.NewModule(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder := agentslot.NewBuilder()
+	if err := builder.Install(provider); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := builder.Build(agentslot.RequireOne(model.ExecutorSlot)); !errors.Is(err, agentslot.ErrRequirementUnsatisfied) {
+		t.Fatalf("Build without credential resolver = %v", err)
+	}
+	resolver, err := credential.NewMemoryResolver(credential.Record{
+		Ref: credential.Ref{ID: "provider"}, Identity: credential.Identity{Fingerprint: "provider-v1"},
+		Material: credential.Material{Kind: credential.KindBearer, Token: []byte("must-not-be-described")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentialModule, err := credential.NewModule("credential.fixture", resolver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err = openaicompat.NewModule(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder = agentslot.NewBuilder()
+	if err := builder.Install(credentialModule); err != nil {
+		t.Fatal(err)
+	}
+	if err := builder.Install(provider); err != nil {
+		t.Fatal(err)
+	}
+	assembly, err := builder.Build(agentslot.RequireOne(model.ExecutorSlot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	description, err := json.Marshal(assembly.Describe())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(description), "provider-v1") || strings.Contains(string(description), "must-not-be-described") || strings.Contains(string(description), "provider\"") {
+		t.Fatalf("Assembly description exposed credential configuration: %s", description)
+	}
+}
+
 type fixedCounterModule struct{}
 
 func (fixedCounterModule) ID() string { return "test.fixed-counter" }
@@ -195,7 +245,7 @@ func (fixedCounterModule) Register(reg agentslot.Registrar) error {
 }
 
 func TestProviderModuleCounterIsAReplaceableDefault(t *testing.T) {
-	provider, err := openaicompat.NewModule(standardConfig("https://example.invalid", "secret-not-used-by-counter"))
+	provider, err := openaicompat.NewModule(standardConfig("https://example.invalid", ""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,6 +420,52 @@ func TestExecutorResetsPartialOutputBeforeRetry(t *testing.T) {
 	}
 }
 
+func TestExecutorLateResolvesCredentialForEveryPhysicalAttempt(t *testing.T) {
+	var requests atomic.Int32
+	recorder := &attemptRecorder{}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		attempt := requests.Add(1)
+		if request.Header.Get("Authorization") != "Bearer rotating-secret" {
+			t.Errorf("attempt %d authorization = %q", attempt, request.Header.Get("Authorization"))
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		if attempt == 1 {
+			_, _ = writer.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"))
+			return
+		}
+		_, _ = writer.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\n"))
+		_, _ = writer.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+	inner, err := credential.NewMemoryResolver(credential.Record{
+		Ref: credential.Ref{ID: "provider"}, Identity: credential.Identity{Fingerprint: "provider-v1"},
+		Material: credential.Material{Kind: credential.KindBearer, Token: []byte("rotating-secret")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := &countingCredentialResolver{inner: inner, before: func(call int64) {
+		starts, _ := recorder.records()
+		if len(starts) != int(call) {
+			t.Errorf("credential resolve %d occurred before Attempt Started: %#v", call, starts)
+		}
+	}}
+	config := standardConfig(server.URL, "")
+	config.MaxAttempts = 2
+	config.RetryBackoff = time.Millisecond
+	config.CredentialRef = credential.Ref{ID: "provider"}
+	config.CredentialResolver = resolver
+	executor := newExecutorConfig(t, config)
+	stream, err := executor.Execute(context.Background(), requestWithUser("retry"), recorder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := receiveUntilTerminal(t, stream)
+	if events[len(events)-1].Kind != model.EventComplete || requests.Load() != 2 || resolver.calls.Load() != 2 {
+		t.Fatalf("events=%#v requests=%d resolves=%d", events, requests.Load(), resolver.calls.Load())
+	}
+}
+
 func TestExecutorDoesNotRetryNonRetryableHTTPErrorOrLeakBody(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
@@ -504,8 +600,8 @@ func newExecutor(t *testing.T, baseURL, apiKey string) *openaicompat.Executor {
 }
 
 func standardConfig(baseURL, apiKey string) openaicompat.Config {
-	return openaicompat.Config{
-		ProviderKey: "openai", BaseURL: baseURL, APIKey: apiKey, MaxAttempts: 1,
+	config := openaicompat.Config{
+		ProviderKey: "openai", BaseURL: baseURL, MaxAttempts: 1,
 		Models: []openaicompat.Model{{
 			ID: "chat-model", Title: "Chat Model",
 			Capabilities: model.ExecutionCapabilities{
@@ -514,6 +610,15 @@ func standardConfig(baseURL, apiKey string) openaicompat.Config {
 			},
 		}},
 	}
+	if apiKey != "" {
+		resolver, _ := credential.NewMemoryResolver(credential.Record{
+			Ref: credential.Ref{ID: "openai-test"}, Identity: credential.Identity{Fingerprint: "openai-test-v1"},
+			Material: credential.Material{Kind: credential.KindBearer, Token: []byte(apiKey)},
+		})
+		config.CredentialRef = credential.Ref{ID: "openai-test"}
+		config.CredentialResolver = resolver
+	}
+	return config
 }
 
 func newExecutorWithAttempts(t *testing.T, baseURL string, attempts int) *openaicompat.Executor {
@@ -580,6 +685,20 @@ func receiveUntilTerminal(t *testing.T, stream model.ModelStream) []model.ModelE
 			return events
 		}
 	}
+}
+
+type countingCredentialResolver struct {
+	inner  credential.Resolver
+	before func(int64)
+	calls  atomic.Int64
+}
+
+func (r *countingCredentialResolver) Resolve(ctx context.Context, request credential.Request, consume credential.Consumer) (credential.Identity, error) {
+	call := r.calls.Add(1)
+	if r.before != nil {
+		r.before(call)
+	}
+	return r.inner.Resolve(ctx, request, consume)
 }
 
 type attemptRecorder struct {
