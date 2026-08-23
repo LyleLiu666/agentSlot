@@ -4,6 +4,16 @@ This file records published AgentSlot releases. The project is pre-1.0: a
 validation release is usable through Go modules, but its public API may change
 when real consumers expose a flawed boundary.
 
+## v0.1.3 - 2026-08-23
+
+### Fixed
+
+- Gateway chunk and reset events now expose the Runtime-reserved assistant
+  `MessageID` that the eventual durable Message reuses. Streaming clients can
+  therefore replace temporary content with the committed Message without
+  duplicating or reordering it; the correlation does not make temporary text
+  durable.
+
 ## v0.1.2 - 2026-08-23
 
 ### Fixed
