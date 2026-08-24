@@ -4,6 +4,15 @@ This file records published AgentSlot releases. The project is pre-1.0: a
 validation release is usable through Go modules, but its public API may change
 when real consumers expose a flawed boundary.
 
+## v0.1.4 - 2026-08-24
+
+### Fixed
+
+- OpenAI-compatible model projection now materializes image artifacts produced
+  by Tools as real image content in the next provider request while preserving
+  the durable ToolResult as provider-neutral metadata. Local token estimates
+  count image semantics without charging for base64 transport bytes.
+
 ## v0.1.3 - 2026-08-23
 
 ### Fixed

@@ -144,6 +144,7 @@ func buildMessages(ctx context.Context, inputs []model.Input, capabilities model
 			index++
 		}
 		messages = append(messages, message)
+		var toolImages []chatContentPart
 		for index < len(inputs) && inputs[index].ToolResult != nil {
 			result := inputs[index].ToolResult
 			correlation, ok := correlations[result.CallID]
@@ -165,10 +166,40 @@ func buildMessages(ctx context.Context, inputs []model.Input, capabilities model
 				content = string(encoded)
 			}
 			messages = append(messages, chatMessage{Role: "tool", ToolCallID: correlation, Content: content})
+			images, err := toolArtifactImageContent(ctx, *result, capabilities, artifacts, maxAttachmentBytes)
+			if err != nil {
+				return nil, err
+			}
+			toolImages = append(toolImages, images...)
 			index++
+		}
+		if len(toolImages) > 0 {
+			messages = append(messages, chatMessage{Role: "user", Content: toolImages})
 		}
 	}
 	return messages, nil
+}
+
+func toolArtifactImageContent(ctx context.Context, result tool.ToolResult, capabilities model.ExecutionCapabilities, artifacts artifact.ArtifactStore, maxAttachmentBytes int64) ([]chatContentPart, error) {
+	content := make([]chatContentPart, 0, len(result.Artifacts))
+	for _, metadata := range result.Artifacts {
+		if !strings.HasPrefix(metadata.MediaType, "image/") {
+			continue
+		}
+		if !capabilities.Media.SupportsInput(model.ModalityImage) {
+			return nil, errors.New("openaicompat: selected model does not accept image tool output")
+		}
+		if nilArtifactStore(artifacts) {
+			return nil, errors.New("openaicompat: ArtifactStore is required for image tool output")
+		}
+		part := agent.MessagePart{Kind: agent.PartAttachment, AttachmentID: metadata.ID, MediaType: metadata.MediaType, Name: metadata.Name}
+		url, err := imageDataURL(ctx, artifacts, part, maxAttachmentBytes)
+		if err != nil {
+			return nil, err
+		}
+		content = append(content, chatContentPart{Type: "image_url", ImageURL: &chatImageURL{URL: url}})
+	}
+	return content, nil
 }
 
 type toolResultArtifactReference struct {
@@ -282,26 +313,53 @@ func requestForTokenEstimate(ctx context.Context, request model.ModelRequest, ar
 	imageTokens := 0
 	for index, input := range request.Inputs {
 		estimate.Inputs[index] = input
-		if input.Message == nil {
-			continue
+		if input.Message != nil {
+			message := *input.Message
+			message.Parts = append([]agent.MessagePart(nil), input.Message.Parts...)
+			for partIndex, part := range message.Parts {
+				if part.Kind != agent.PartAttachment {
+					continue
+				}
+				if nilArtifactStore(artifacts) {
+					return model.ModelRequest{}, 0, errors.New("openaicompat: ArtifactStore is required for attachment input")
+				}
+				data, err := readImageAttachment(ctx, artifacts, part, maxAttachmentBytes)
+				if err != nil {
+					return model.ModelRequest{}, 0, err
+				}
+				imageTokens += estimateImageTokens(data)
+				message.Parts[partIndex] = agent.MessagePart{Kind: agent.PartText, Text: "[image]"}
+			}
+			estimate.Inputs[index].Message = &message
 		}
-		message := *input.Message
-		message.Parts = append([]agent.MessagePart(nil), input.Message.Parts...)
-		for partIndex, part := range message.Parts {
-			if part.Kind != agent.PartAttachment {
-				continue
+		if input.ToolResult != nil {
+			result := *input.ToolResult
+			result.Output = append(json.RawMessage(nil), input.ToolResult.Output...)
+			if input.ToolResult.Error != nil {
+				structured := *input.ToolResult.Error
+				result.Error = &structured
 			}
-			if nilArtifactStore(artifacts) {
-				return model.ModelRequest{}, 0, errors.New("openaicompat: ArtifactStore is required for attachment input")
+			result.Artifacts = make([]artifact.Metadata, 0, len(input.ToolResult.Artifacts))
+			for _, metadata := range input.ToolResult.Artifacts {
+				if !strings.HasPrefix(metadata.MediaType, "image/") {
+					result.Artifacts = append(result.Artifacts, metadata)
+					continue
+				}
+				if nilArtifactStore(artifacts) {
+					return model.ModelRequest{}, 0, errors.New("openaicompat: ArtifactStore is required for image tool output")
+				}
+				part := agent.MessagePart{Kind: agent.PartAttachment, AttachmentID: metadata.ID, MediaType: metadata.MediaType, Name: metadata.Name}
+				data, err := readImageAttachment(ctx, artifacts, part, maxAttachmentBytes)
+				if err != nil {
+					return model.ModelRequest{}, 0, err
+				}
+				imageTokens += estimateImageTokens(data)
 			}
-			data, err := readImageAttachment(ctx, artifacts, part, maxAttachmentBytes)
-			if err != nil {
-				return model.ModelRequest{}, 0, err
+			if len(result.Artifacts) == 0 {
+				result.Artifacts = nil
 			}
-			imageTokens += estimateImageTokens(data)
-			message.Parts[partIndex] = agent.MessagePart{Kind: agent.PartText, Text: "[image]"}
+			estimate.Inputs[index].ToolResult = &result
 		}
-		estimate.Inputs[index].Message = &message
 	}
 	return estimate, imageTokens, nil
 }
