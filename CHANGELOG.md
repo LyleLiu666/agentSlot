@@ -4,6 +4,19 @@ This file records published AgentSlot releases. The project is pre-1.0: a
 validation release is usable through Go modules, but its public API may change
 when real consumers expose a flawed boundary.
 
+## v0.1.5 - 2026-08-26
+
+### Added
+
+- Failed physical model attempts may now carry an optional bounded,
+  single-line `ErrorMessage` that the provider adapter has explicitly
+  classified as safe to persist and display. The standard Runtime preserves it
+  in append-only Session History without forwarding it to billing observers.
+- The OpenAI Chat Completions-compatible adapter extracts only recognized JSON
+  `error.message` or top-level `message` fields. Arbitrary response bodies,
+  credentials, headers, request content, control characters, and oversized
+  diagnostics are not copied across the presentation boundary.
+
 ## v0.1.4 - 2026-08-24
 
 ### Fixed

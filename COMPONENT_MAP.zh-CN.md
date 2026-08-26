@@ -56,7 +56,7 @@ Go Profile 要求下表五个已经实现的生态位。Token 计数与模型执
 | --- | --- | --- | --- | --- |
 | `agent.loop` | `AgentLoop` | `One` | 恰好 1 个 | 通过有序、Run-scoped 的受限 Runtime actions 承载可替换执行策略；框架继续独占 Session 真相、预算、取消、恢复和终态提交。 |
 | `session.store` | `SessionStore` | `One` | 恰好 1 个 | 持久化包含 SessionModelConfig 的完整 Session 聚合及其 revision/CAS 原子事务；按 Agent/Workspace 提供有界、确定性排序且绑定 Store 生命周期的游标分页；History 是聚合内唯一、append-only 的事实视图。 |
-| `model.executor` | `ModelExecutor` | `One` | 恰好 1 个 | 校验所选模型能力、执行一次逻辑模型调用、封装重试和续传、报告调用后 Usage，并通过受限 AttemptRecorder 持久记录每次真实请求。 |
+| `model.executor` | `ModelExecutor` | `One` | 恰好 1 个 | 校验所选模型能力、执行一次逻辑模型调用、封装重试和续传、报告调用后 Usage，并通过受限 AttemptRecorder 持久记录每次真实请求及可选、受限且由适配器清洗后允许展示的失败消息。 |
 | `model.token-counter` | `TokenCounter` | `One` | 恰好 1 个 | 为调用前规划计量完整 Provider 可见请求；使用精确 tokenizer 或经过验证的保守上界，两者都不可信时 fail closed。 |
 | `gateway.channel` | `GatewayChannel` | `Many` | 至少 1 个 | 把调用方协议、函数 API 或 UI 绑定到固定 Gateway，并且只能取得 `GatewayAccess`；gRPC、WebSocket、SSH 和入站 ACP 都是该 Slot 的不同实现。 |
 
@@ -182,7 +182,7 @@ Goal 状态不写进会话 History。
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `model.executor` | `ModelExecutor` | `One` | 全局必需 | 校验所选模型能力、执行一次逻辑模型调用、封装重试和续传、报告调用后 Usage，并通过受限 AttemptRecorder 持久记录每次真实请求。 | 已定义契约 |
+| `model.executor` | `ModelExecutor` | `One` | 全局必需 | 校验所选模型能力、执行一次逻辑模型调用、封装重试和续传、报告调用后 Usage，并通过受限 AttemptRecorder 持久记录每次真实请求及可选、受限且由适配器清洗后允许展示的失败消息。 | 已定义契约 |
 | `model.token-counter` | `TokenCounter` | `One` | 全局恰好 1 个 | 为调用前规划计量完整 Provider 可见请求；使用精确 tokenizer 或经过验证的保守上界，两者都不可信时 fail closed。 | 已定义契约 |
 | `model.attempt.observer` | `AttemptObserver` | `Chain` | 可选 | 在每次真实 Provider 请求发送前和结束后同步记录或拒绝；与被动遥测不同，它可以 fail closed。 | 已定义契约 |
 | `model.provider` | `ModelProvider` | `Many` | 可选；仅由声明依赖的 Executor 要求 | 为组合本地适配器的 Executor 提供具名 Provider 访问。 | 已映射 |

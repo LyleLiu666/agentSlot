@@ -84,7 +84,7 @@ never selects a Loop or any other domain component.
 
 ## Status
 
-AgentSlot is a pre-1.0 foundation. `v0.1.4` is the current validation release
+AgentSlot is a pre-1.0 foundation. `v0.1.5` is the current validation release
 and is intended to be consumed by real Agent projects. It adds independent
 token counting, controlled Loop actions, late-bound credentials, trusted
 Workspace boundaries, bounded Tool results, durable Artifact and Workspace
@@ -107,7 +107,7 @@ A released `agentslot` binary pins its own exact AgentSlot version. A source
 checkout must supply the release explicitly:
 
 ```bash
-go run ./cmd/agentslot init --agentslot-version v0.1.4 ./my-agent
+go run ./cmd/agentslot init --agentslot-version v0.1.5 ./my-agent
 ```
 
 An interactive terminal selects a preset and collects only non-secret provider,
@@ -476,6 +476,10 @@ facts retain the frozen model configuration. The
 Completions-compatible Executor with physical Attempt IDs, bounded output,
 retry/reset handling, durable started/terminal Attempt facts, Provider-reported
 token usage, and marked local estimates when a failed request has no usage. If a
+Provider returns a recognized structured error message, the adapter may record
+only that bounded, single-line, sanitized message next to the stable safe error
+code. Arbitrary response bodies, credentials, headers, and request content are
+not displayable diagnostics. If a
 configured model declares image input, that module explicitly requires
 `artifact.store`; attachment references are opened through that contract and
 projected as real image content blocks rather than placeholder text. The fixed

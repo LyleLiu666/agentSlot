@@ -6,11 +6,18 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	agentslot "github.com/LyleLiu666/agentSlot"
 	agent "github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/tool"
 )
+
+// MaxErrorMessageBytes bounds the optional provider diagnostic that an
+// adapter has explicitly classified as safe to persist and show to a user.
+const MaxErrorMessageBytes = 1024
 
 // ExecutorSlot is the standard logical model execution ecosystem.
 var ExecutorSlot = agentslot.One[ModelExecutor]("model.executor")
@@ -259,12 +266,17 @@ func (a AttemptStart) Validate() error {
 
 // AttemptFinish is supplied before an Executor retries or exposes a logical
 // terminal result. ErrorCode is a stable, non-sensitive adapter category.
+// ErrorMessage is optional and must contain only the bounded, single-line
+// diagnostic that the adapter has explicitly classified as safe to persist
+// and show to a user. It must never contain credentials, headers, request
+// bodies, or an unclassified provider response body.
 type AttemptFinish struct {
 	AttemptID         agent.AttemptID
 	Outcome           AttemptOutcome
 	ProviderRequestID string
 	Usage             TokenUsage
 	ErrorCode         string
+	ErrorMessage      string
 }
 
 func (a AttemptFinish) Validate() error {
@@ -274,11 +286,33 @@ func (a AttemptFinish) Validate() error {
 	if err := a.Usage.Validate(); err != nil {
 		return err
 	}
-	if a.Outcome == AttemptSucceeded && a.ErrorCode != "" {
-		return errors.New("model: succeeded attempt cannot contain an error code")
+	if err := ValidateErrorMessage(a.ErrorMessage); err != nil {
+		return err
+	}
+	if a.Outcome == AttemptSucceeded && (a.ErrorCode != "" || a.ErrorMessage != "") {
+		return errors.New("model: succeeded attempt cannot contain an error")
 	}
 	if a.Outcome != AttemptSucceeded && a.ErrorCode == "" {
 		return errors.New("model: unsuccessful attempt requires a safe error code")
+	}
+	return nil
+}
+
+// ValidateErrorMessage verifies the transport-safe shape of an optional
+// displayable provider diagnostic. This cannot prove that an adapter removed
+// secrets; the adapter remains responsible for selecting only a recognized
+// provider message field before calling the AttemptRecorder.
+func ValidateErrorMessage(message string) error {
+	if message == "" {
+		return nil
+	}
+	if len(message) > MaxErrorMessageBytes || !utf8.ValidString(message) || strings.TrimSpace(message) != message {
+		return errors.New("model: error message must be bounded, valid UTF-8, and trimmed")
+	}
+	for _, character := range message {
+		if unicode.IsControl(character) || unicode.In(character, unicode.Cf, unicode.Zl, unicode.Zp) {
+			return errors.New("model: error message must be a single safe display line")
+		}
 	}
 	return nil
 }

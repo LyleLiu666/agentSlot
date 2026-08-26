@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	agent "github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/credential"
@@ -93,7 +95,7 @@ func (s *eventStream) run(executor *Executor, payload []byte) {
 		}
 		finish := model.AttemptFinish{
 			AttemptID: attemptID, Outcome: outcome, ProviderRequestID: result.providerRequestID,
-			Usage: usage, ErrorCode: errorCode,
+			Usage: usage, ErrorCode: errorCode, ErrorMessage: result.errorMessage,
 		}
 		if err := s.recorder.Finished(context.WithoutCancel(s.ctx), finish); err != nil {
 			s.emit(model.ModelEvent{Kind: model.EventFailed, AttemptID: string(attemptID), Err: err})
@@ -138,6 +140,7 @@ type attemptResult struct {
 	providerRequestID string
 	outputBytes       int
 	errorCode         string
+	errorMessage      string
 	err               error
 }
 
@@ -166,11 +169,11 @@ func (s *eventStream) attempt(executor *Executor, payload []byte, attemptID stri
 	defer response.Body.Close()
 	providerRequestID := response.Header.Get("x-request-id")
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
+		errorMessage := providerErrorMessage(response.Body)
 		retryable := retryableHTTPStatus(response.StatusCode)
 		return attemptResult{
 			retryable: retryable, retryDelay: retryAfter(response.Header.Get("Retry-After"), time.Now()),
-			providerRequestID: providerRequestID, errorCode: fmt.Sprintf("http_%d", response.StatusCode),
+			providerRequestID: providerRequestID, errorCode: fmt.Sprintf("http_%d", response.StatusCode), errorMessage: errorMessage,
 			err: fmt.Errorf("provider returned HTTP status %d", response.StatusCode),
 		}
 	}
@@ -187,6 +190,57 @@ func (s *eventStream) attempt(executor *Executor, payload []byte, attemptID stri
 		result.errorCode = "stream"
 	}
 	return result
+}
+
+const maxProviderErrorBodyBytes = 64 << 10
+
+func providerErrorMessage(reader io.Reader) string {
+	body, err := io.ReadAll(io.LimitReader(reader, maxProviderErrorBodyBytes+1))
+	if err != nil || len(body) > maxProviderErrorBodyBytes {
+		return ""
+	}
+	defer clear(body)
+	var envelope struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(body, &envelope) != nil {
+		return ""
+	}
+	message := envelope.Error.Message
+	if message == "" {
+		message = envelope.Message
+	}
+	message = normalizeProviderErrorMessage(message)
+	if model.ValidateErrorMessage(message) != nil {
+		return ""
+	}
+	return message
+}
+
+func normalizeProviderErrorMessage(message string) string {
+	message = strings.Map(func(character rune) rune {
+		if unicode.IsControl(character) || unicode.In(character, unicode.Cf, unicode.Zl, unicode.Zp) {
+			return ' '
+		}
+		return character
+	}, message)
+	message = strings.Join(strings.Fields(message), " ")
+	if len(message) <= model.MaxErrorMessageBytes {
+		return message
+	}
+	var bounded strings.Builder
+	bounded.Grow(model.MaxErrorMessageBytes)
+	for _, character := range message {
+		size := utf8.RuneLen(character)
+		if size < 0 || bounded.Len()+size > model.MaxErrorMessageBytes {
+			break
+		}
+		bounded.WriteRune(character)
+	}
+	return strings.TrimSpace(bounded.String())
 }
 
 func (e *Executor) send(ctx context.Context, request *http.Request) (*http.Response, error) {

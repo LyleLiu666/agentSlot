@@ -308,6 +308,9 @@ type ModelAttemptFact struct {
 	ProviderRequestID string
 	Usage             model.TokenUsage
 	ErrorCode         string
+	// ErrorMessage is the optional, adapter-sanitized provider diagnostic
+	// allowed to cross the durable Session and user-presentation boundary.
+	ErrorMessage string
 }
 
 func (f ModelAttemptFact) Validate() error {
@@ -317,14 +320,17 @@ func (f ModelAttemptFact) Validate() error {
 	if err := f.Usage.Validate(); err != nil {
 		return err
 	}
-	if f.Kind == AttemptStarted && (f.Usage != (model.TokenUsage{}) || f.ProviderRequestID != "" || f.ErrorCode != "") {
+	if err := model.ValidateErrorMessage(f.ErrorMessage); err != nil {
+		return err
+	}
+	if f.Kind == AttemptStarted && (f.Usage != (model.TokenUsage{}) || f.ProviderRequestID != "" || f.ErrorCode != "" || f.ErrorMessage != "") {
 		return fmt.Errorf("session: started attempt cannot contain terminal outcome")
 	}
 	if f.Kind != AttemptStarted && f.Kind != AttemptSucceeded && f.ErrorCode == "" {
 		return fmt.Errorf("session: unsuccessful attempt requires a safe error code")
 	}
-	if f.Kind == AttemptSucceeded && f.ErrorCode != "" {
-		return fmt.Errorf("session: succeeded attempt cannot contain an error code")
+	if f.Kind == AttemptSucceeded && (f.ErrorCode != "" || f.ErrorMessage != "") {
+		return fmt.Errorf("session: succeeded attempt cannot contain an error")
 	}
 	return nil
 }
