@@ -17,6 +17,9 @@ type FakeExecution struct {
 	Events       []ModelEvent
 	ExecuteError error
 	Block        <-chan struct{}
+	// ErrorMessage is the optional displayable diagnostic recorded for scripted
+	// failed physical attempts. Tests must supply a contract-valid safe value.
+	ErrorMessage string
 	// Usage applies to a single-attempt script. AttemptUsage is used when a
 	// script contains reset-delimited physical attempts.
 	Usage        TokenUsage
@@ -84,7 +87,7 @@ func (f *FakeModelExecutor) Execute(ctx context.Context, request ModelRequest, r
 	stream := &fakeModelStream{
 		events: events, block: execution.Block, recorder: recorder,
 		request: cloneModelRequest(request), usage: cloneAttemptUsage(execution.AttemptUsage),
-		defaultUsage: execution.Usage, attempts: attempts,
+		defaultUsage: execution.Usage, attempts: attempts, errorMessage: execution.ErrorMessage,
 	}
 	if len(attempts) > 0 {
 		if err := stream.start(ctx, attempts[0]); err != nil {
@@ -223,6 +226,7 @@ type fakeModelStream struct {
 	started      map[agent.AttemptID]bool
 	finished     map[agent.AttemptID]bool
 	outputBytes  map[agent.AttemptID]int
+	errorMessage string
 }
 
 func (s *fakeModelStream) Recv(ctx context.Context) (ModelEvent, error) {
@@ -271,10 +275,11 @@ func (s *fakeModelStream) Recv(ctx context.Context) (ModelEvent, error) {
 	if event.Kind == EventReset || event.Kind == EventComplete || event.Kind == EventFailed {
 		outcome := AttemptFailed
 		errorCode := "scripted_failure"
+		errorMessage := s.errorMessage
 		if event.Kind == EventComplete {
-			outcome, errorCode = AttemptSucceeded, ""
+			outcome, errorCode, errorMessage = AttemptSucceeded, "", ""
 		}
-		if err := s.finish(context.WithoutCancel(ctx), attemptID, outcome, errorCode); err != nil {
+		if err := s.finish(context.WithoutCancel(ctx), attemptID, outcome, errorCode, errorMessage); err != nil {
 			return ModelEvent{}, err
 		}
 	}
@@ -311,7 +316,7 @@ func (s *fakeModelStream) start(ctx context.Context, id agent.AttemptID) error {
 	return nil
 }
 
-func (s *fakeModelStream) finish(ctx context.Context, id agent.AttemptID, outcome AttemptOutcome, errorCode string) error {
+func (s *fakeModelStream) finish(ctx context.Context, id agent.AttemptID, outcome AttemptOutcome, errorCode, errorMessage string) error {
 	if s.finished[id] {
 		return nil
 	}
@@ -324,7 +329,7 @@ func (s *fakeModelStream) finish(ctx context.Context, id agent.AttemptID, outcom
 		output := int64((s.outputBytes[id] + 3) / 4)
 		usage = TokenUsage{InputTokens: int64(input), OutputTokens: output, TotalTokens: int64(input) + output, Estimated: true, EstimateSource: "model.fake.portable_estimate"}
 	}
-	finish := AttemptFinish{AttemptID: id, Outcome: outcome, Usage: usage, ErrorCode: errorCode}
+	finish := AttemptFinish{AttemptID: id, Outcome: outcome, Usage: usage, ErrorCode: errorCode, ErrorMessage: errorMessage}
 	if err := finish.Validate(); err != nil {
 		return err
 	}
@@ -340,7 +345,7 @@ func (s *fakeModelStream) finishCanceled() error {
 	defer s.mu.Unlock()
 	for _, id := range s.attempts {
 		if s.started[id] && !s.finished[id] {
-			return s.finish(context.Background(), id, AttemptCanceled, "canceled")
+			return s.finish(context.Background(), id, AttemptCanceled, "canceled", "")
 		}
 	}
 	return nil

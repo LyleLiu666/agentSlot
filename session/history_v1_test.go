@@ -92,6 +92,7 @@ func TestMemoryStorePersistsTypedOperationalFacts(t *testing.T) {
 	terminal := attempt
 	terminal.Kind = session.AttemptFailed
 	terminal.ErrorCode = "provider_failure"
+	terminal.ErrorMessage = "Sorry, your account balance is insufficient"
 	terminal.Usage = model.TokenUsage{InputTokens: 100, OutputTokens: 1, TotalTokens: 101}
 	contribution := session.ContextContributionFact{RunID: "run-1", StepID: "step-1", SourceKey: "memory", Inputs: []model.Input{}}
 	budget := session.RunBudgetExceededFact{RunID: "run-1", UsedTokens: 101, MaxTokens: 100}
@@ -108,6 +109,9 @@ func TestMemoryStorePersistsTypedOperationalFacts(t *testing.T) {
 	want := []session.HistoryFactKind{session.FactRun, session.FactModelAttempt, session.FactModelAttempt, session.FactContextContribution, session.FactRunBudgetExceeded}
 	for index := range want {
 		assertFactMetadata(t, loaded.History[index], session.HistorySequence(index+1), want[index])
+	}
+	if got := loaded.History[2].ModelAttempt.ErrorMessage; got != terminal.ErrorMessage {
+		t.Fatalf("persisted model error message = %q, want %q", got, terminal.ErrorMessage)
 	}
 }
 

@@ -3,6 +3,7 @@ package standardagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -105,6 +106,24 @@ func TestFakeExecutorPersistsEveryPhysicalRetryAttempt(t *testing.T) {
 	}
 	if attempts[1].ErrorCode != "scripted_failure" || attempts[1].Usage.TotalTokens != 5 || attempts[3].Usage.TotalTokens != 6 {
 		t.Fatalf("attempt terminal details = %#v", attempts)
+	}
+}
+
+func TestRuntimePersistsTheExecutorDisplayableErrorMessage(t *testing.T) {
+	executor := model.NewFakeModelExecutor(model.FakeExecution{
+		ErrorMessage: "Sorry, your account balance is insufficient",
+		Events:       []model.ModelEvent{{Kind: model.EventFailed, Err: errors.New("private executor failure")}},
+	})
+	access, store, stop := startRound7Application(t, executor, AgentRuntimeConfig{})
+	defer stop()
+	opened := createRuntimeTestSession(t, access)
+	if _, err := access.Send(context.Background(), interaction.SendRequest{SessionID: opened.SessionID, ExpectedRevision: opened.Revision, Input: textInput("fail")}); err != nil {
+		t.Fatal(err)
+	}
+	waitRuntimeIdle(t, access, opened.SessionID)
+	attempts := attemptFacts(loadRound3Snapshot(t, store, opened.SessionID).History)
+	if len(attempts) != 2 || attempts[1].Kind != session.AttemptFailed || attempts[1].ErrorCode != "scripted_failure" || attempts[1].ErrorMessage != "Sorry, your account balance is insufficient" {
+		t.Fatalf("attempt facts = %#v", attempts)
 	}
 }
 

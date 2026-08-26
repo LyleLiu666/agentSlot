@@ -511,11 +511,13 @@ func TestExecutorClassifiesCredentialFailureBeforeProviderDispatch(t *testing.T)
 	}
 }
 
-func TestExecutorDoesNotRetryNonRetryableHTTPErrorOrLeakBody(t *testing.T) {
+func TestExecutorPreservesOnlyTheRecognizedProviderErrorMessage(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		requests.Add(1)
-		http.Error(writer, "upstream secret details", http.StatusBadRequest)
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusPaymentRequired)
+		_, _ = io.WriteString(writer, `{"error":{"message":"Sorry, your account balance is insufficient","type":"billing_error"},"internal":"must not be persisted"}`)
 	}))
 	defer server.Close()
 	executor := newExecutorWithAttempts(t, server.URL, 3)
@@ -526,14 +528,31 @@ func TestExecutorDoesNotRetryNonRetryableHTTPErrorOrLeakBody(t *testing.T) {
 	}
 	events := receiveUntilTerminal(t, stream)
 	terminal := events[len(events)-1]
-	if terminal.Kind != model.EventFailed || terminal.Err == nil || strings.Contains(terminal.Err.Error(), "upstream secret details") {
+	if terminal.Kind != model.EventFailed || terminal.Err == nil || strings.Contains(terminal.Err.Error(), "account balance") || strings.Contains(terminal.Err.Error(), "must not be persisted") {
 		t.Fatalf("terminal error = %#v", terminal)
 	}
 	if requests.Load() != 1 {
 		t.Fatalf("requests = %d", requests.Load())
 	}
 	_, finishes := recorder.records()
-	if len(finishes) != 1 || finishes[0].ErrorCode != "http_400" || !finishes[0].Usage.Estimated {
+	if len(finishes) != 1 || finishes[0].ErrorCode != "http_402" || finishes[0].ErrorMessage != "Sorry, your account balance is insufficient" || !finishes[0].Usage.Estimated {
+		t.Fatalf("failed attempt = %#v", finishes)
+	}
+}
+
+func TestExecutorDoesNotPersistAnUnrecognizedHTTPErrorBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		http.Error(writer, "raw upstream diagnostics must remain private", http.StatusBadRequest)
+	}))
+	defer server.Close()
+	recorder := &attemptRecorder{}
+	stream, err := newExecutorWithAttempts(t, server.URL, 1).Execute(context.Background(), requestWithUser("bad"), recorder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = receiveUntilTerminal(t, stream)
+	_, finishes := recorder.records()
+	if len(finishes) != 1 || finishes[0].ErrorCode != "http_400" || finishes[0].ErrorMessage != "" {
 		t.Fatalf("failed attempt = %#v", finishes)
 	}
 }

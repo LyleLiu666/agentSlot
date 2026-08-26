@@ -644,7 +644,8 @@ func (a *runtimeAttemptRecorder) Finished(ctx context.Context, finished model.At
 	fact := session.ModelAttemptFact{
 		AttemptID: finished.AttemptID, RunID: a.run.id, StepID: a.step, Kind: kind,
 		ProviderKey: a.run.config.ProviderKey, ModelID: a.run.config.ModelID,
-		ProviderRequestID: finished.ProviderRequestID, Usage: finished.Usage, ErrorCode: finished.ErrorCode,
+		ProviderRequestID: finished.ProviderRequestID, Usage: finished.Usage,
+		ErrorCode: finished.ErrorCode, ErrorMessage: finished.ErrorMessage,
 	}
 	if _, err := r.commitLocked(context.Background(), snapshot.Revision, "attempt-finish", []session.Change{{Kind: session.AppendModelAttempt, ModelAttempt: &fact}}); err != nil {
 		return errors.Join(observerErr, err)

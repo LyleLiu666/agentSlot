@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"strings"
 	"testing"
 
 	agentslot "github.com/LyleLiu666/agentSlot"
@@ -177,7 +178,7 @@ func TestModelEventsSeparateTemporaryAndTerminalFacts(t *testing.T) {
 func TestAttemptRecorderVocabularyAndTokenBudget(t *testing.T) {
 	start := model.AttemptStart{AttemptID: "attempt-1", ProviderKey: "provider", ModelID: "model"}
 	finish := model.AttemptFinish{
-		AttemptID: "attempt-1", Outcome: model.AttemptFailed, ErrorCode: "transport",
+		AttemptID: "attempt-1", Outcome: model.AttemptFailed, ErrorCode: "transport", ErrorMessage: "provider connection failed",
 		Usage: model.TokenUsage{InputTokens: 4, OutputTokens: 1, TotalTokens: 5, Estimated: true, EstimateSource: "adapter"},
 	}
 	if err := start.Validate(); err != nil {
@@ -190,6 +191,18 @@ func TestAttemptRecorderVocabularyAndTokenBudget(t *testing.T) {
 	missingCode.ErrorCode = ""
 	if err := missingCode.Validate(); err == nil {
 		t.Fatal("failed attempt without a safe error code was accepted")
+	}
+	succeededWithMessage := finish
+	succeededWithMessage.Outcome, succeededWithMessage.ErrorCode = model.AttemptSucceeded, ""
+	if err := succeededWithMessage.Validate(); err == nil {
+		t.Fatal("successful attempt with a failure message was accepted")
+	}
+	for _, invalid := range []string{" leading", "line one\nline two", strings.Repeat("x", model.MaxErrorMessageBytes+1)} {
+		candidate := finish
+		candidate.ErrorMessage = invalid
+		if err := candidate.Validate(); err == nil {
+			t.Fatalf("unsafe displayable error message %q was accepted", invalid)
+		}
 	}
 	budget := model.TokenBudget{MaxTokens: 5, UsedTokens: 5}
 	if err := budget.Validate(); err != nil || !budget.Exhausted() || budget.RemainingTokens() != 0 {
