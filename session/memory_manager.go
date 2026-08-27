@@ -90,14 +90,20 @@ func (m *Manager) Fork(ctx context.Context, request ForkRequest) (Session, error
 	if !request.SourceSessionID.Valid() || !request.AgentID.Valid() || !request.WorkspaceID.Valid() {
 		return nil, invalid("session.manager.fork", "source session, agent, and workspace are required")
 	}
+	if !request.Mode.Valid() {
+		return nil, invalid("session.manager.fork", "fork mode is required")
+	}
+	if request.Mode == ForkFullHistory && request.CutoffSequence != 0 {
+		return nil, invalid("session.manager.fork", "full-history fork cannot specify a cutoff")
+	}
 	source, err := m.store.Load(ctx, SessionRef{SessionID: request.SourceSessionID})
 	if err != nil {
 		return nil, err
 	}
-	if request.CutoffSequence == 0 && source.RunState == RunRunning {
+	if request.Mode == ForkFullHistory && source.RunState == RunRunning {
 		return nil, agent.NewCodedError(agent.ErrorConflict, agent.CodeActiveRun, "session.manager.fork", "cannot fork a session while a run is active", nil)
 	}
-	cutoff, history, err := selectForkHistory(source.History, request.CutoffSequence)
+	cutoff, history, err := selectForkHistory(source.History, source.ActiveRunID, request.Mode, request.CutoffSequence)
 	if err != nil {
 		return nil, err
 	}
@@ -344,15 +350,18 @@ func rewriteForFork(source Snapshot, newSessionID agent.SessionID, agentID agent
 	return source
 }
 
-func selectForkHistory(history []HistoryFact, requested HistorySequence) (HistorySequence, []HistoryFact, error) {
-	if len(history) == 0 {
-		if requested != 0 {
-			return 0, nil, invalid("session.manager.fork", "fork cutoff does not exist")
-		}
+func selectForkHistory(history []HistoryFact, activeRunID agent.RunID, mode ForkMode, requested HistorySequence) (HistorySequence, []HistoryFact, error) {
+	if mode == ForkHistoryPrefix && requested == 0 {
 		return 0, nil, nil
 	}
+	if len(history) == 0 {
+		if mode == ForkFullHistory {
+			return 0, nil, nil
+		}
+		return 0, nil, invalid("session.manager.fork", "fork cutoff does not exist")
+	}
 	cutoff := requested
-	if cutoff == 0 {
+	if mode == ForkFullHistory {
 		cutoff = history[len(history)-1].Sequence
 	}
 	end := -1
@@ -365,7 +374,7 @@ func selectForkHistory(history []HistoryFact, requested HistorySequence) (Histor
 	if end < 0 {
 		return 0, nil, invalid("session.manager.fork", "fork cutoff does not exist")
 	}
-	if requested != 0 && !completedForkBoundary(history, end) {
+	if mode == ForkHistoryPrefix && !completedForkBoundary(history, end, activeRunID) {
 		return 0, nil, invalid("session.manager.fork", "fork cutoff is not a completed Step boundary")
 	}
 	selected := make([]HistoryFact, end+1)
@@ -378,8 +387,11 @@ func selectForkHistory(history []HistoryFact, requested HistorySequence) (Histor
 	return cutoff, selected, nil
 }
 
-func completedForkBoundary(history []HistoryFact, index int) bool {
+func completedForkBoundary(history []HistoryFact, index int, activeRunID agent.RunID) bool {
 	fact := history[index]
+	if index == len(history)-1 && activeRunID.Valid() && fact.RunID == activeRunID {
+		return false
+	}
 	if fact.StepID.Valid() {
 		return index == len(history)-1 || history[index+1].StepID != fact.StepID
 	}

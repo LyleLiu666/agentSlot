@@ -84,7 +84,7 @@ never selects a Loop or any other domain component.
 
 ## Status
 
-AgentSlot is a pre-1.0 foundation. `v0.1.5` is the current validation release
+AgentSlot is a pre-1.0 foundation. `v0.1.6` is the current validation release
 and is intended to be consumed by real Agent projects. It adds independent
 token counting, controlled Loop actions, late-bound credentials, trusted
 Workspace boundaries, bounded Tool results, durable Artifact and Workspace
@@ -107,7 +107,7 @@ A released `agentslot` binary pins its own exact AgentSlot version. A source
 checkout must supply the release explicitly:
 
 ```bash
-go run ./cmd/agentslot init --agentslot-version v0.1.5 ./my-agent
+go run ./cmd/agentslot init --agentslot-version v0.1.6 ./my-agent
 ```
 
 An interactive terminal selects a preset and collects only non-secret provider,
@@ -392,6 +392,13 @@ SessionStore aggregate. Runtime-fixed SystemPrompt, ToolKeys, and Context
 settings do not change during one Runtime lifetime; the Session's provider,
 model, reasoning, and model parameters can be changed explicitly while idle
 and are snapshotted for each Run.
+
+Forking copies stable Session History into a new independent Session. Every
+`ForkRequest` and `ForkSessionRequest` selects an explicit mode:
+`ForkFullHistory` copies all History and requires an idle source, while
+`ForkHistoryPrefix` copies through `CutoffSequence`; prefix sequence zero means
+an empty History. A stable prefix can be copied while the source Run continues.
+Pending Queue, RunJournal, and active Run state are never copied.
 
 `workspace.Manager` is optional. When installed, create, fork, summary-start,
 and resume resolve the exact Session scope before execution; unknown or

@@ -365,6 +365,12 @@ func (c *runtimeCoordinator) fork(ctx context.Context, request interaction.ForkS
 	if !request.SourceSessionID.Valid() || !request.AgentID.Valid() || !request.WorkspaceID.Valid() {
 		return interaction.SessionOpened{}, invalidInput("gateway.fork_session", "source SessionID, AgentID, and WorkspaceID are required")
 	}
+	if !request.Mode.Valid() {
+		return interaction.SessionOpened{}, invalidInput("gateway.fork_session", "fork mode is required")
+	}
+	if request.Mode == session.ForkFullHistory && request.CutoffSequence != 0 {
+		return interaction.SessionOpened{}, invalidInput("gateway.fork_session", "full-history fork cannot specify a cutoff")
+	}
 	if request.ModelConfig != nil {
 		if err := request.ModelConfig.Validate(); err != nil {
 			return interaction.SessionOpened{}, invalidInput("gateway.fork_session", err.Error())
@@ -376,6 +382,7 @@ func (c *runtimeCoordinator) fork(ctx context.Context, request interaction.ForkS
 	}
 	s, err := c.manager.Fork(ctx, session.ForkRequest{
 		SourceSessionID: request.SourceSessionID,
+		Mode:            request.Mode,
 		CutoffSequence:  request.CutoffSequence,
 		AgentID:         request.AgentID, WorkspaceID: request.WorkspaceID,
 		ModelConfig: request.ModelConfig,
