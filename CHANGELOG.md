@@ -4,6 +4,25 @@ This file records published AgentSlot releases. The project is pre-1.0: a
 validation release is usable through Go modules, but its public API may change
 when real consumers expose a flawed boundary.
 
+## v0.1.6 - 2026-08-27
+
+### Changed
+
+- Session forks now require an explicit `ForkMode`. `ForkFullHistory` copies
+  all durable History and requires an idle source Session;
+  `ForkHistoryPrefix` copies through the requested `CutoffSequence`, including
+  sequence zero as an empty History prefix.
+- Stable completed-Step prefixes may be copied while the source Run continues.
+  A cutoff at the unfinished tail of the active Step is rejected.
+
+### Compatibility and maturity
+
+- This pre-1.0 release intentionally removes the ambiguous zero-value fork
+  behavior. Callers must select `ForkFullHistory` or `ForkHistoryPrefix` in
+  both `session.ForkRequest` and `interaction.ForkSessionRequest`.
+- Fork remains fixed SessionManager/Gateway behavior rather than a replaceable
+  Slot and does not change any component maturity score.
+
 ## v0.1.5 - 2026-08-26
 
 ### Added
