@@ -588,9 +588,9 @@ func TestFixedManagerForksStablePrefixWhileParentContinues(t *testing.T) {
 		t.Fatal(err)
 	}
 	completed := message("message-completed", "fork-running-source", agent.RoleAssistant, "completed")
-	completed.RunID, completed.StepID = "run-completed", "step-completed"
+	completed.RunID, completed.StepID = "run-active", "step-completed"
 	active := message("message-active", completed.SessionID, agent.RoleUser, "running")
-	active.RunID, active.StepID = "run-active", "step-active"
+	active.RunID, active.StepID = completed.RunID, "step-active"
 	source, err := store.Create(context.Background(), session.NewSession{
 		Session:     agent.Session{ID: completed.SessionID, AgentID: "agent-1", WorkspaceID: "workspace-1"},
 		History:     []session.HistoryFact{{Message: &completed}, {Message: &active}},

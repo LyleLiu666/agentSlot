@@ -167,3 +167,41 @@ func TestWorkspaceManagerRejectsMissingBoundaryBeforeSessionRecovery(t *testing.
 		t.Fatalf("missing Workspace triggered %d recovery calls", store.RecoverCalls())
 	}
 }
+
+func TestGatewayRejectsInvalidForkBeforeWorkspaceResolution(t *testing.T) {
+	entry := &captureChannel{}
+	resolveCalls := 0
+	workspaceModule, err := workspace.NewModule("test.workspace", workspace.ManagerFunc(func(_ context.Context, scope workspace.Scope) (workspace.Boundary, error) {
+		resolveCalls++
+		return runtimeWorkspaceBoundary{scope: scope}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	application := NewApplication(ApplicationSpec{
+		Name: "workspace-invalid-fork", DefaultModelConfig: testDefaultModel(),
+		Modules: []agentslot.Module{
+			componentsModule{store: session.NewMemoryStore()},
+			workspaceModule,
+			NewGatewayChannelModule("entrypoint.workspace-invalid-fork", "test", entry),
+		},
+	})
+	running, err := application.Start(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = running.Stop(context.Background()) })
+	requests := []interaction.ForkSessionRequest{
+		{SourceSessionID: "session-source", AgentID: "agent-1", WorkspaceID: "workspace-1"},
+		{SourceSessionID: "session-source", Mode: session.ForkFullHistory, CutoffSequence: 1, AgentID: "agent-1", WorkspaceID: "workspace-1"},
+	}
+	for _, request := range requests {
+		_, err = entry.Access().ForkSession(context.Background(), request)
+		if !agent.IsKind(err, agent.ErrorInvalidInput) {
+			t.Fatalf("ForkSession(%#v) error = %v, want invalid input", request, err)
+		}
+	}
+	if resolveCalls != 0 {
+		t.Fatalf("invalid Fork resolved Workspace %d times", resolveCalls)
+	}
+}
