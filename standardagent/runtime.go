@@ -376,6 +376,7 @@ func (c *runtimeCoordinator) fork(ctx context.Context, request interaction.ForkS
 	}
 	s, err := c.manager.Fork(ctx, session.ForkRequest{
 		SourceSessionID: request.SourceSessionID,
+		Mode:            request.Mode,
 		CutoffSequence:  request.CutoffSequence,
 		AgentID:         request.AgentID, WorkspaceID: request.WorkspaceID,
 		ModelConfig: request.ModelConfig,

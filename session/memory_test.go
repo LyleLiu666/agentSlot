@@ -417,7 +417,7 @@ func TestFixedManagerCreateResumeForkAndSummaryPreserveModelRules(t *testing.T) 
 	}
 
 	forked, err := manager.Fork(context.Background(), session.ForkRequest{
-		SourceSessionID: source.Session.ID, AgentID: "agent-1", WorkspaceID: "workspace-2",
+		SourceSessionID: source.Session.ID, Mode: session.ForkFullHistory, AgentID: "agent-1", WorkspaceID: "workspace-2",
 	})
 	if err != nil {
 		t.Fatalf("fork: %v", err)
@@ -437,7 +437,7 @@ func TestFixedManagerCreateResumeForkAndSummaryPreserveModelRules(t *testing.T) 
 	}
 	override := model.Config{ProviderKey: "provider-3", ModelID: "model-3", Reasoning: model.ReasoningLow}
 	overriddenFork, err := manager.Fork(context.Background(), session.ForkRequest{
-		SourceSessionID: source.Session.ID, AgentID: "agent-1", WorkspaceID: "workspace-4",
+		SourceSessionID: source.Session.ID, Mode: session.ForkFullHistory, AgentID: "agent-1", WorkspaceID: "workspace-4",
 		ModelConfig: &override,
 	})
 	if err != nil {
@@ -485,7 +485,7 @@ func TestFixedManagerCompleteForkRewritesToolFactIdentity(t *testing.T) {
 		t.Fatalf("create source: %v", err)
 	}
 	forked, err := manager.Fork(context.Background(), session.ForkRequest{
-		SourceSessionID: assistant.SessionID, AgentID: "agent-1", WorkspaceID: "workspace-2",
+		SourceSessionID: assistant.SessionID, Mode: session.ForkFullHistory, AgentID: "agent-1", WorkspaceID: "workspace-2",
 	})
 	if err != nil {
 		t.Fatalf("fork: %v", err)
@@ -499,6 +499,138 @@ func TestFixedManagerCompleteForkRewritesToolFactIdentity(t *testing.T) {
 	}
 	if history[1].ToolCall.MessageID != history[0].Message.ID || history[1].ToolCall.RunID != history[0].Message.RunID || history[1].ToolCall.StepID != history[0].Message.StepID || history[2].ToolResult.CallID != history[1].ToolCall.ID {
 		t.Fatalf("fork broke tool fact references: %#v", history)
+	}
+}
+
+func TestFixedManagerDistinguishesFullForkFromEmptyPrefix(t *testing.T) {
+	store := session.NewMemoryStore()
+	manager, err := session.NewManager(store, defaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := message("message-active", "fork-active-source", agent.RoleUser, "first request")
+	active.RunID, active.StepID = "run-active", "step-active"
+	source, err := store.Create(context.Background(), session.NewSession{
+		Session:     agent.Session{ID: active.SessionID, AgentID: "agent-1", WorkspaceID: "workspace-1"},
+		History:     []session.HistoryFact{{Message: &active}},
+		ModelConfig: defaultConfig(),
+		RunState:    session.RunRunning,
+		ActiveRunID: active.RunID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Fork(context.Background(), session.ForkRequest{
+		SourceSessionID: source.Session.ID,
+		AgentID:         "agent-1",
+		WorkspaceID:     "workspace-2",
+	}); !agent.IsKind(err, agent.ErrorInvalidInput) {
+		t.Fatalf("fork without mode error = %v, want invalid input", err)
+	}
+	if _, err := manager.Fork(context.Background(), session.ForkRequest{
+		SourceSessionID: source.Session.ID,
+		Mode:            session.ForkFullHistory,
+		CutoffSequence:  1,
+		AgentID:         "agent-1",
+		WorkspaceID:     "workspace-2",
+	}); !agent.IsKind(err, agent.ErrorInvalidInput) {
+		t.Fatalf("full fork with cutoff error = %v, want invalid input", err)
+	}
+	if _, err := manager.Fork(context.Background(), session.ForkRequest{
+		SourceSessionID: source.Session.ID,
+		Mode:            session.ForkHistoryPrefix,
+		CutoffSequence:  1,
+		AgentID:         "agent-1",
+		WorkspaceID:     "workspace-2",
+	}); !agent.IsKind(err, agent.ErrorInvalidInput) {
+		t.Fatalf("active Step prefix error = %v, want invalid input", err)
+	}
+
+	if _, err := manager.Fork(context.Background(), session.ForkRequest{
+		SourceSessionID: source.Session.ID,
+		Mode:            session.ForkFullHistory,
+		AgentID:         "agent-1",
+		WorkspaceID:     "workspace-2",
+	}); !agent.IsKind(err, agent.ErrorConflict) || !agent.IsCode(err, agent.CodeActiveRun) {
+		t.Fatalf("full fork while active error = %v, want active-run conflict", err)
+	}
+
+	forked, err := manager.Fork(context.Background(), session.ForkRequest{
+		SourceSessionID: source.Session.ID,
+		Mode:            session.ForkHistoryPrefix,
+		CutoffSequence:  0,
+		AgentID:         "agent-1",
+		WorkspaceID:     "workspace-2",
+	})
+	if err != nil {
+		t.Fatalf("empty-prefix fork while active: %v", err)
+	}
+	child := view(t, forked)
+	if len(child.History) != 0 || child.RunState != session.RunIdle || child.ActiveRunID.Valid() {
+		t.Fatalf("empty-prefix child = history %d state %q active %q", len(child.History), child.RunState, child.ActiveRunID)
+	}
+	if child.Fork == nil || child.Fork.ParentSessionID != source.Session.ID || child.Fork.CutoffSequence != 0 {
+		t.Fatalf("empty-prefix provenance = %#v", child.Fork)
+	}
+	parent, err := store.Load(context.Background(), session.SessionRef{SessionID: source.Session.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parent.History) != 1 || parent.RunState != session.RunRunning || parent.ActiveRunID != active.RunID {
+		t.Fatalf("parent changed by fork = history %d state %q active %q", len(parent.History), parent.RunState, parent.ActiveRunID)
+	}
+}
+
+func TestFixedManagerForksStablePrefixWhileParentContinues(t *testing.T) {
+	store := session.NewMemoryStore()
+	manager, err := session.NewManager(store, defaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := message("message-completed", "fork-running-source", agent.RoleAssistant, "completed")
+	completed.RunID, completed.StepID = "run-completed", "step-completed"
+	active := message("message-active", completed.SessionID, agent.RoleUser, "running")
+	active.RunID, active.StepID = "run-active", "step-active"
+	source, err := store.Create(context.Background(), session.NewSession{
+		Session:     agent.Session{ID: completed.SessionID, AgentID: "agent-1", WorkspaceID: "workspace-1"},
+		History:     []session.HistoryFact{{Message: &completed}, {Message: &active}},
+		ModelConfig: defaultConfig(),
+		RunState:    session.RunRunning,
+		ActiveRunID: active.RunID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	forked, err := manager.Fork(context.Background(), session.ForkRequest{
+		SourceSessionID: source.Session.ID,
+		Mode:            session.ForkHistoryPrefix,
+		CutoffSequence:  1,
+		AgentID:         "agent-1",
+		WorkspaceID:     "workspace-2",
+	})
+	if err != nil {
+		t.Fatalf("stable-prefix fork while active: %v", err)
+	}
+	continued := message("message-continued", source.Session.ID, agent.RoleAssistant, "continued")
+	continued.RunID, continued.StepID = active.RunID, active.StepID
+	if _, err := store.Commit(context.Background(), session.CommitRequest{
+		SessionID:        source.Session.ID,
+		ExpectedRevision: source.Revision,
+		IdempotencyKey:   "parent-continues",
+		Changes:          []session.Change{{Kind: session.AppendMessage, Message: &continued}},
+	}); err != nil {
+		t.Fatalf("continue parent after fork: %v", err)
+	}
+	child := view(t, forked)
+	if len(child.History) != 1 || child.History[0].Message == nil || child.History[0].Message.Parts[0].Text != "completed" {
+		t.Fatalf("child changed after parent continued: %#v", child.History)
+	}
+	parent, err := store.Load(context.Background(), session.SessionRef{SessionID: source.Session.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parent.History) != 3 {
+		t.Fatalf("parent history length = %d, want 3", len(parent.History))
 	}
 }
 
@@ -527,12 +659,12 @@ func TestFixedManagerForksAtCompletedHistoryCheckpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := manager.Fork(context.Background(), session.ForkRequest{
-		SourceSessionID: created.Session.ID, CutoffSequence: 2, AgentID: "agent-1", WorkspaceID: "workspace-2",
+		SourceSessionID: created.Session.ID, Mode: session.ForkHistoryPrefix, CutoffSequence: 2, AgentID: "agent-1", WorkspaceID: "workspace-2",
 	}); err == nil {
 		t.Fatal("fork accepted a cutoff inside an unpaired tool exchange")
 	}
 	forked, err := manager.Fork(context.Background(), session.ForkRequest{
-		SourceSessionID: created.Session.ID, CutoffSequence: 3, AgentID: "agent-1", WorkspaceID: "workspace-2",
+		SourceSessionID: created.Session.ID, Mode: session.ForkHistoryPrefix, CutoffSequence: 3, AgentID: "agent-1", WorkspaceID: "workspace-2",
 	})
 	if err != nil {
 		t.Fatalf("checkpoint fork: %v", err)

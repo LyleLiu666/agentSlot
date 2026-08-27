@@ -127,7 +127,7 @@ func TestFixedManagerForkPersistsHistoryLineageInFileStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	forked, err := manager.Fork(context.Background(), session.ForkRequest{
-		SourceSessionID: source.ID(), AgentID: "agent-1", WorkspaceID: "workspace-2",
+		SourceSessionID: source.ID(), Mode: session.ForkFullHistory, AgentID: "agent-1", WorkspaceID: "workspace-2",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -147,6 +147,58 @@ func TestFixedManagerForkPersistsHistoryLineageInFileStore(t *testing.T) {
 	}
 	if forkView.History[0].OriginFactID != sourceView.History[0].FactID || forkView.History[0].FactID == forkView.History[0].OriginFactID {
 		t.Fatalf("fork lineage = %#v, source = %#v", forkView.History[0], sourceView.History[0])
+	}
+}
+
+func TestFixedManagerEmptyPrefixForkSurvivesFileStoreReopen(t *testing.T) {
+	directory := t.TempDir()
+	store := openFileStore(t, directory)
+	manager, err := session.NewManager(store, defaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := manager.Create(context.Background(), session.CreateRequest{AgentID: "agent-1", WorkspaceID: "workspace-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := message("message-active", source.ID(), agent.RoleUser, "first request")
+	active.RunID, active.StepID = "run-active", "step-active"
+	if _, err := store.Commit(context.Background(), session.CommitRequest{
+		SessionID:        source.ID(),
+		ExpectedRevision: source.Revision(),
+		IdempotencyKey:   "start-active-run",
+		Changes: []session.Change{
+			{Kind: session.AppendMessage, Message: &active},
+			{Kind: session.SetRunState, RunState: &session.RunStateChange{RunID: active.RunID, State: session.RunRunning}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	forked, err := manager.Fork(context.Background(), session.ForkRequest{
+		SourceSessionID: source.ID(),
+		Mode:            session.ForkHistoryPrefix,
+		CutoffSequence:  0,
+		AgentID:         "agent-1",
+		WorkspaceID:     "workspace-2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened := openFileStore(t, directory)
+	t.Cleanup(func() { _ = reopened.Close(context.Background()) })
+	child, err := reopened.Load(context.Background(), session.SessionRef{SessionID: forked.ID()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(child.History) != 0 || child.RunState != session.RunIdle || child.ActiveRunID.Valid() {
+		t.Fatalf("reopened empty-prefix child = history %d state %q active %q", len(child.History), child.RunState, child.ActiveRunID)
+	}
+	if child.Fork == nil || child.Fork.ParentSessionID != source.ID() || child.Fork.CutoffSequence != 0 {
+		t.Fatalf("reopened empty-prefix provenance = %#v", child.Fork)
 	}
 }
 

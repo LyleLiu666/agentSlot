@@ -375,7 +375,7 @@ func TestRuntimeAndForkPreserveStandardArtifactReferences(t *testing.T) {
 	if len(results) != 1 || len(results[0].Artifacts) != 1 || results[0].Artifacts[0] != reference {
 		t.Fatalf("source Artifact references = %#v", results)
 	}
-	forked, err := access.ForkSession(context.Background(), interaction.ForkSessionRequest{SourceSessionID: opened.SessionID, AgentID: "agent-1", WorkspaceID: "workspace-1"})
+	forked, err := access.ForkSession(context.Background(), interaction.ForkSessionRequest{SourceSessionID: opened.SessionID, Mode: session.ForkFullHistory, AgentID: "agent-1", WorkspaceID: "workspace-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,6 +386,47 @@ func TestRuntimeAndForkPreserveStandardArtifactReferences(t *testing.T) {
 	childResults := historyToolResultFacts(child.RecentHistory)
 	if len(childResults) != 1 || len(childResults[0].Artifacts) != 1 || childResults[0].Artifacts[0] != reference {
 		t.Fatalf("fork Artifact references = %#v", childResults)
+	}
+}
+
+func TestGatewayForksEmptyHistoryPrefixWhileSourceRunIsActive(t *testing.T) {
+	block := make(chan struct{})
+	fake := model.NewFakeModelExecutor(model.FakeExecution{
+		Block:  block,
+		Events: []model.ModelEvent{complete("done")},
+	})
+	access, stop := startRuntimeTestApplication(t, fake)
+	defer func() {
+		close(block)
+		stop()
+	}()
+	opened := createRuntimeTestSession(t, access)
+	if _, err := access.Send(context.Background(), interaction.SendRequest{
+		SessionID: opened.SessionID, ExpectedRevision: opened.Revision, Input: textInput("first request"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := fake.WaitForRequests(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	forked, err := access.ForkSession(context.Background(), interaction.ForkSessionRequest{
+		SourceSessionID: opened.SessionID,
+		Mode:            session.ForkHistoryPrefix,
+		CutoffSequence:  0,
+		AgentID:         "agent-1",
+		WorkspaceID:     "workspace-1",
+	})
+	if err != nil {
+		t.Fatalf("fork empty prefix through Gateway: %v", err)
+	}
+	child, err := access.View(context.Background(), interaction.SessionViewRequest{SessionID: forked.SessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(child.RecentHistory) != 0 || child.RunState != session.RunIdle || child.ActiveRunID.Valid() {
+		t.Fatalf("Gateway child = history %d state %q active %q", len(child.RecentHistory), child.RunState, child.ActiveRunID)
 	}
 }
 

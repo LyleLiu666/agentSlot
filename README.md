@@ -393,6 +393,13 @@ settings do not change during one Runtime lifetime; the Session's provider,
 model, reasoning, and model parameters can be changed explicitly while idle
 and are snapshotted for each Run.
 
+Forking copies stable Session History into a new independent Session. Every
+`ForkRequest` and `ForkSessionRequest` selects an explicit mode:
+`ForkFullHistory` copies all History and requires an idle source, while
+`ForkHistoryPrefix` copies through `CutoffSequence`; prefix sequence zero means
+an empty History. A stable prefix can be copied while the source Run continues.
+Pending Queue, RunJournal, and active Run state are never copied.
+
 `workspace.Manager` is optional. When installed, create, fork, summary-start,
 and resume resolve the exact Session scope before execution; unknown or
 unavailable boundaries fail explicitly. The portable Boundary exposes only

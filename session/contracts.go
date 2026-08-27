@@ -76,10 +76,24 @@ type ResumeRequest struct {
 	SessionID agent.SessionID
 }
 
-// ForkRequest identifies a source Session and the new Session scope. The
-// choice between a complete history fork and a summary start is explicit.
+// ForkMode states whether a fork copies the complete source History or an
+// explicit stable prefix. Prefix sequence zero intentionally means no History.
+type ForkMode string
+
+const (
+	ForkFullHistory   ForkMode = "full_history"
+	ForkHistoryPrefix ForkMode = "history_prefix"
+)
+
+func (m ForkMode) Valid() bool {
+	return m == ForkFullHistory || m == ForkHistoryPrefix
+}
+
+// ForkRequest identifies a source Session, the History boundary to copy, and
+// the new Session scope. Summary starts remain a separate operation.
 type ForkRequest struct {
 	SourceSessionID agent.SessionID
+	Mode            ForkMode
 	CutoffSequence  HistorySequence
 	AgentID         agent.AgentID
 	WorkspaceID     agent.WorkspaceID
