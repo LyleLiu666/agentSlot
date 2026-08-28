@@ -593,6 +593,11 @@ go build ./...
 go vet ./...
 ```
 
+Before a reliability-sensitive release, run `scripts/reliability-gate.sh`.
+It executes the deterministic FileStore fault matrix and the complete
+race-enabled test, vet, and build gates without Provider credentials or
+network access. `scripts/reliability-gate.sh --list` prints the frozen stages.
+
 Use the standard component map and exported Go documentation as the public
 reference for the composition model.
 

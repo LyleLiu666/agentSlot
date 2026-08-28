@@ -111,7 +111,9 @@ AgentSlot 的固定 Runtime 已经负责 Session 真值、CAS 提交、Run 生�
 
 - 先写复现历史事故的确定性测试，再修改实现。
 - `session.store` conformance 增加 JSON 表示变化、恢复中断和终态一致性场景。
+- FileStore 的短写、临时文件 sync/close、取消、rename 与目录 sync 故障通过包私有注入边界进入普通测试；rename 前失败保持旧文档，rename 后模糊结果依靠幂等记录安全观察。
 - `model.executor/v1` conformance 已建立，覆盖公共 stream lifecycle、终态关闭、Attempt 配对和共享 token budget；当前 FakeExecutor 与参考 OpenAI-compatible Executor 驱动同一套测试，因此只能达到 Conformant，不能称为 Proven。
+- `scripts/reliability-gate.sh` 固定执行格式检查、故障矩阵、完整 race、vet 和 build；它不读取真实 Provider 凭据，也不依赖外网。
 - 公共状态或合同变化必须同步更新 `COMPONENT_MAP.md` 与 `COMPONENT_MAP.zh-CN.md`。
 - AgentSlot 修复发布独立版本；LAS 只升级依赖并保留消费方回归，不复制框架修复。
 
