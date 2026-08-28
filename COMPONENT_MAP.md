@@ -64,7 +64,7 @@ Its description uses `AssemblyDescription` and the `agentslot.assembly/v0` schem
 | Slot ID | Standard contract | Kind | Required cardinality | Responsibility |
 | --- | --- | --- | --- | --- |
 | `agent.loop` | `AgentLoop` | `One` | exactly 1 | Owns replaceable Agent execution strategy through ordered, Run-scoped Runtime actions while the framework retains Session truth, budgets, cancellation, recovery, and terminal commits. |
-| `session.store` | `SessionStore` | `One` | exactly 1 | Persists the whole Session aggregate, including SessionModelConfig, and its atomic revision/CAS transactions; lists resumable Sessions through bounded, deterministic, lifecycle-scoped cursor pages within an Agent/Workspace scope; History remains the unique append-only fact view inside that aggregate. |
+| `session.store` | `SessionStore` | `One` | exactly 1 | Persists the whole Session aggregate and atomic revision/CAS transactions; preserves tool arguments by JSON value semantics across encoding and reopen; lists resumable Sessions through bounded, deterministic, lifecycle-scoped cursor pages within an Agent/Workspace scope; History remains the unique append-only fact view. |
 | `model.executor` | `ModelExecutor` | `One` | exactly 1 | Validates selected-model capabilities, executes one logical model call, contains retries and continuation, reports post-call usage, and durably records each physical attempt plus an optional bounded adapter-sanitized displayable failure message through the restricted AttemptRecorder. |
 | `model.token-counter` | `TokenCounter` | `One` | exactly 1 | Counts the complete provider-visible request for pre-call planning, using an exact tokenizer or a validated conservative bound and failing closed when neither is defensible. |
 | `gateway.channel` | `GatewayChannel` | `Many` | at least 1 | Binds one caller-facing protocol, function API, or UI to the fixed Gateway and receives only `GatewayAccess`; gRPC, WebSocket, SSH, and inbound ACP are alternative implementations of this Slot. |
@@ -283,7 +283,7 @@ do not form a second `tool.output-store` ecosystem.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `session.store` | `SessionStore` | `One` | globally required | Persists the whole Session aggregate, including SessionModelConfig, and its atomic revision/CAS transactions; lists resumable Sessions through bounded, deterministic, lifecycle-scoped cursor pages within an Agent/Workspace scope; History remains the unique append-only fact view inside that aggregate. | Conformant |
+| `session.store` | `SessionStore` | `One` | globally required | Persists the whole Session aggregate and atomic revision/CAS transactions; preserves tool arguments by JSON value semantics across encoding and reopen; lists resumable Sessions through bounded, deterministic, lifecycle-scoped cursor pages within an Agent/Workspace scope; History remains the unique append-only fact view. | Conformant |
 | `context.source` | `ContextSource` | `Chain` | optional | Contributes ordered context for a model turn. | Contracted |
 | `context.compactor` | `ContextCompactor` | `One` | optional | Replaces the current full Context with a smaller conversation-message projection without rewriting History; AgentRuntime reattaches fixed prompts/tools and validates protocol and hard token limits. | Contracted |
 | `memory.store` | `MemoryStore` | `Many` | optional | Recalls, remembers, and forgets governed long-term memory outside authoritative conversation History. | Contracted |
@@ -303,7 +303,11 @@ Every `SessionStore` must keep committed History facts strictly append-only. An
 implementation may not edit, delete, reorder, or insert facts before the
 committed tail. The Store must also atomically coordinate History, Context,
 Queue, RunJournal, and revision/CAS boundaries. Compaction creates derived
-context; it never rewrites History.
+context; it never rewrites History. Tool arguments retain identity by exact
+JSON value semantics across Store encoding and reopen, while duplicate object
+members are rejected before admission. Runtime recovery may expose idle only
+after the durable Run has a unique terminal fact; any running or inconsistent
+snapshot fails closed for explicit resume.
 Session listing is deliberately weakly consistent: one traversal excludes new
 Sessions created after its first page and never repeats a returned position,
 while concurrent deletion may remove a pending Session and an update may move

@@ -4,6 +4,19 @@ This file records published AgentSlot releases. The project is pre-1.0: a
 validation release is usable through Go modules, but its public API may change
 when real consumers expose a flawed boundary.
 
+## v0.1.7 - 2026-08-28
+
+### Fixed
+
+- Tool-call arguments now use exact JSON value semantics across Journal state
+  transitions. Object order, insignificant whitespace, equivalent escapes, and
+  equal number forms survive FileStore reopen without changing call identity;
+  ambiguous duplicate object members are rejected before admission.
+- A Runtime recovering after a failed Run commit returns to idle only when the
+  durable Session is idle and the original Run has exactly one start and one
+  terminal fact. Running or inconsistent recovered snapshots now fail closed
+  for explicit resume instead of exposing a false idle state.
+
 ## v0.1.6 - 2026-08-27
 
 ### Changed

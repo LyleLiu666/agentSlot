@@ -37,6 +37,16 @@ func TestStableIdentityTypesValidateNonEmptyTrimmedValues(t *testing.T) {
 	}
 }
 
+func TestToolCallRejectsAmbiguousDuplicateJSONMembers(t *testing.T) {
+	call := agent.ToolCall{
+		ID: "call-1", MessageID: "message-1", SessionID: "session-1", RunID: "run-1", StepID: "step-1", Name: "example",
+		Arguments: json.RawMessage(`{"command":"first","command":"second"}`),
+	}
+	if call.Valid() {
+		t.Fatal("ToolCall accepted duplicate JSON object members")
+	}
+}
+
 func TestActorIdentityUsesFiniteOriginVocabulary(t *testing.T) {
 	if !(agent.ActorIdentity{Kind: agent.ActorRemoteUser, ID: "user-1"}).Valid() {
 		t.Fatal("valid remote actor was rejected")

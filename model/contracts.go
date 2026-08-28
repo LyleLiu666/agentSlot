@@ -12,6 +12,7 @@ import (
 
 	agentslot "github.com/LyleLiu666/agentSlot"
 	agent "github.com/LyleLiu666/agentSlot/agent"
+	"github.com/LyleLiu666/agentSlot/internal/jsonvalue"
 	"github.com/LyleLiu666/agentSlot/tool"
 )
 
@@ -466,7 +467,7 @@ type ToolCallRequest struct {
 }
 
 func (c ToolCallRequest) Valid() bool {
-	return c.Name != "" && json.Valid(c.Arguments)
+	return c.Name != "" && jsonvalue.Valid(c.Arguments)
 }
 
 // Validate enforces the stream invariant that only complete events carry

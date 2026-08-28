@@ -55,7 +55,7 @@ Go Profile 要求下表五个已经实现的生态位。Token 计数与模型执
 | Slot ID | 标准契约 | 类型 | 必需数量 | 职责 |
 | --- | --- | --- | --- | --- |
 | `agent.loop` | `AgentLoop` | `One` | 恰好 1 个 | 通过有序、Run-scoped 的受限 Runtime actions 承载可替换执行策略；框架继续独占 Session 真相、预算、取消、恢复和终态提交。 |
-| `session.store` | `SessionStore` | `One` | 恰好 1 个 | 持久化包含 SessionModelConfig 的完整 Session 聚合及其 revision/CAS 原子事务；按 Agent/Workspace 提供有界、确定性排序且绑定 Store 生命周期的游标分页；History 是聚合内唯一、append-only 的事实视图。 |
+| `session.store` | `SessionStore` | `One` | 恰好 1 个 | 持久化完整 Session 聚合及其 revision/CAS 原子事务；跨编码与重开按 JSON 值语义保持工具参数；按 Agent/Workspace 提供有界、确定性排序且绑定 Store 生命周期的游标分页；History 是唯一、append-only 的事实视图。 |
 | `model.executor` | `ModelExecutor` | `One` | 恰好 1 个 | 校验所选模型能力、执行一次逻辑模型调用、封装重试和续传、报告调用后 Usage，并通过受限 AttemptRecorder 持久记录每次真实请求及可选、受限且由适配器清洗后允许展示的失败消息。 |
 | `model.token-counter` | `TokenCounter` | `One` | 恰好 1 个 | 为调用前规划计量完整 Provider 可见请求；使用精确 tokenizer 或经过验证的保守上界，两者都不可信时 fail closed。 |
 | `gateway.channel` | `GatewayChannel` | `Many` | 至少 1 个 | 把调用方协议、函数 API 或 UI 绑定到固定 Gateway，并且只能取得 `GatewayAccess`；gRPC、WebSocket、SSH 和入站 ACP 都是该 Slot 的不同实现。 |
@@ -242,7 +242,7 @@ Tool 正常处理预算，固定 Runtime 在写入 History 前再次校验；不
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `session.store` | `SessionStore` | `One` | 全局必需 | 持久化包含 SessionModelConfig 的完整 Session 聚合及其 revision/CAS 原子事务；按 Agent/Workspace 提供有界、确定性排序且绑定 Store 生命周期的游标分页；History 是聚合内唯一、append-only 的事实视图。 | 已通过一致性验证 |
+| `session.store` | `SessionStore` | `One` | 全局必需 | 持久化完整 Session 聚合及其 revision/CAS 原子事务；跨编码与重开按 JSON 值语义保持工具参数；按 Agent/Workspace 提供有界、确定性排序且绑定 Store 生命周期的游标分页；History 是唯一、append-only 的事实视图。 | 已通过一致性验证 |
 | `context.source` | `ContextSource` | `Chain` | 可选 | 为一次模型调用按顺序提供上下文。 | 已定义契约 |
 | `context.compactor` | `ContextCompactor` | `One` | 可选 | 把当前完整 Context 转为更小的会话消息投影且不改写 History；AgentRuntime 重新装配固定 Prompt/Tool，并校验协议和硬 Token 上限。 | 已定义契约 |
 | `memory.store` | `MemoryStore` | `Many` | 可选 | 在权威会话 History 之外召回、记住和遗忘受治理的长期记忆。 | 已定义契约 |
@@ -261,7 +261,9 @@ Tool 正常处理预算，固定 Runtime 在写入 History 前再次校验；不
 每个 `SessionStore` 都必须保证已提交 History 事实严格仅追加。实现不得修改、
 删除、换位，也不得向已经提交的尾部之前插入事实；还必须原子协调 History、
 Context、Queue、RunJournal 和 revision/CAS 边界。上下文压缩只能产生派生
-Context，绝不能改写 History。
+Context，绝不能改写 History。工具参数跨 Store 编码与重开后按精确 JSON 值语义
+保持身份，重复对象成员必须在 admission 前拒绝。Runtime 恢复后只有在持久 Run
+具有唯一终态时才能公开 idle；running 或不一致快照必须 fail closed，等待显式恢复。
 Session 列表刻意采用弱一致性：一次遍历会排除首页之后新建的 Session，且不会重复
 已返回的位置；并发删除可以让尚未返回的 Session 消失，并发更新可以让它移到游标
 之前，调用方需要发起一次全新遍历来刷新结果。游标是不透明值，只能用于签发它的

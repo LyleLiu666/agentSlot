@@ -11,8 +11,6 @@ import (
 	agent "github.com/LyleLiu666/agentSlot/agent"
 )
 
-const knownFailureEnvironment = "AGENTSLOT_RUN_KNOWN_FAILURES"
-
 func TestReliabilityToolArgumentFixturesDescribeTheSameJSONValue(t *testing.T) {
 	pretty := readReliabilityFixture(t, "tool-arguments-pretty.json")
 	restored := readReliabilityFixture(t, "tool-arguments-restored.json")
@@ -32,7 +30,6 @@ func TestReliabilityToolArgumentFixturesDescribeTheSameJSONValue(t *testing.T) {
 }
 
 func TestKnownFailureToolCallIdentitySurvivesEquivalentJSONRepresentation(t *testing.T) {
-	requireKnownFailures(t)
 	left := agent.ToolCall{
 		ID: "tool-1", CorrelationID: "provider-tool-1", MessageID: "message-1",
 		SessionID: "session-1", RunID: "run-1", StepID: "step-1", Name: "example",
@@ -42,13 +39,6 @@ func TestKnownFailureToolCallIdentitySurvivesEquivalentJSONRepresentation(t *tes
 	right.Arguments = readReliabilityFixture(t, "tool-arguments-restored.json")
 	if !sameToolCall(left, right) {
 		t.Fatal("equivalent JSON representation changed the prepared ToolCall identity")
-	}
-}
-
-func requireKnownFailures(t *testing.T) {
-	t.Helper()
-	if os.Getenv(knownFailureEnvironment) != "1" {
-		t.Skip("set AGENTSLOT_RUN_KNOWN_FAILURES=1 to execute documented red regressions")
 	}
 }
 

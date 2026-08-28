@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/LyleLiu666/agentSlot/internal/jsonvalue"
 )
 
 // The identity types are deliberately distinct even though they use the same
@@ -218,7 +220,7 @@ type ToolCall struct {
 // dispatcher's responsibility.
 func (c ToolCall) Valid() bool {
 	return c.ID.Valid() && c.MessageID.Valid() && c.SessionID.Valid() &&
-		c.RunID.Valid() && c.StepID.Valid() && c.Name != "" && json.Valid(c.Arguments)
+		c.RunID.Valid() && c.StepID.Valid() && c.Name != "" && jsonvalue.Valid(c.Arguments)
 }
 
 // Agent identifies one configured capability set.

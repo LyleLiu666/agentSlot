@@ -1007,7 +1007,7 @@ func (r *runtimeInstance) recoverAfterRunFailureLocked(run *activeRun) {
 	close(run.done)
 	r.active = nil
 	close(r.idleSignal)
-	if err != nil {
+	if err != nil || !recoveredRunIsSettled(snapshot, r.id(), run) {
 		// Continuing from an unverified durable state could create a second
 		// Run or overwrite a still-running aggregate. Fail this Runtime closed;
 		// an explicit Close/Resume obtains a fresh recovery attempt.
@@ -1024,6 +1024,55 @@ func (r *runtimeInstance) recoverAfterRunFailureLocked(run *activeRun) {
 	}
 	r.revisionValue.Store(uint64(snapshot.Revision))
 	r.state = runtimeIdle
+}
+
+func recoveredRunIsSettled(snapshot session.Snapshot, sessionID agent.SessionID, run *activeRun) bool {
+	if run == nil || snapshot.Session.ID != sessionID || snapshot.RunState != session.RunIdle || snapshot.ActiveRunID.Valid() {
+		return false
+	}
+	started := 0
+	terminal := 0
+	for _, fact := range snapshot.History {
+		if fact.Validate(sessionID) != nil {
+			return false
+		}
+		if fact.Run == nil || fact.Run.RunID != run.id {
+			continue
+		}
+		if fact.Run.ConfigRevision != run.configRevision || !sameRuntimeConfig(fact.Run.ModelConfig, run.config) {
+			return false
+		}
+		if fact.Run.Kind == session.RunStarted {
+			started++
+		} else {
+			terminal++
+		}
+	}
+	if started != 1 || terminal != 1 {
+		return false
+	}
+	for _, entry := range snapshot.RunJournal {
+		if entry.Validate(sessionID) != nil || entry.Status == session.JournalPrepared || entry.Status == session.JournalPending {
+			return false
+		}
+	}
+	return true
+}
+
+func sameRuntimeConfig(left, right model.Config) bool {
+	if left.ProviderKey != right.ProviderKey || left.ModelID != right.ModelID || left.Reasoning != right.Reasoning {
+		return false
+	}
+	return sameOptionalFloat(left.Parameters.Temperature, right.Parameters.Temperature) &&
+		sameOptionalInt(left.Parameters.MaxTokens, right.Parameters.MaxTokens)
+}
+
+func sameOptionalFloat(left, right *float64) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
+}
+
+func sameOptionalInt(left, right *int) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
 }
 
 func (r *runtimeInstance) startChangesLocked(snapshot session.Snapshot, item session.QueueItem, enqueue bool) (*activeRun, agent.StepID, []session.Change) {

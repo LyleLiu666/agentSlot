@@ -17,6 +17,7 @@ import (
 	"time"
 
 	agent "github.com/LyleLiu666/agentSlot/agent"
+	"github.com/LyleLiu666/agentSlot/internal/jsonvalue"
 	"github.com/LyleLiu666/agentSlot/model"
 	"github.com/LyleLiu666/agentSlot/tool"
 )
@@ -1223,7 +1224,7 @@ func unfinishedJournal(status JournalStatus) bool {
 
 func sameToolCall(left, right agent.ToolCall) bool {
 	return left.ID == right.ID && left.CorrelationID == right.CorrelationID && left.MessageID == right.MessageID && left.SessionID == right.SessionID &&
-		left.RunID == right.RunID && left.StepID == right.StepID && left.Name == right.Name && bytes.Equal(left.Arguments, right.Arguments)
+		left.RunID == right.RunID && left.StepID == right.StepID && left.Name == right.Name && jsonvalue.Equal(left.Arguments, right.Arguments)
 }
 
 func sameToolResult(left, right tool.ToolResult) bool {

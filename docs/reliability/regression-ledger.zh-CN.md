@@ -4,26 +4,26 @@
 
 本账本记录已经有代码证据的框架故障、最小复现入口、责任轮次和转绿条件。它不是产品缺陷清单，也不登记具名 Provider 的 wire 差异。
 
-正常测试默认跳过仍待修复的红回归；显式设置 `AGENTSLOT_RUN_KNOWN_FAILURES=1` 才运行。责任轮次完成时必须移除对应跳过条件，让回归进入普通门禁。
+已修复条目必须保留最小复现，并进入普通测试门禁。新的未修复条目才允许短期使用显式 opt-in，且必须写明转绿责任轮次。
 
 ## 当前条目
 
 | 编号 | 设计要求 | 触发条件 | 当前错误 | 责任轮次 | 状态 |
 |---|---|---|---|---|---|
-| ASR-REG-001 | ASR-001、ASR-002 | 同一 ToolCall 的 JSON 参数经等价重排、压缩和转义变化后推进 Journal | `sameToolCall` 使用原始字节比较，误报 prepared identity 被修改 | 第 2 轮 | 已稳定复现，红 |
-| ASR-REG-002 | ASR-003 | Run 收尾提交失败后，`Store.Recover` 返回仍为 running 的快照 | Runtime 只检查 Recover error，随后错误进入 idle | 第 2 轮 | 已稳定复现，红 |
+| ASR-REG-001 | ASR-001、ASR-002 | 同一 ToolCall 的 JSON 参数经等价重排、压缩和转义变化后推进 Journal | 旧实现按原始字节比较，误报 prepared identity 被修改 | 第 2 轮 | 已修复，普通门禁已覆盖 |
+| ASR-REG-002 | ASR-003 | Run 收尾提交失败后，`Store.Recover` 返回仍为 running 或不一致的快照 | 旧 Runtime 只检查 Recover error，随后错误进入 idle | 第 2 轮 | 已修复，普通门禁已覆盖 |
 
 ## 确定性复现
 
 ### ASR-REG-001
 
 ```bash
-AGENTSLOT_RUN_KNOWN_FAILURES=1 go test ./session \
+go test ./session \
   -run TestKnownFailureToolCallIdentitySurvivesEquivalentJSONRepresentation \
   -count=1
 ```
 
-预期当前失败签名：`equivalent JSON representation changed the prepared ToolCall identity`。
+预期：通过；同义 JSON 可完成 Journal 状态迁移，重复对象成员在 admission 前被拒绝。
 
 fixture：
 
@@ -33,12 +33,12 @@ fixture：
 ### ASR-REG-002
 
 ```bash
-AGENTSLOT_RUN_KNOWN_FAILURES=1 go test ./standardagent \
+go test ./standardagent \
   -run TestKnownFailureRuntimeDoesNotIdleOnRunningRecoveredSnapshot \
   -count=1
 ```
 
-预期当前失败签名：Runtime state 为 `idle`，期望 `closed`。
+预期：通过；只有恢复出 idle 且原 Run 有唯一终态时 Runtime 才能回到 idle，其余快照 fail closed。
 
 ## 转绿要求
 

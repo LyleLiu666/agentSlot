@@ -2,7 +2,6 @@ package standardagent
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	agent "github.com/LyleLiu666/agentSlot/agent"
@@ -10,11 +9,37 @@ import (
 )
 
 func TestKnownFailureRuntimeDoesNotIdleOnRunningRecoveredSnapshot(t *testing.T) {
-	if os.Getenv("AGENTSLOT_RUN_KNOWN_FAILURES") != "1" {
-		t.Skip("set AGENTSLOT_RUN_KNOWN_FAILURES=1 to execute documented red regressions")
+	runtime := runtimeRecoveringFrom(t, session.Snapshot{RunState: session.RunRunning, ActiveRunID: "run-1"})
+	if runtime.state != runtimeClosed {
+		t.Fatalf("Runtime state = %q after recovering a still-running snapshot, want closed", runtime.state)
 	}
+}
+
+func TestRuntimeDoesNotIdleWhenRecoveredSnapshotHasNoTerminalFact(t *testing.T) {
+	runtime := runtimeRecoveringFrom(t, session.Snapshot{RunState: session.RunIdle})
+	if runtime.state != runtimeClosed {
+		t.Fatalf("Runtime state = %q after recovering an unterminated Run, want closed", runtime.state)
+	}
+}
+
+func TestRuntimeReturnsIdleOnlyWhenRecoveredRunIsSettled(t *testing.T) {
+	config := testDefaultModel()
+	started := session.RunFact{SessionID: "session-1", RunID: "run-1", Kind: session.RunStarted, ModelConfig: config, ConfigRevision: 1}
+	completed := started
+	completed.Kind = session.RunCompleted
+	runtime := runtimeRecoveringFrom(t, session.Snapshot{
+		RunState: session.RunIdle,
+		History:  []session.HistoryFact{{Run: &started}, {Run: &completed}},
+	})
+	if runtime.state != runtimeIdle {
+		t.Fatalf("Runtime state = %q after recovering a settled Run, want idle", runtime.state)
+	}
+}
+
+func runtimeRecoveringFrom(t *testing.T, recovered session.Snapshot) *runtimeInstance {
+	t.Helper()
 	runContext, cancelRun := context.WithCancel(context.Background())
-	run := &activeRun{id: "run-1", ctx: runContext, cancel: cancelRun, done: make(chan struct{})}
+	run := &activeRun{id: "run-1", config: testDefaultModel(), configRevision: 1, ctx: runContext, cancel: cancelRun, done: make(chan struct{})}
 	manager, err := session.NewManager(session.NewMemoryStore(), testDefaultModel())
 	if err != nil {
 		t.Fatal(err)
@@ -23,9 +48,12 @@ func TestKnownFailureRuntimeDoesNotIdleOnRunningRecoveredSnapshot(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	recovered := session.Snapshot{
-		Session: agent.Session{ID: managedSession.ID(), AgentID: "agent-1", WorkspaceID: "workspace-1"}, Revision: agent.Revision(2),
-		RunState: session.RunRunning, ActiveRunID: run.id,
+	recovered.Session = agent.Session{ID: managedSession.ID(), AgentID: "agent-1", WorkspaceID: "workspace-1"}
+	recovered.Revision = agent.Revision(2)
+	for _, fact := range recovered.History {
+		if fact.Run != nil {
+			fact.Run.SessionID = managedSession.ID()
+		}
 	}
 	runtime := &runtimeInstance{
 		session: managedSession,
@@ -37,9 +65,7 @@ func TestKnownFailureRuntimeDoesNotIdleOnRunningRecoveredSnapshot(t *testing.T) 
 	runtime.mu.Lock()
 	runtime.recoverAfterRunFailureLocked(run)
 	runtime.mu.Unlock()
-	if runtime.state != runtimeClosed {
-		t.Fatalf("Runtime state = %q after recovering a still-running snapshot, want closed", runtime.state)
-	}
+	return runtime
 }
 
 type recoveredSnapshotStore struct {

@@ -100,6 +100,73 @@ func TestFileStorePersistsSnapshotAndIdempotencyAcrossReopen(t *testing.T) {
 	}
 }
 
+func TestFileStoreJournalIdentitySurvivesEquivalentJSONAfterReopen(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "sessions")
+	store := openFileStore(t, directory)
+	created, call := createPreparedJournal(t, store)
+	if err := store.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened := openFileStore(t, directory)
+	t.Cleanup(func() { _ = reopened.Close(context.Background()) })
+	advanceJournalWithEquivalentArguments(t, reopened, created, call)
+}
+
+func TestMemoryStoreJournalIdentityMatchesFileStoreSemantics(t *testing.T) {
+	store := session.NewMemoryStore()
+	created, call := createPreparedJournal(t, store)
+	advanceJournalWithEquivalentArguments(t, store, created, call)
+}
+
+func createPreparedJournal(t *testing.T, store session.SessionStore) (session.Snapshot, agent.ToolCall) {
+	t.Helper()
+	configuration := model.Config{ProviderKey: "provider", ModelID: "model", Reasoning: model.ReasoningDefault}
+	assistant := agent.Message{
+		ID: "message-tool", SessionID: "session-tool", RunID: "run-tool", StepID: "step-tool", Role: agent.RoleAssistant,
+		Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "calling tool"}},
+	}
+	call := agent.ToolCall{
+		ID: "call-tool", MessageID: assistant.ID, SessionID: assistant.SessionID, RunID: assistant.RunID, StepID: assistant.StepID,
+		Name: "read", Arguments: []byte(`{"path":"a/b", "count":1e0}`),
+	}
+	started := session.RunFact{
+		SessionID: assistant.SessionID, RunID: call.RunID, Kind: session.RunStarted,
+		ModelConfig: configuration, ConfigRevision: 1,
+	}
+	prepared := session.JournalEntry{RunID: call.RunID, StepID: call.StepID, ToolCall: &call, Status: session.JournalPrepared}
+	created, err := store.Create(context.Background(), session.NewSession{
+		Session: agent.Session{ID: assistant.SessionID, AgentID: "agent-1", WorkspaceID: "workspace-1"},
+		History: []session.HistoryFact{{Run: &started}, {Message: &assistant}, {ToolCall: &call}}, RunJournal: []session.JournalEntry{prepared},
+		ModelConfig: configuration, RunState: session.RunRunning, ActiveRunID: call.RunID,
+	})
+	if err != nil {
+		t.Fatalf("Create prepared journal: %v", err)
+	}
+	return created, call
+}
+
+func advanceJournalWithEquivalentArguments(t *testing.T, store session.SessionStore, created session.Snapshot, call agent.ToolCall) {
+	t.Helper()
+	restoredCall := call
+	restoredCall.Arguments = []byte(`{"count":1.0,"path":"a\u002fb"}`)
+	pending := session.JournalEntry{RunID: call.RunID, StepID: call.StepID, ToolCall: &restoredCall, Status: session.JournalPending}
+	committed, err := store.Commit(context.Background(), session.CommitRequest{
+		SessionID: created.Session.ID, ExpectedRevision: created.Revision, IdempotencyKey: "mark-tool-pending",
+		Changes: []session.Change{{Kind: session.UpdateRunJournal, Journal: &pending}},
+	})
+	if err != nil {
+		t.Fatalf("semantically identical journal update after reopen: %v", err)
+	}
+	loaded, err := store.Load(context.Background(), session.SessionRef{SessionID: created.Session.ID})
+	if err != nil {
+		t.Fatalf("Load committed journal: %v", err)
+	}
+	if loaded.Revision != committed.Revision || len(loaded.RunJournal) != 1 || loaded.RunJournal[0].Status != session.JournalPending {
+		t.Fatalf("committed journal = %#v", loaded.RunJournal)
+	}
+}
+
 func TestFixedManagerForkPersistsHistoryLineageInFileStore(t *testing.T) {
 	directory := t.TempDir()
 	store := openFileStore(t, directory)

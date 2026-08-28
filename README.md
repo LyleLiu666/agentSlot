@@ -424,7 +424,11 @@ The `session` package includes a reference `MemoryStore`; the standard framework
 constructs its fixed SessionManager over the installed Store and the
 Application default model. Together they implement append-only History facts, Context, Queue, RunJournal,
 SessionModelConfig inheritance, Run lifecycle facts, revision/CAS commits, and
-the basic crash recovery transition. These are development and
+the basic crash recovery transition. Journal identity compares tool arguments
+by exact JSON value rather than serialization bytes, and duplicate object
+members are rejected before admission. A Runtime returns to idle after recovery
+only when the durable Run has a unique terminal fact; otherwise it fails closed
+for explicit resume. These are development and
 contract-reference implementations, not a production database; production
 storage remains a replaceable `session.store` Slot. Development
 applications can explicitly install `session.NewMemoryModule`; importing the

@@ -8,11 +8,11 @@ AgentSlot 必须按稳定身份和 JSON 值语义校验 ToolCall，并且只有�
 
 本文细化 [ASR-001、ASR-002 与 ASR-003](README.zh-CN.md)，定义 SessionStore、RunJournal 和固定 Runtime 必须共同遵守的行为。它不决定 LAS 的恢复界面，也不引入分布式执行协议。
 
-## 当前问题
+## 故障基线（第 2 轮已修复）
 
 ### ToolCall 表示被误当成身份
 
-当前 Journal 更新会逐字段比较 ToolCall，并对 `Arguments` 使用原始字节相等。合法 JSON 经 file-store 写入后可能被压缩空白或改变等价转义，因此同一 `ToolCallID` 会被错误判定为“改变了 prepared tool identity”。
+旧 Journal 更新会逐字段比较 ToolCall，并对 `Arguments` 使用原始字节相等。合法 JSON 经 file-store 写入后可能被压缩空白或改变等价转义，因此同一 `ToolCallID` 曾被错误判定为“改变了 prepared tool identity”。
 
 这不是 file store 的特殊兼容需求，而是 Session 聚合错误地把序列化表示当成了业务身份。
 
@@ -20,7 +20,7 @@ AgentSlot 必须按稳定身份和 JSON 值语义校验 ToolCall，并且只有�
 
 `Store.Recover` 的成功只表示恢复事务本身完成，不表示返回快照一定 idle。当活动 Run 仍有 `prepared` ToolCall 时，Store 会保留 running，等待新 Runtime 按原调用身份恢复。
 
-当前活动 Runtime 在 Run 收尾提交失败后调用 `Recover`，只要调用没有返回错误，就可能直接把自身状态改成 idle，没有检查恢复快照仍是 running。这会产生“内存可接收新 Run、持久 Session 仍有活动 Run”的分裂状态。
+旧活动 Runtime 在 Run 收尾提交失败后调用 `Recover`，只要调用没有返回错误，就可能直接把自身状态改成 idle，没有检查恢复快照仍是 running。这会产生“内存可接收新 Run、持久 Session 仍有活动 Run”的分裂状态。
 
 ## 设计决定
 

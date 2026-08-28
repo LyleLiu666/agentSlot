@@ -223,6 +223,15 @@ func TestCompletionAllowsIdentityFreeToolOnlyResult(t *testing.T) {
 	}
 }
 
+func TestCompletionRejectsToolArgumentsWithDuplicateJSONMembers(t *testing.T) {
+	completion := model.Completion{ToolCalls: []model.ToolCallRequest{{
+		Name: "example", Arguments: json.RawMessage(`{"command":"first","command":"second"}`),
+	}}}
+	if completion.Valid() {
+		t.Fatal("Completion accepted ambiguous duplicate tool argument members")
+	}
+}
+
 func TestCompletionCarriesOpaqueModelContinuationWithoutInterpretingIt(t *testing.T) {
 	completion := model.Completion{
 		ToolCalls:    []model.ToolCallRequest{{Name: "lookup", Arguments: []byte(`{"q":"x"}`)}},
