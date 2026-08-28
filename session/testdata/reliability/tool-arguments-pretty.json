@@ -1,0 +1,9 @@
+{
+  "message": "\u4e2d",
+  "path": "a\/b",
+  "count": 1e3,
+  "nested": {
+    "b": 2,
+    "a": 1
+  }
+}

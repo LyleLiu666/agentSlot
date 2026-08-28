@@ -353,6 +353,10 @@ for the agent architecture. It currently maps runtime, model, tools, context,
 history, memory, execution, policy, multi-agent workflow, gateway, billing, and
 operations ecosystems.
 
+The framework-side requirements for the next reliability work are defined in
+the [AgentSlot 运行可靠性设计](docs/reliability/README.zh-CN.md), with separate
+designs for Session/Runtime consistency and the Model execution boundary.
+
 A runnable standard LLM agent requires exactly one AgentLoop, exactly one
 SessionStore, exactly one ModelExecutor, and at least one GatewayChannel. The
 fixed SessionManager, AgentRuntime, and in-process Gateway are supplied by the
