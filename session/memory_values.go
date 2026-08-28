@@ -67,6 +67,10 @@ func cloneHistoryFact(source HistoryFact) HistoryFact {
 	if source.Run != nil {
 		run := *source.Run
 		run.ModelConfig = cloneModelConfig(source.Run.ModelConfig)
+		if source.Run.Termination != nil {
+			termination := *source.Run.Termination
+			run.Termination = &termination
+		}
 		copy.Run = &run
 	}
 	if source.ModelAttempt != nil {

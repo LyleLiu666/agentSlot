@@ -21,8 +21,23 @@ import (
 	"github.com/LyleLiu666/agentSlot/artifact"
 	"github.com/LyleLiu666/agentSlot/credential"
 	"github.com/LyleLiu666/agentSlot/model"
+	"github.com/LyleLiu666/agentSlot/model/modeltest"
 	"github.com/LyleLiu666/agentSlot/model/openaicompat"
 )
+
+func TestExecutorPassesPortableModelConformance(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(writer, "data: {\"choices\":[{\"delta\":{\"content\":\"portable\"},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = io.WriteString(writer, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+	report := modeltest.Run(t, context.Background(), newExecutorWithAttempts(t, server.URL, 1), requestWithUser("work"), model.TokenBudget{})
+	if len(report.Events) != 2 || report.Events[0].Kind != model.EventDelta || report.Events[1].Kind != model.EventComplete ||
+		len(report.Starts) != 1 || len(report.Finishes) != 1 || report.Finishes[0].Outcome != model.AttemptSucceeded {
+		t.Fatalf("portable conformance report = %#v", report)
+	}
+}
 
 func TestExecutorProjectsImageAttachmentsIntoOpenAIContent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

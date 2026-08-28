@@ -131,18 +131,22 @@ func (r *runtimeInstance) runLoopWithPrepared(run *activeRun, step agent.StepID,
 		escapedAction := driver.closeActions()
 		prepared = nil
 		run.signalPrepared(r.revision())
+		termination := driver.runTermination()
 		if err != nil {
 			if errors.Is(err, context.Canceled) || run.ctx.Err() != nil {
 				outcome = agentloop.OutcomeCanceled
+				termination = canceledRunTermination()
 			} else {
 				outcome = agentloop.OutcomeFailed
+				termination = terminationFromError(session.TerminationLoop, agent.CodeLoopFailed, err)
 			}
 		}
 		terminal, committedOutcome := driver.terminalOutcome()
 		if escapedAction || !outcome.Terminal() || !terminal || committedOutcome != outcome {
 			outcome = agentloop.OutcomeFailed
+			termination = fixedRunTermination(session.TerminationLoop, agent.ErrorInternal, agent.CodeLoopProtocolViolation)
 		}
-		nextRun, firstStep := r.finishRun(run, stepOutcomeFromLoop(outcome))
+		nextRun, firstStep := r.finishRun(run, stepOutcomeFromLoop(outcome), termination)
 		if nextRun == nil {
 			return
 		}
@@ -164,6 +168,7 @@ type runtimeLoopRun struct {
 	state          agentloop.State
 	nextStep       agent.StepID
 	pendingTools   []agent.ToolCall
+	termination    *session.RunTermination
 	legacyStepping atomic.Bool
 }
 
@@ -251,10 +256,11 @@ func (r *runtimeLoopRun) Act(ctx context.Context, action agentloop.Action) (agen
 			return agentloop.StateFailed, errors.New("standardagent: model action is not valid in the current Run state")
 		}
 		r.stateMu.Unlock()
-		outcome, next, calls := r.runtime.requestModel(r.run, r.step)
+		outcome, next, calls, termination := r.runtime.requestModel(r.run, r.step)
 		r.stateMu.Lock()
 		r.nextStep = next
 		r.pendingTools = calls
+		r.termination = cloneRunTermination(termination)
 		r.state = loopStateFromStep(outcome)
 		state := r.state
 		r.stateMu.Unlock()
@@ -283,8 +289,14 @@ func (r *runtimeLoopRun) Act(ctx context.Context, action agentloop.Action) (agen
 		r.pendingTools = nil
 		if err != nil || dispatched.contractViolation {
 			r.state = agentloop.StateFailed
+			if err != nil {
+				r.termination = terminationFromError(session.TerminationSession, agent.CodeSessionOperationFailed, err)
+			} else {
+				r.termination = fixedRunTermination(session.TerminationTool, agent.ErrorInternal, agent.CodeToolExecutionFailed)
+			}
 		} else if canceled {
 			r.state = agentloop.StateCanceled
+			r.termination = canceledRunTermination()
 		} else {
 			r.nextStep, r.state = next, agentloop.StateContinueReady
 		}
@@ -298,6 +310,7 @@ func (r *runtimeLoopRun) Act(ctx context.Context, action agentloop.Action) (agen
 			return agentloop.StateFailed, errors.New("standardagent: wait action is not valid in the current Run state")
 		}
 		r.state, r.terminal, r.outcome = agentloop.StateWaiting, true, agentloop.OutcomeWaiting
+		r.termination = fixedRunTermination(session.TerminationLoop, agent.ErrorUnavailable, agent.CodeRunWaiting)
 		return r.state, nil
 	case agentloop.ActionFinish:
 		r.stateMu.Lock()
@@ -306,6 +319,15 @@ func (r *runtimeLoopRun) Act(ctx context.Context, action agentloop.Action) (agen
 			return agentloop.StateFailed, errors.New("standardagent: finish outcome does not match Runtime state")
 		}
 		r.terminal, r.outcome = true, action.Outcome
+		if action.Outcome == agentloop.OutcomeFailed && r.termination == nil {
+			r.termination = fixedRunTermination(session.TerminationLoop, agent.ErrorInternal, agent.CodeLoopFailed)
+		}
+		if action.Outcome == agentloop.OutcomeCanceled {
+			r.termination = canceledRunTermination()
+		}
+		if action.Outcome == agentloop.OutcomeBudgetExceeded && r.termination == nil {
+			r.termination = budgetRunTermination()
+		}
 		return r.state, nil
 	default:
 		return agentloop.StateFailed, errors.New("standardagent: unsupported Run action")
@@ -351,6 +373,12 @@ func (r *runtimeLoopRun) terminalOutcome() (bool, agentloop.Outcome) {
 	r.stateMu.Lock()
 	defer r.stateMu.Unlock()
 	return r.terminal, r.outcome
+}
+
+func (r *runtimeLoopRun) runTermination() *session.RunTermination {
+	r.stateMu.Lock()
+	defer r.stateMu.Unlock()
+	return cloneRunTermination(r.termination)
 }
 
 func finishAllowed(state agentloop.State, outcome agentloop.Outcome) bool {
@@ -404,21 +432,21 @@ func stepOutcomeFromLoop(outcome agentloop.Outcome) stepOutcome {
 	}
 }
 
-func (r *runtimeInstance) requestModel(run *activeRun, step agent.StepID) (stepOutcome, agent.StepID, []agent.ToolCall) {
+func (r *runtimeInstance) requestModel(run *activeRun, step agent.StepID) (stepOutcome, agent.StepID, []agent.ToolCall, *session.RunTermination) {
 	defer func() { run.signalPrepared(r.revision()) }()
 	if r.runBudget(run).Exhausted() {
 		if err := r.recordBudgetExceeded(run); err != nil {
-			return stepFailed, "", nil
+			return stepFailed, "", nil, terminationFromError(session.TerminationSession, agent.CodeSessionOperationFailed, err)
 		}
-		return stepBudgetExceeded, "", nil
+		return stepBudgetExceeded, "", nil, budgetRunTermination()
 	}
 	request, err := r.prepareModelRequest(run, step)
 	if err != nil {
 		run.signalPrepared(r.revision())
 		if errors.Is(err, context.Canceled) {
-			return stepCanceled, "", nil
+			return stepCanceled, "", nil, canceledRunTermination()
 		}
-		return stepFailed, "", nil
+		return stepFailed, "", nil, terminationFromError(session.TerminationContext, agent.CodeContextPreparationFailed, err)
 	}
 	recorder := &runtimeAttemptRecorder{runtime: r, run: run, step: step}
 	stream, err := r.components.executor.Execute(run.ctx, request, recorder)
@@ -426,37 +454,39 @@ func (r *runtimeInstance) requestModel(run *activeRun, step agent.StepID) (stepO
 		run.signalPrepared(r.revision())
 		if errors.Is(err, model.ErrTokenBudgetExceeded) {
 			if recordErr := r.recordBudgetExceeded(run); recordErr != nil {
-				return stepFailed, "", nil
+				return stepFailed, "", nil, terminationFromError(session.TerminationSession, agent.CodeSessionOperationFailed, recordErr)
 			}
-			return stepBudgetExceeded, "", nil
+			return stepBudgetExceeded, "", nil, budgetRunTermination()
 		}
 		if errors.Is(err, context.Canceled) {
-			return stepCanceled, "", nil
+			return stepCanceled, "", nil, canceledRunTermination()
 		}
-		return stepFailed, "", nil
+		return stepFailed, "", nil, terminationFromError(session.TerminationModel, agent.CodeModelExecutionFailed, err)
 	}
 	if stream == nil {
 		run.signalPrepared(r.revision())
-		return stepFailed, "", nil
+		return stepFailed, "", nil, fixedRunTermination(session.TerminationModel, agent.ErrorInternal, agent.CodeModelStreamInvalid)
 	}
 	defer stream.Close()
+	streamState := model.StreamState{}
 	assistantMessageID := agent.MessageID(r.nextID("message"))
 	for {
 		event, err := stream.Recv(run.ctx)
 		if err != nil {
+			err = streamState.End(err)
 			if errors.Is(err, model.ErrTokenBudgetExceeded) {
 				if recordErr := r.recordBudgetExceeded(run); recordErr != nil {
-					return stepFailed, "", nil
+					return stepFailed, "", nil, terminationFromError(session.TerminationSession, agent.CodeSessionOperationFailed, recordErr)
 				}
-				return stepBudgetExceeded, "", nil
+				return stepBudgetExceeded, "", nil, budgetRunTermination()
 			}
 			if errors.Is(err, context.Canceled) {
-				return stepCanceled, "", nil
+				return stepCanceled, "", nil, canceledRunTermination()
 			}
-			return stepFailed, "", nil
+			return stepFailed, "", nil, terminationFromError(session.TerminationModel, agent.CodeModelExecutionFailed, err)
 		}
-		if err := event.Validate(); err != nil {
-			return stepFailed, "", nil
+		if err := streamState.Accept(event); err != nil {
+			return stepFailed, "", nil, terminationFromError(session.TerminationModel, agent.CodeModelStreamInvalid, err)
 		}
 		switch event.Kind {
 		case model.EventDelta:
@@ -467,33 +497,33 @@ func (r *runtimeInstance) requestModel(run *activeRun, step agent.StepID) (stepO
 		case model.EventFailed:
 			if errors.Is(event.Err, model.ErrTokenBudgetExceeded) {
 				if recordErr := r.recordBudgetExceeded(run); recordErr != nil {
-					return stepFailed, "", nil
+					return stepFailed, "", nil, terminationFromError(session.TerminationSession, agent.CodeSessionOperationFailed, recordErr)
 				}
-				return stepBudgetExceeded, "", nil
+				return stepBudgetExceeded, "", nil, budgetRunTermination()
 			}
-			return stepFailed, "", nil
+			return stepFailed, "", nil, terminationFromError(session.TerminationModel, agent.CodeModelExecutionFailed, event.Err)
 		case model.EventComplete:
 			calls, canceled, err := r.commitCompletion(run, step, assistantMessageID, *event.Output)
 			if canceled {
-				return stepCanceled, "", nil
+				return stepCanceled, "", nil, canceledRunTermination()
 			}
 			if err != nil {
-				return stepFailed, "", nil
+				return stepFailed, "", nil, terminationFromError(session.TerminationSession, agent.CodeSessionOperationFailed, err)
 			}
 			if len(calls) > 0 {
-				return stepToolsReady, "", calls
+				return stepToolsReady, "", calls, nil
 			}
 			next, continued, canceled, err := r.continueAfterCompletion(run)
 			if canceled {
-				return stepCanceled, "", nil
+				return stepCanceled, "", nil, canceledRunTermination()
 			}
 			if err != nil {
-				return stepFailed, "", nil
+				return stepFailed, "", nil, terminationFromError(session.TerminationRuntime, agent.CodeRuntimeFailed, err)
 			}
 			if continued {
-				return stepContinue, next, nil
+				return stepContinue, next, nil, nil
 			}
-			return stepNatural, "", nil
+			return stepNatural, "", nil, nil
 		}
 	}
 }
@@ -930,7 +960,7 @@ func (r *runtimeInstance) commitToolResults(run *activeRun, calls []agent.ToolCa
 	return nextStep, run.cancelRequested || r.closing, err
 }
 
-func (r *runtimeInstance) finishRun(run *activeRun, outcome stepOutcome) (*activeRun, agent.StepID) {
+func (r *runtimeInstance) finishRun(run *activeRun, outcome stepOutcome, termination *session.RunTermination) (*activeRun, agent.StepID) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.active != run {
@@ -938,6 +968,7 @@ func (r *runtimeInstance) finishRun(run *activeRun, outcome stepOutcome) (*activ
 	}
 	if run.cancelRequested || r.closing {
 		outcome = stepCanceled
+		termination = canceledRunTermination()
 	}
 	natural := outcome == stepNatural
 	snapshot, err := r.viewLocked(context.Background())
@@ -961,9 +992,22 @@ func (r *runtimeInstance) finishRun(run *activeRun, outcome stepOutcome) (*activ
 	case stepBudgetExceeded, stepWaiting:
 		terminalKind = session.RunInterrupted
 	}
+	if terminalKind == session.RunCompleted {
+		termination = nil
+	} else if termination == nil {
+		switch terminalKind {
+		case session.RunCanceled:
+			termination = canceledRunTermination()
+		case session.RunInterrupted:
+			termination = fixedRunTermination(session.TerminationRuntime, agent.ErrorUnavailable, agent.CodeRuntimeInterrupted)
+		default:
+			termination = fixedRunTermination(session.TerminationRuntime, agent.ErrorInternal, agent.CodeRuntimeFailed)
+		}
+	}
 	terminal := session.RunFact{
 		SessionID: r.id(), RunID: run.id, Kind: terminalKind,
 		ModelConfig: cloneRuntimeConfig(run.config), ConfigRevision: run.configRevision,
+		Termination: cloneRunTermination(termination),
 	}
 	changes = append(changes, session.Change{Kind: session.AppendRunFact, RunFact: &terminal})
 	idle := session.RunStateChange{RunID: run.id, State: session.RunIdle}
@@ -999,6 +1043,52 @@ func (r *runtimeInstance) finishRun(run *activeRun, outcome stepOutcome) (*activ
 	r.state = runtimeIdle
 	close(r.idleSignal)
 	return nil, ""
+}
+
+func fixedRunTermination(source session.TerminationSource, kind agent.ErrorKind, code agent.ErrorCode) *session.RunTermination {
+	return &session.RunTermination{Source: source, Kind: kind, Code: code}
+}
+
+func canceledRunTermination() *session.RunTermination {
+	return fixedRunTermination(session.TerminationRuntime, agent.ErrorCanceled, agent.CodeCanceled)
+}
+
+func budgetRunTermination() *session.RunTermination {
+	return fixedRunTermination(session.TerminationBudget, agent.ErrorUnavailable, agent.CodeRunTokenBudgetExceeded)
+}
+
+func terminationFromError(source session.TerminationSource, fallback agent.ErrorCode, err error) *session.RunTermination {
+	if errors.Is(err, context.Canceled) {
+		return canceledRunTermination()
+	}
+	kind := agent.KindOf(err)
+	if errors.Is(err, context.DeadlineExceeded) {
+		kind = agent.ErrorDeadline
+	}
+	if !kind.Valid() {
+		kind = agent.ErrorInternal
+	}
+	code := agent.CodeOf(err)
+	if code == "" {
+		code = fallback
+	}
+	termination := &session.RunTermination{Source: source, Kind: kind, Code: code}
+	var classified *agent.ClassifiedError
+	if errors.As(err, &classified) && classified.Message != "" {
+		termination.SafeMessage = classified.Message
+		if termination.Validate() != nil {
+			termination.SafeMessage = ""
+		}
+	}
+	return termination
+}
+
+func cloneRunTermination(source *session.RunTermination) *session.RunTermination {
+	if source == nil {
+		return nil
+	}
+	copy := *source
+	return &copy
 }
 
 func (r *runtimeInstance) recoverAfterRunFailureLocked(run *activeRun) {

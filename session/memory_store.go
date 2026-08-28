@@ -605,9 +605,16 @@ func appendRunFact(snapshot *Snapshot, fact RunFact, actor agent.ActorIdentity) 
 		if started.ConfigRevision != fact.ConfigRevision || !sameModelConfig(started.ModelConfig, fact.ModelConfig) {
 			return historyConflict("run terminal fact changed the frozen model config")
 		}
+		if fact.Kind != RunCompleted && fact.Termination == nil {
+			return historyConflict("non-successful run terminal requires a termination")
+		}
 	}
 	copy := fact
 	copy.ModelConfig = cloneModelConfig(fact.ModelConfig)
+	if fact.Termination != nil {
+		termination := *fact.Termination
+		copy.Termination = &termination
+	}
 	return appendHistoryFact(&snapshot.History, snapshot.Session.ID, HistoryFact{Run: &copy}, actor)
 }
 
@@ -812,6 +819,9 @@ func recoverAggregate(snapshot *Snapshot) (bool, error) {
 			interrupted := *started
 			interrupted.Kind = RunInterrupted
 			interrupted.ModelConfig = cloneModelConfig(started.ModelConfig)
+			interrupted.Termination = &RunTermination{
+				Source: TerminationRuntime, Kind: agent.ErrorUnavailable, Code: agent.CodeRuntimeInterrupted,
+			}
 			if err := appendHistoryFact(&snapshot.History, snapshot.Session.ID, HistoryFact{Run: &interrupted}, agent.ActorIdentity{}); err != nil {
 				return false, agent.NewError(agent.ErrorInternal, "session.recover", "cannot append interrupted run", err)
 			}

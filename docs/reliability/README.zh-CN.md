@@ -6,7 +6,7 @@ AgentSlot 应固化所有 Agent 产品都必须遵守的**持久事实、生命�
 
 ## 文档状态
 
-本文是 AgentSlot 可靠性工作的设计入口，已经确定框架责任和非目标，尚未表示对应代码全部实现或通过一致性验证。
+本文是 AgentSlot 可靠性工作的设计入口。ASR-001 至 ASR-005 与 ASR-007 的当前合同已经实现并进入普通测试门禁；ASR-006 的共享 token budget 与 Runtime 取消已经固化，具体 Provider 分层超时和重试仍属于 Executor/组装项目后续工作。
 
 专项设计：
 
@@ -111,7 +111,7 @@ AgentSlot 的固定 Runtime 已经负责 Session 真值、CAS 提交、Run 生�
 
 - 先写复现历史事故的确定性测试，再修改实现。
 - `session.store` conformance 增加 JSON 表示变化、恢复中断和终态一致性场景。
-- 为 `model.executor` 建立第一版 conformance；单一实现通过只能达到 Conformant，不能称为 Proven。
+- `model.executor/v1` conformance 已建立，覆盖公共 stream lifecycle、终态关闭、Attempt 配对和共享 token budget；当前 FakeExecutor 与参考 OpenAI-compatible Executor 驱动同一套测试，因此只能达到 Conformant，不能称为 Proven。
 - 公共状态或合同变化必须同步更新 `COMPONENT_MAP.md` 与 `COMPONENT_MAP.zh-CN.md`。
 - AgentSlot 修复发布独立版本；LAS 只升级依赖并保留消费方回归，不复制框架修复。
 

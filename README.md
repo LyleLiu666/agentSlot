@@ -84,9 +84,10 @@ never selects a Loop or any other domain component.
 
 ## Status
 
-AgentSlot is a pre-1.0 foundation. `v0.1.6` is the current validation release
-and is intended to be consumed by real Agent projects. It adds independent
-token counting, controlled Loop actions, late-bound credentials, trusted
+AgentSlot is a pre-1.0 foundation. `v0.1.8` is the current validation release
+and is intended to be consumed by real Agent projects. It adds checked model
+stream lifecycles, portable Executor conformance, durable Run termination,
+independent token counting, controlled Loop actions, late-bound credentials, trusted
 Workspace boundaries, bounded Tool results, durable Artifact and Workspace
 references, safe Session history access, explicit project generation, and
 remote gRPC/ACP Gateway channels. It is not a
@@ -99,7 +100,8 @@ new semantic version.
 All implemented public boundaries remain at least `Contracted`.
 `model.token-counter` is Contracted and independently replaceable from
 `model.executor`. `session.store` is `Conformant` against the exact `v0.0.10`
-contract; no ecosystem is yet `Proven`.
+contract; `model.executor` is `Conformant` against `model.executor/v1`.
+No ecosystem is yet `Proven`.
 
 ## Generate an explicit Agent project
 
@@ -107,7 +109,7 @@ A released `agentslot` binary pins its own exact AgentSlot version. A source
 checkout must supply the release explicitly:
 
 ```bash
-go run ./cmd/agentslot init --agentslot-version v0.1.6 ./my-agent
+go run ./cmd/agentslot init --agentslot-version v0.1.8 ./my-agent
 ```
 
 An interactive terminal selects a preset and collects only non-secret provider,

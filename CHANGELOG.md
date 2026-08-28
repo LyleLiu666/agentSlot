@@ -4,6 +4,27 @@ This file records published AgentSlot releases. The project is pre-1.0: a
 validation release is usable through Go modules, but its public API may change
 when real consumers expose a flawed boundary.
 
+## v0.1.8 - 2026-08-28
+
+### Added
+
+- Added `model.StreamState` and the reusable `model.executor/v1` black-box
+  conformance suite. Runtime and goal evaluation now reject incomplete,
+  cross-attempt, and invalid Completion streams before any assistant message or
+  tool action becomes durable; conformance also rejects post-terminal events.
+- Added provider-neutral `RunTermination` facts with finite source, kind, code,
+  and bounded safe-message fields. New failed, interrupted, and canceled Run
+  commits require a termination; old Session files without one remain readable.
+
+### Compatibility and maturity
+
+- Retryability and Tool effect state remain derived product/runtime policy and
+  are not persisted in `RunTermination`; Provider wire details remain private
+  to Executors and adapters.
+- `model.executor` is now Conformant against `model.executor/v1`, with fake and
+  reference OpenAI-compatible coverage. It remains below Proven until an
+  independent production implementation and real replacement evidence exist.
+
 ## v0.1.7 - 2026-08-28
 
 ### Fixed

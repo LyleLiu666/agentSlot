@@ -30,11 +30,14 @@ func TestComponentMapsStaySynchronized(t *testing.T) {
 	englishConformant := componentMapRows(t, "COMPONENT_MAP.md", englishConformantRowPattern)
 	chineseConformant := componentMapRows(t, "COMPONENT_MAP.zh-CN.md", chineseConformantRowPattern)
 	assertSameSlotIDs(t, englishConformant, chineseConformant)
-	if len(englishConformant) != 1 {
-		t.Fatalf("Conformant row count = %d, want 1", len(englishConformant))
+	if len(englishConformant) != 2 {
+		t.Fatalf("Conformant row count = %d, want 2", len(englishConformant))
 	}
 	if _, exists := englishConformant["session.store"]; !exists {
 		t.Fatal("session.store is missing its reviewed Conformant evidence status")
+	}
+	if _, exists := englishConformant["model.executor"]; !exists {
+		t.Fatal("model.executor is missing its reviewed Conformant evidence status")
 	}
 }
 

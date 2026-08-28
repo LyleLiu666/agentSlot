@@ -8,7 +8,7 @@ AgentSlot 固化逻辑 Model 调用、物理 Attempt、临时流、持久 Comple
 
 本文细化 [ASR-004、ASR-005 与 ASR-006](README.zh-CN.md)，同时定义 `model.executor` 第一版 conformance 应验证什么。它不设计 Anthropic、OpenAI 或其他具名 Provider 的请求结构。
 
-## 当前合同基础
+## 已实现的合同基础
 
 现有 AgentSlot 已经建立三层身份：
 
@@ -18,12 +18,11 @@ AgentSlot 固化逻辑 Model 调用、物理 Attempt、临时流、持久 Comple
 
 `AttemptRecorder` 是 Executor 唯一可写入的持久能力，`Completion.Continuation` 对 Runtime 保持 JSON opaque。这些边界继续保留，本设计不让 Executor 直接读取或修改 Session。
 
-当前主要缺口不是缺少 Provider 错误字符串，而是：
+`model.StreamState` 已把临时输出、reset、Attempt 身份、唯一终态和终态后关闭固化成可复用检查器；标准 Runtime 与 Goal 模型评估都使用同一检查器。`session.RunTermination` 已把 Model、Context、Loop、Tool、Budget、Session 与 Runtime 的最终通用原因写入非成功 Run fact。
 
-- `ModelStream` 的完整性规则还没有独立 conformance；
-- Run terminal fact 没有保存最终通用失败原因；
-- Provider Attempt 已经有错误码，但请求构造、Loop、Context、Tool、Policy 和 Session 失败无法形成统一持久结论；
-- 长请求的 Provider 超时与 Runtime 的总预算边界还没有写成明确责任。
+`model/modeltest.Run` 提供 `model.executor/v1` 黑盒一致性套件，当前由 FakeExecutor 和参考 OpenAI-compatible Executor 驱动。它证明公共可观察合同已经可执行，但两个执行路径仍共享同一仓库语义，且尚无第二个独立生产实现，因此成熟度是 Conformant，不是 Proven。
+
+当前剩余工作位于消费方：LAS 需要把 Run、Attempt 与 Journal 事实映射到 CLI/TUI/TaskResult，并在具体 adapter 内实现和验证长请求超时、重试及 continuation 策略。
 
 ## 设计决定
 
@@ -180,7 +179,7 @@ Provider Attempt 的详细事实和 Run 的最终事实各司其职：
 
 ## ModelExecutor conformance
 
-第一版黑盒套件至少覆盖：
+第一版黑盒套件由 `model/modeltest.Run` 覆盖公共可观察合同；协议 fixture 和具体 dispatch 时序仍由 adapter 测试覆盖。
 
 ### 身份与事实
 
@@ -202,10 +201,8 @@ Provider Attempt 的详细事实和 Run 的最终事实各司其职：
 
 ### 取消与预算
 
-- dispatch 前取消；
-- 请求中取消；
-- 退避中取消；
-- stream Recv 中取消；
+- Runtime 取消必须收敛为 canceled Run，而不是 model failed；
+- 具体 Executor 必须在自己的测试中覆盖 dispatch 前、请求中、退避中和 stream Recv 中的取消；
 - token budget 已耗尽时不开始下一 Attempt；
 - 多次 Attempt 共享同一 Run budget。
 
@@ -236,12 +233,11 @@ Provider Attempt 的详细事实和 Run 的最终事实各司其职：
 - 不持久化“用户应该点击哪个按钮”。
 - 不在只有一个消费方时增加 verification 或 provider-route Slot。
 
-## 完成定义
+## 本轮完成证据
 
-- 每个非成功 Run 在 Store 可写时有通用、脱敏的 termination；
-- 用户取消不再被记录为 Provider timeout 或模型失败；
-- 半截流、非法 continuation 和缺少终止标记无法产生持久 assistant Message 或工具动作；
-- 所有物理 Attempt 在重试和逻辑结束前完成持久闭合；
-- ModelExecutor conformance 可由 FakeExecutor、参考 OpenAI-compatible Executor 和 LAS 消费 adapter 使用；
-- AgentSlot 只因通过某个实现而标记 Conformant，不在两个独立实现前标记 Proven；
-- LAS 能在不读取原始错误字符串的情况下，把 Run、Attempt 和 Journal 事实映射成产品级失败归因。
+- 新写入的每个非成功 Run 在 Store 可写时必须带通用、脱敏的 termination；旧 Session 缺少该字段仍可读取。
+- 用户取消记录为 runtime/canceled；恢复中断记录为 runtime/runtime_interrupted。
+- 半截流、非法 Completion 和缺少终态的流无法产生持久 assistant Message 或工具动作。
+- `model.executor/v1` 检查合法 stream lifecycle、终态关闭、Attempt 一始一终和共享 token budget；FakeExecutor 与参考 OpenAI-compatible Executor 均通过。
+- `model.executor` 在组件地图中标记为 Conformant；在第二个独立生产实现和真实替换证据出现前不得标记 Proven。
+- LAS 的产品级失败映射、恢复建议与分层超时分别属于后续消费轮次，不是 AgentSlot 本轮完成门禁。

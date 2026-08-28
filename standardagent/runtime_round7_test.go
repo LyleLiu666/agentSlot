@@ -124,6 +124,10 @@ func TestRuntimeRejectsOversizedContextBeforeProviderCall(t *testing.T) {
 	if len(runs) != 2 || runs[1].Kind != session.RunFailed {
 		t.Fatalf("run facts = %#v", runs)
 	}
+	if runs[1].Termination == nil || runs[1].Termination.Source != session.TerminationContext ||
+		runs[1].Termination.Code != agent.CodeContextLimitExceeded {
+		t.Fatalf("context-limit termination = %#v", runs[1].Termination)
+	}
 }
 
 func TestRuntimeFailsClosedWhenIndependentTokenCounterFails(t *testing.T) {
@@ -152,6 +156,11 @@ func TestRuntimeFailsClosedWhenIndependentTokenCounterFails(t *testing.T) {
 	runs := historyRunFacts(snapshot.RecentHistory)
 	if len(runs) != 2 || runs[1].Kind != session.RunFailed {
 		t.Fatalf("run facts after TokenCounter failure = %#v", runs)
+	}
+	if runs[1].Termination == nil || runs[1].Termination.Source != session.TerminationContext ||
+		runs[1].Termination.Kind != agent.ErrorInternal || runs[1].Termination.Code != agent.CodeContextPreparationFailed ||
+		runs[1].Termination.SafeMessage != "" {
+		t.Fatalf("TokenCounter termination = %#v", runs[1].Termination)
 	}
 }
 

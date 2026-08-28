@@ -7,7 +7,10 @@ package session
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	agentslot "github.com/LyleLiu666/agentSlot"
 	agent "github.com/LyleLiu666/agentSlot/agent"
@@ -399,6 +402,63 @@ func (k RunFactKind) Valid() bool {
 	return k == RunStarted || k == RunCompleted || k == RunCanceled || k == RunFailed || k == RunInterrupted
 }
 
+// MaxRunTerminationMessageBytes bounds the optional, already-sanitized line
+// that can be stored on a non-successful Run terminal fact.
+const MaxRunTerminationMessageBytes = 1024
+
+// TerminationSource identifies the stable framework phase that prevented a
+// Run from completing. It deliberately excludes Provider and product names.
+type TerminationSource string
+
+const (
+	TerminationModel   TerminationSource = "model"
+	TerminationContext TerminationSource = "context"
+	TerminationLoop    TerminationSource = "loop"
+	TerminationTool    TerminationSource = "tool"
+	TerminationPolicy  TerminationSource = "policy"
+	TerminationBudget  TerminationSource = "budget"
+	TerminationSession TerminationSource = "session"
+	TerminationRuntime TerminationSource = "runtime"
+)
+
+func (s TerminationSource) Valid() bool {
+	switch s {
+	case TerminationModel, TerminationContext, TerminationLoop, TerminationTool,
+		TerminationPolicy, TerminationBudget, TerminationSession, TerminationRuntime:
+		return true
+	default:
+		return false
+	}
+}
+
+// RunTermination is the minimal durable reason why a Run did not complete.
+// Retry policy, unknown tool effects, Provider bodies, and UI recovery advice
+// are intentionally not part of this immutable fact.
+type RunTermination struct {
+	Source      TerminationSource
+	Kind        agent.ErrorKind
+	Code        agent.ErrorCode
+	SafeMessage string
+}
+
+func (t RunTermination) Validate() error {
+	if !t.Source.Valid() || !t.Kind.Valid() || t.Code == "" {
+		return fmt.Errorf("session: invalid run termination classification")
+	}
+	if t.SafeMessage == "" {
+		return nil
+	}
+	if len(t.SafeMessage) > MaxRunTerminationMessageBytes || !utf8.ValidString(t.SafeMessage) || strings.TrimSpace(t.SafeMessage) != t.SafeMessage {
+		return fmt.Errorf("session: run termination message must be bounded, valid UTF-8, and trimmed")
+	}
+	for _, character := range t.SafeMessage {
+		if unicode.IsControl(character) || unicode.In(character, unicode.Cf, unicode.Zl, unicode.Zp) {
+			return fmt.Errorf("session: run termination message must be a single safe display line")
+		}
+	}
+	return nil
+}
+
 // RunFact records the exact model configuration frozen when a Run started and
 // repeats it on the terminal fact. ConfigRevision is the Session revision from
 // which the snapshot was taken; later model switches cannot rewrite it.
@@ -408,6 +468,7 @@ type RunFact struct {
 	Kind           RunFactKind
 	ModelConfig    SessionModelConfig
 	ConfigRevision agent.Revision
+	Termination    *RunTermination `json:",omitempty"`
 }
 
 func (f RunFact) Validate(sessionID agent.SessionID) error {
@@ -416,6 +477,15 @@ func (f RunFact) Validate(sessionID agent.SessionID) error {
 	}
 	if err := f.ModelConfig.Validate(); err != nil {
 		return fmt.Errorf("session: run fact model config is invalid: %w", err)
+	}
+	if f.Kind == RunStarted || f.Kind == RunCompleted {
+		if f.Termination != nil {
+			return fmt.Errorf("session: successful or started run cannot contain a termination")
+		}
+	} else if f.Termination != nil {
+		if err := f.Termination.Validate(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -797,6 +867,9 @@ func (c Change) Validate(sessionID agent.SessionID) error {
 		}
 		if err := c.RunFact.Validate(sessionID); err != nil {
 			return err
+		}
+		if c.RunFact.Kind != RunStarted && c.RunFact.Kind != RunCompleted && c.RunFact.Termination == nil {
+			return fmt.Errorf("session: appended non-successful run terminal requires a termination")
 		}
 	case AppendModelAttempt:
 		if c.ModelAttempt == nil {

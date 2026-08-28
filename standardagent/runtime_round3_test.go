@@ -198,6 +198,11 @@ func TestRunTokenBudgetStopsBeforeAnotherModelStepAndNextInputStartsNewRun(t *te
 	if len(executor.Requests()) != 1 || len(budgetFacts(first.History)) != 1 || lastRunTerminal(first.History) != session.RunInterrupted {
 		t.Fatalf("budget terminal = requests %d facts %#v terminal %q", len(executor.Requests()), budgetFacts(first.History), lastRunTerminal(first.History))
 	}
+	firstRuns := historyRunFacts(first.History)
+	if firstRuns[len(firstRuns)-1].Termination == nil || firstRuns[len(firstRuns)-1].Termination.Source != session.TerminationBudget ||
+		firstRuns[len(firstRuns)-1].Termination.Code != agent.CodeRunTokenBudgetExceeded {
+		t.Fatalf("budget termination = %#v", firstRuns[len(firstRuns)-1].Termination)
+	}
 	if _, err := access.Send(context.Background(), interaction.SendRequest{SessionID: opened.SessionID, ExpectedRevision: first.Revision, Input: textInput("continue")}); err != nil {
 		t.Fatal(err)
 	}

@@ -31,7 +31,7 @@ Current repository reality:
 | Mapped standard component ecosystems | 41 |
 | Standardized domain vocabularies | 9 |
 | Contracted AgentSlot-owned domain interfaces | 32 |
-| Conformant component ecosystems | 1 |
+| Conformant component ecosystems | 2 |
 | Proven component ecosystems | 0 |
 | Assembled standard component ecosystems | 0 |
 
@@ -65,7 +65,7 @@ Its description uses `AssemblyDescription` and the `agentslot.assembly/v0` schem
 | --- | --- | --- | --- | --- |
 | `agent.loop` | `AgentLoop` | `One` | exactly 1 | Owns replaceable Agent execution strategy through ordered, Run-scoped Runtime actions while the framework retains Session truth, budgets, cancellation, recovery, and terminal commits. |
 | `session.store` | `SessionStore` | `One` | exactly 1 | Persists the whole Session aggregate and atomic revision/CAS transactions; preserves tool arguments by JSON value semantics across encoding and reopen; lists resumable Sessions through bounded, deterministic, lifecycle-scoped cursor pages within an Agent/Workspace scope; History remains the unique append-only fact view. |
-| `model.executor` | `ModelExecutor` | `One` | exactly 1 | Validates selected-model capabilities, executes one logical model call, contains retries and continuation, reports post-call usage, and durably records each physical attempt plus an optional bounded adapter-sanitized displayable failure message through the restricted AttemptRecorder. |
+| `model.executor` | `ModelExecutor` | `One` | exactly 1 | Validates selected-model capabilities, executes one logical model call with a checked temporary/reset/terminal stream, contains retries and continuation, reports post-call usage, and durably records each physical attempt plus an optional bounded adapter-sanitized displayable failure message through the restricted AttemptRecorder. |
 | `model.token-counter` | `TokenCounter` | `One` | exactly 1 | Counts the complete provider-visible request for pre-call planning, using an exact tokenizer or a validated conservative bound and failing closed when neither is defensible. |
 | `gateway.channel` | `GatewayChannel` | `Many` | at least 1 | Binds one caller-facing protocol, function API, or UI to the fixed Gateway and receives only `GatewayAccess`; gRPC, WebSocket, SSH, and inbound ACP are alternative implementations of this Slot. |
 
@@ -213,7 +213,7 @@ evaluation takes precedence. Goal state remains outside conversation History.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `model.executor` | `ModelExecutor` | `One` | globally required | Validates selected-model capabilities, executes one logical model call, contains retries and continuation, reports post-call usage, and durably records each physical attempt plus an optional bounded adapter-sanitized displayable failure message through the restricted AttemptRecorder. | Contracted |
+| `model.executor` | `ModelExecutor` | `One` | globally required | Validates selected-model capabilities, executes one logical model call with a checked temporary/reset/terminal stream, contains retries and continuation, reports post-call usage, and durably records each physical attempt plus an optional bounded adapter-sanitized displayable failure message through the restricted AttemptRecorder. | Conformant |
 | `model.token-counter` | `TokenCounter` | `One` | globally requires exactly 1 | Counts the complete provider-visible request for pre-call planning, using an exact tokenizer or a validated conservative bound and failing closed when neither is defensible. | Contracted |
 | `model.attempt.observer` | `AttemptObserver` | `Chain` | optional | Synchronously records or rejects one physical provider attempt before dispatch and after completion; unlike passive telemetry it may fail closed. | Contracted |
 | `model.provider` | `ModelProvider` | `Many` | optional; required only by an Executor that declares it | Implements named provider access for Executors that compose local adapters. | Mapped |
