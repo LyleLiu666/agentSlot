@@ -84,7 +84,7 @@ never selects a Loop or any other domain component.
 
 ## Status
 
-AgentSlot is a pre-1.0 foundation. `v0.1.8` is the current validation release
+AgentSlot is a pre-1.0 foundation. `v0.1.10` is the current validation release
 and is intended to be consumed by real Agent projects. It adds checked model
 stream lifecycles, portable Executor conformance, durable Run termination,
 independent token counting, controlled Loop actions, late-bound credentials, trusted
@@ -109,7 +109,7 @@ A released `agentslot` binary pins its own exact AgentSlot version. A source
 checkout must supply the release explicitly:
 
 ```bash
-go run ./cmd/agentslot init --agentslot-version v0.1.8 ./my-agent
+go run ./cmd/agentslot init --agentslot-version v0.1.10 ./my-agent
 ```
 
 An interactive terminal selects a preset and collects only non-secret provider,

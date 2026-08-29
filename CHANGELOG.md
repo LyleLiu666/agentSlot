@@ -4,6 +4,24 @@ This file records published AgentSlot releases. The project is pre-1.0: a
 validation release is usable through Go modules, but its public API may change
 when real consumers expose a flawed boundary.
 
+## v0.1.10 - 2026-08-29
+
+### Fixed
+
+- Context compaction now retains the latest opaque model continuation from the
+  active Run while allowing older continuations from that Run to be removed.
+  Long tool-using runs can therefore compact history without either losing the
+  provider continuation required for the next turn or retaining every prior
+  continuation indefinitely.
+
+## v0.1.9 - 2026-08-28
+
+### Fixed
+
+- FileStore persistence now rejects short writes, syncs the containing
+  directory after atomic replacement, and preserves an idempotently observable
+  committed revision when a post-rename durability check fails.
+
 ## v0.1.8 - 2026-08-28
 
 ### Added
