@@ -40,11 +40,34 @@ func (c *TailCompactor) Compact(ctx stdcontext.Context, input CompactionInput) (
 		start--
 		count += groupSize
 	}
+	activeRunID := latestRunID(input.Inputs)
+	requiredGroup := -1
+	for index := range groups {
+		message := input.Inputs[groups[index][0]].Message
+		if message != nil && message.RunID == activeRunID && message.ModelContinuation != nil {
+			requiredGroup = index
+		}
+	}
+	if requiredGroup >= 0 && requiredGroup < start {
+		start = requiredGroup
+	}
 	first := 0
 	if start < len(groups) {
 		first = groups[start][0]
 	}
 	return CompactionOutput{SourceRevision: input.Revision, Inputs: cloneInputs(input.Inputs[first:])}, nil
+}
+
+func latestRunID(inputs []model.Input) agent.RunID {
+	for index := len(inputs) - 1; index >= 0; index-- {
+		if inputs[index].Message != nil && inputs[index].Message.RunID != "" {
+			return inputs[index].Message.RunID
+		}
+		if inputs[index].ToolCall != nil && inputs[index].ToolCall.RunID != "" {
+			return inputs[index].ToolCall.RunID
+		}
+	}
+	return ""
 }
 
 func protocolGroups(inputs []model.Input) [][2]int {

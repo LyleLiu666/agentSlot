@@ -117,3 +117,32 @@ func TestTailCompactorKeepsToolProtocolGroupAndDoesNotMutateInput(t *testing.T) 
 		t.Fatal("compactor output aliases opaque continuation state")
 	}
 }
+
+func TestTailCompactorKeepsOnlyLatestActiveRunContinuationOutsideTailLimit(t *testing.T) {
+	compactor, err := agentcontext.NewTailCompactor(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldContinuation := &agent.Message{
+		ID: "assistant-old", SessionID: "session-1", RunID: "run-active", StepID: "step-1", Role: agent.RoleAssistant,
+		ModelContinuation: &agent.ModelContinuation{ProviderKey: "provider", ModelID: "model", State: json.RawMessage(`[{"signature":"old"}]`)},
+	}
+	latestContinuation := &agent.Message{
+		ID: "assistant-latest", SessionID: "session-1", RunID: "run-active", StepID: "step-2", Role: agent.RoleAssistant,
+		ModelContinuation: &agent.ModelContinuation{ProviderKey: "provider", ModelID: "model", State: json.RawMessage(`[{"signature":"latest"}]`)},
+	}
+	source := &agent.Message{
+		ID: "context-source", SessionID: "session-1", Role: agent.RoleUser,
+		Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "derived"}},
+	}
+	inputs := []model.Input{{Message: oldContinuation}, {Message: latestContinuation}, {Message: source}}
+	output, err := compactor.Compact(stdcontext.Background(), agentcontext.CompactionInput{
+		SessionID: "session-1", Revision: 10, Inputs: inputs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(output.Inputs) != 2 || output.Inputs[0].Message.ID != latestContinuation.ID {
+		t.Fatalf("latest active continuation was not retained alone: %#v", output.Inputs)
+	}
+}

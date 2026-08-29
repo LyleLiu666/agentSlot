@@ -46,6 +46,25 @@ func TestContextCannotInventDropOrModifyOpaqueModelContinuation(t *testing.T) {
 	}
 }
 
+func TestContextMayCompactAnOlderActiveRunContinuation(t *testing.T) {
+	old := &agent.Message{
+		ID: "assistant-old", SessionID: "session-1", RunID: "run-1", StepID: "step-1", Role: agent.RoleAssistant,
+		ModelContinuation: &agent.ModelContinuation{ProviderKey: "provider", ModelID: "model", State: json.RawMessage(`[{"signature":"old"}]`)},
+	}
+	latest := &agent.Message{
+		ID: "assistant-latest", SessionID: "session-1", RunID: "run-1", StepID: "step-2", Role: agent.RoleAssistant,
+		ModelContinuation: &agent.ModelContinuation{ProviderKey: "provider", ModelID: "model", State: json.RawMessage(`[{"signature":"latest"}]`)},
+	}
+	history := []session.HistoryFact{{Message: old}, {Message: latest}}
+	retained := cloneRuntimeMessage(*latest)
+	if err := validateModelContinuations(history, []model.Input{{Message: &retained}}, "run-1"); err != nil {
+		t.Fatalf("older complete continuation group could not be compacted: %v", err)
+	}
+	if err := validateModelContinuations(history, []model.Input{{Message: old}}, "run-1"); err == nil {
+		t.Fatal("latest active continuation was allowed to be compacted")
+	}
+}
+
 func TestModelAttemptIsDurableBeforeFakeProviderProducesOutput(t *testing.T) {
 	block := make(chan struct{})
 	usage := model.TokenUsage{

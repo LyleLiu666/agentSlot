@@ -259,22 +259,25 @@ func validateDynamicInputs(sessionID agent.SessionID, inputs []model.Input) erro
 
 func validateModelContinuations(history []session.HistoryFact, inputs []model.Input, activeRunID agent.RunID) error {
 	durable := make(map[agent.MessageID]*agent.ModelContinuation)
-	required := make(map[agent.MessageID]bool)
+	var required agent.MessageID
 	for _, fact := range history {
 		if fact.Message != nil {
 			durable[fact.Message.ID] = fact.Message.ModelContinuation
 			if fact.Message.ModelContinuation != nil && fact.Message.RunID == activeRunID {
-				required[fact.Message.ID] = true
+				required = fact.Message.ID
 			}
 		}
 	}
+	requiredPresent := required == ""
 	for _, input := range inputs {
 		if input.Message == nil {
 			continue
 		}
 		expected, exists := durable[input.Message.ID]
 		actual := input.Message.ModelContinuation
-		delete(required, input.Message.ID)
+		if input.Message.ID == required {
+			requiredPresent = true
+		}
 		if !exists {
 			if actual != nil {
 				return agent.NewError(agent.ErrorInvalidInput, "standardagent.context", "Context component invented opaque model continuation state", nil)
@@ -291,7 +294,7 @@ func validateModelContinuations(history []session.HistoryFact, inputs []model.In
 			return agent.NewError(agent.ErrorInvalidInput, "standardagent.context", "Context component modified opaque model continuation state", nil)
 		}
 	}
-	if len(required) > 0 {
+	if !requiredPresent {
 		return agent.NewError(agent.ErrorInvalidInput, "standardagent.context", "Context component removed active opaque model continuation state", nil)
 	}
 	return nil
