@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/LyleLiu666/agentSlot/internal/jsonvalue"
 )
 
 // The identity types are deliberately distinct even though they use the same
@@ -218,7 +220,7 @@ type ToolCall struct {
 // dispatcher's responsibility.
 func (c ToolCall) Valid() bool {
 	return c.ID.Valid() && c.MessageID.Valid() && c.SessionID.Valid() &&
-		c.RunID.Valid() && c.StepID.Valid() && c.Name != "" && json.Valid(c.Arguments)
+		c.RunID.Valid() && c.StepID.Valid() && c.Name != "" && jsonvalue.Valid(c.Arguments)
 }
 
 // Agent identifies one configured capability set.
@@ -273,6 +275,17 @@ const (
 	ErrorInternal     ErrorKind = "internal"
 )
 
+// Valid reports whether the kind belongs to the portable error vocabulary.
+func (k ErrorKind) Valid() bool {
+	switch k {
+	case ErrorInvalidInput, ErrorConflict, ErrorNotFound, ErrorUnauthorized, ErrorForbidden,
+		ErrorCanceled, ErrorDeadline, ErrorUnavailable, ErrorInternal:
+		return true
+	default:
+		return false
+	}
+}
+
 // ErrorCode is the stable domain reason inside a broad reaction category.
 type ErrorCode string
 
@@ -299,6 +312,17 @@ const (
 	CodeContextLimitExceeded              ErrorCode = "context_limit_exceeded"
 	CodeModelNotSupported                 ErrorCode = "model_not_supported"
 	CodeCompatibilityConfirmationRequired ErrorCode = "compatibility_confirmation_required"
+	CodeModelExecutionFailed              ErrorCode = "model_execution_failed"
+	CodeModelStreamInvalid                ErrorCode = "model_stream_invalid"
+	CodeContextPreparationFailed          ErrorCode = "context_preparation_failed"
+	CodeLoopFailed                        ErrorCode = "loop_failed"
+	CodeLoopProtocolViolation             ErrorCode = "loop_protocol_violation"
+	CodeToolExecutionFailed               ErrorCode = "tool_execution_failed"
+	CodeRunTokenBudgetExceeded            ErrorCode = "run_token_budget_exceeded"
+	CodeRunWaiting                        ErrorCode = "run_waiting"
+	CodeSessionOperationFailed            ErrorCode = "session_operation_failed"
+	CodeRuntimeFailed                     ErrorCode = "runtime_failed"
+	CodeRuntimeInterrupted                ErrorCode = "runtime_interrupted"
 )
 
 // ClassifiedError carries a safe operation-level message and an optional

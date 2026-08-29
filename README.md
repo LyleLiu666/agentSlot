@@ -84,9 +84,10 @@ never selects a Loop or any other domain component.
 
 ## Status
 
-AgentSlot is a pre-1.0 foundation. `v0.1.6` is the current validation release
-and is intended to be consumed by real Agent projects. It adds independent
-token counting, controlled Loop actions, late-bound credentials, trusted
+AgentSlot is a pre-1.0 foundation. `v0.1.10` is the current validation release
+and is intended to be consumed by real Agent projects. It adds checked model
+stream lifecycles, portable Executor conformance, durable Run termination,
+independent token counting, controlled Loop actions, late-bound credentials, trusted
 Workspace boundaries, bounded Tool results, durable Artifact and Workspace
 references, safe Session history access, explicit project generation, and
 remote gRPC/ACP Gateway channels. It is not a
@@ -99,7 +100,8 @@ new semantic version.
 All implemented public boundaries remain at least `Contracted`.
 `model.token-counter` is Contracted and independently replaceable from
 `model.executor`. `session.store` is `Conformant` against the exact `v0.0.10`
-contract; no ecosystem is yet `Proven`.
+contract; `model.executor` is `Conformant` against `model.executor/v1`.
+No ecosystem is yet `Proven`.
 
 ## Generate an explicit Agent project
 
@@ -107,7 +109,7 @@ A released `agentslot` binary pins its own exact AgentSlot version. A source
 checkout must supply the release explicitly:
 
 ```bash
-go run ./cmd/agentslot init --agentslot-version v0.1.6 ./my-agent
+go run ./cmd/agentslot init --agentslot-version v0.1.10 ./my-agent
 ```
 
 An interactive terminal selects a preset and collects only non-secret provider,
@@ -353,6 +355,10 @@ for the agent architecture. It currently maps runtime, model, tools, context,
 history, memory, execution, policy, multi-agent workflow, gateway, billing, and
 operations ecosystems.
 
+The framework-side requirements for the next reliability work are defined in
+the [AgentSlot 运行可靠性设计](docs/reliability/README.zh-CN.md), with separate
+designs for Session/Runtime consistency and the Model execution boundary.
+
 A runnable standard LLM agent requires exactly one AgentLoop, exactly one
 SessionStore, exactly one ModelExecutor, and at least one GatewayChannel. The
 fixed SessionManager, AgentRuntime, and in-process Gateway are supplied by the
@@ -420,7 +426,11 @@ The `session` package includes a reference `MemoryStore`; the standard framework
 constructs its fixed SessionManager over the installed Store and the
 Application default model. Together they implement append-only History facts, Context, Queue, RunJournal,
 SessionModelConfig inheritance, Run lifecycle facts, revision/CAS commits, and
-the basic crash recovery transition. These are development and
+the basic crash recovery transition. Journal identity compares tool arguments
+by exact JSON value rather than serialization bytes, and duplicate object
+members are rejected before admission. A Runtime returns to idle after recovery
+only when the durable Run has a unique terminal fact; otherwise it fails closed
+for explicit resume. These are development and
 contract-reference implementations, not a production database; production
 storage remains a replaceable `session.store` Slot. Development
 applications can explicitly install `session.NewMemoryModule`; importing the
@@ -582,6 +592,11 @@ gofmt -w .
 go build ./...
 go vet ./...
 ```
+
+Before a reliability-sensitive release, run `scripts/reliability-gate.sh`.
+It executes the deterministic FileStore fault matrix and the complete
+race-enabled test, vet, and build gates without Provider credentials or
+network access. `scripts/reliability-gate.sh --list` prints the frozen stages.
 
 Use the standard component map and exported Go documentation as the public
 reference for the composition model.

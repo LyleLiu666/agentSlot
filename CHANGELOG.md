@@ -4,6 +4,58 @@ This file records published AgentSlot releases. The project is pre-1.0: a
 validation release is usable through Go modules, but its public API may change
 when real consumers expose a flawed boundary.
 
+## v0.1.10 - 2026-08-29
+
+### Fixed
+
+- Context compaction now retains the latest opaque model continuation from the
+  active Run while allowing older continuations from that Run to be removed.
+  Long tool-using runs can therefore compact history without either losing the
+  provider continuation required for the next turn or retaining every prior
+  continuation indefinitely.
+
+## v0.1.9 - 2026-08-28
+
+### Fixed
+
+- FileStore persistence now rejects short writes, syncs the containing
+  directory after atomic replacement, and preserves an idempotently observable
+  committed revision when a post-rename durability check fails.
+
+## v0.1.8 - 2026-08-28
+
+### Added
+
+- Added `model.StreamState` and the reusable `model.executor/v1` black-box
+  conformance suite. Runtime and goal evaluation now reject incomplete,
+  cross-attempt, and invalid Completion streams before any assistant message or
+  tool action becomes durable; conformance also rejects post-terminal events.
+- Added provider-neutral `RunTermination` facts with finite source, kind, code,
+  and bounded safe-message fields. New failed, interrupted, and canceled Run
+  commits require a termination; old Session files without one remain readable.
+
+### Compatibility and maturity
+
+- Retryability and Tool effect state remain derived product/runtime policy and
+  are not persisted in `RunTermination`; Provider wire details remain private
+  to Executors and adapters.
+- `model.executor` is now Conformant against `model.executor/v1`, with fake and
+  reference OpenAI-compatible coverage. It remains below Proven until an
+  independent production implementation and real replacement evidence exist.
+
+## v0.1.7 - 2026-08-28
+
+### Fixed
+
+- Tool-call arguments now use exact JSON value semantics across Journal state
+  transitions. Object order, insignificant whitespace, equivalent escapes, and
+  equal number forms survive FileStore reopen without changing call identity;
+  ambiguous duplicate object members are rejected before admission.
+- A Runtime recovering after a failed Run commit returns to idle only when the
+  durable Session is idle and the original Run has exactly one start and one
+  terminal fact. Running or inconsistent recovered snapshots now fail closed
+  for explicit resume instead of exposing a false idle state.
+
 ## v0.1.6 - 2026-08-27
 
 ### Changed

@@ -29,10 +29,38 @@ const (
 // standard architecture still permits only one process to execute a Session;
 // FileStore does not pretend to provide a distributed execution lease.
 type FileStore struct {
-	mu        sync.Mutex
-	directory string
-	opened    bool
-	list      sessionListIndex
+	mu          sync.Mutex
+	directory   string
+	opened      bool
+	list        sessionListIndex
+	persistence filePersistence
+}
+
+// filePersistence is deliberately private. It gives deterministic fault tests
+// control over the crash-safety boundary without turning filesystem mechanics
+// into a public SessionStore capability or product configuration surface.
+type filePersistence struct {
+	createTemp    func(string, string) (*os.File, error)
+	write         func(*os.File, []byte) (int, error)
+	syncFile      func(*os.File) error
+	closeFile     func(*os.File) error
+	rename        func(string, string) error
+	remove        func(string) error
+	openDirectory func(string) (*os.File, error)
+	syncDirectory func(*os.File) error
+}
+
+func defaultFilePersistence() filePersistence {
+	return filePersistence{
+		createTemp:    os.CreateTemp,
+		write:         func(file *os.File, data []byte) (int, error) { return file.Write(data) },
+		syncFile:      func(file *os.File) error { return file.Sync() },
+		closeFile:     func(file *os.File) error { return file.Close() },
+		rename:        os.Rename,
+		remove:        os.Remove,
+		openDirectory: os.Open,
+		syncDirectory: func(directory *os.File) error { return directory.Sync() },
+	}
 }
 
 var _ SessionStore = (*FileStore)(nil)
@@ -48,7 +76,7 @@ func NewFileStore(directory string) (*FileStore, error) {
 	if err != nil {
 		return nil, agent.NewError(agent.ErrorInvalidInput, "session.file_store", "cannot resolve storage directory", err)
 	}
-	return &FileStore{directory: absolute}, nil
+	return &FileStore{directory: absolute, persistence: defaultFilePersistence()}, nil
 }
 
 func (s *FileStore) Open(ctx context.Context) error {
@@ -385,43 +413,47 @@ func (s *FileStore) persistLocked(ctx context.Context, path string, document fil
 	if err != nil {
 		return agent.NewError(agent.ErrorInternal, "session.file_store.persist", "cannot encode session aggregate", err)
 	}
-	temporary, err := os.CreateTemp(s.directory, ".agentslot-session-*.tmp")
+	temporary, err := s.persistence.createTemp(s.directory, ".agentslot-session-*.tmp")
 	if err != nil {
 		return agent.NewError(agent.ErrorUnavailable, "session.file_store.persist", "cannot create temporary session file", err)
 	}
 	temporaryPath := temporary.Name()
 	keep := false
 	defer func() {
-		_ = temporary.Close()
+		_ = s.persistence.closeFile(temporary)
 		if !keep {
-			_ = os.Remove(temporaryPath)
+			_ = s.persistence.remove(temporaryPath)
 		}
 	}()
 	if err := temporary.Chmod(0o600); err != nil {
 		return agent.NewError(agent.ErrorUnavailable, "session.file_store.persist", "cannot secure temporary session file", err)
 	}
-	if _, err := temporary.Write(data); err != nil {
-		return agent.NewError(agent.ErrorUnavailable, "session.file_store.persist", "cannot write temporary session file", err)
+	written, writeErr := s.persistence.write(temporary, data)
+	if written != len(data) || writeErr != nil {
+		if written != len(data) {
+			writeErr = errors.Join(writeErr, io.ErrShortWrite)
+		}
+		return agent.NewError(agent.ErrorUnavailable, "session.file_store.persist", "cannot write complete temporary session file", writeErr)
 	}
-	if err := temporary.Sync(); err != nil {
+	if err := s.persistence.syncFile(temporary); err != nil {
 		return agent.NewError(agent.ErrorUnavailable, "session.file_store.persist", "cannot sync temporary session file", err)
 	}
-	if err := temporary.Close(); err != nil {
+	if err := s.persistence.closeFile(temporary); err != nil {
 		return agent.NewError(agent.ErrorUnavailable, "session.file_store.persist", "cannot close temporary session file", err)
 	}
 	if err := contextErr(ctx, "session.file_store.persist"); err != nil {
 		return err
 	}
-	if err := os.Rename(temporaryPath, path); err != nil {
+	if err := s.persistence.rename(temporaryPath, path); err != nil {
 		return agent.NewError(agent.ErrorUnavailable, "session.file_store.persist", "cannot atomically replace session file", err)
 	}
 	keep = true
-	directory, err := os.Open(s.directory)
+	directory, err := s.persistence.openDirectory(s.directory)
 	if err != nil {
 		return agent.NewError(agent.ErrorUnavailable, "session.file_store.persist", "cannot open storage directory for sync", err)
 	}
-	syncErr := directory.Sync()
-	closeErr := directory.Close()
+	syncErr := s.persistence.syncDirectory(directory)
+	closeErr := s.persistence.closeFile(directory)
 	if syncErr != nil || closeErr != nil {
 		return agent.NewError(agent.ErrorUnavailable, "session.file_store.persist", "cannot sync storage directory", errors.Join(syncErr, closeErr))
 	}

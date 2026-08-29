@@ -84,12 +84,13 @@ func (e *ModelEvaluator) Evaluate(ctx context.Context, request EvaluationRequest
 		return Evaluation{}, errors.New("goal: model evaluator returned a nil stream")
 	}
 	defer stream.Close()
+	streamState := model.StreamState{}
 	for {
 		event, err := stream.Recv(ctx)
 		if err != nil {
-			return Evaluation{}, err
+			return Evaluation{}, streamState.End(err)
 		}
-		if err := event.Validate(); err != nil {
+		if err := streamState.Accept(event); err != nil {
 			return Evaluation{}, err
 		}
 		switch event.Kind {
