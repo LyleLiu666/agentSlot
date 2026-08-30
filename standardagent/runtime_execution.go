@@ -69,7 +69,11 @@ func (r *runtimeInstance) restorePreparedRun(snapshot session.Snapshot) error {
 		step = entry.StepID
 		calls = append(calls, *entry.ToolCall)
 	}
-	if len(calls) == 0 || !step.Valid() {
+	completionEntries := unsettledCompletionEntries(snapshot.ExtensionJournal, snapshot.ActiveRunID)
+	if len(calls) > 0 && len(completionEntries) > 0 {
+		return agent.NewError(agent.ErrorInternal, "standardagent.restore", "running Session has conflicting resumable work", nil)
+	}
+	if (len(calls) == 0 || !step.Valid()) && len(completionEntries) == 0 {
 		return agent.NewError(agent.ErrorInternal, "standardagent.restore", "running Session has no resumable prepared ToolCall", nil)
 	}
 	var started *session.RunFact
@@ -91,9 +95,26 @@ func (r *runtimeInstance) restorePreparedRun(snapshot session.Snapshot) error {
 		id: snapshot.ActiveRunID, config: cloneRuntimeConfig(started.ModelConfig), configRevision: started.ConfigRevision,
 		ctx: runContext, cancel: cancel, done: make(chan struct{}), prepared: make(chan struct{}), usedTokens: usedTokens,
 	}
+	var completion *completionOccurrence
+	if len(completionEntries) > 0 {
+		var restoreErr error
+		completion, restoreErr = r.restoreCompletionOccurrence(snapshot, run, completionEntries)
+		if restoreErr != nil {
+			completion = &completionOccurrence{
+				entries: completionEntries,
+				recoveryFailure: &completionGateRunError{
+					code: "completion_gate_definition_mismatch", reason: "prepared completion gate does not match the current application", cause: restoreErr,
+				},
+			}
+		}
+	}
 	r.activateLocked(run)
 	run.signalPrepared(snapshot.Revision)
-	go r.runLoopPrepared(run, step, calls)
+	if completion != nil {
+		go r.runCompletionRecovery(run, completion)
+	} else {
+		go r.runLoopPrepared(run, step, calls)
+	}
 	return nil
 }
 
@@ -537,6 +558,9 @@ func (r *runtimeInstance) requestModel(run *activeRun, step agent.StepID) (stepO
 				return stepCanceled, "", nil, canceledRunTermination()
 			}
 			if err != nil {
+				if termination := completionGateTermination(err); termination != nil {
+					return stepFailed, "", nil, termination
+				}
 				return stepFailed, "", nil, terminationFromError(session.TerminationRuntime, agent.CodeRuntimeFailed, err)
 			}
 			if continued {
@@ -798,33 +822,71 @@ func (r *runtimeInstance) commitCompletion(run *activeRun, step agent.StepID, me
 }
 
 func (r *runtimeInstance) continueAfterCompletion(run *activeRun) (agent.StepID, bool, bool, error) {
+	for {
+		next, continued, canceled, retry, err := r.continueAfterCompletionOnce(run)
+		if !retry || err != nil || canceled {
+			return next, continued, canceled, err
+		}
+	}
+}
+
+func (r *runtimeInstance) continueAfterCompletionOnce(run *activeRun) (agent.StepID, bool, bool, bool, error) {
 	snapshot, err := r.session.View(run.ctx)
 	if err != nil {
-		return "", false, errors.Is(err, context.Canceled), err
+		return "", false, errors.Is(err, context.Canceled), false, err
 	}
 	proposals := make([]agent.MessageInput, 0)
+	var goalCandidate *goal.DecisionRecord
+	goalHandled := false
 	steers := pendingByDelivery(snapshot.Queue, session.DeliverySteer)
 	if len(steers) == 0 {
-		goalProposals, goalHandled, goalErr := r.evaluateGoalCompletion(run, snapshot)
+		goalProposals, handled, candidate, goalErr := r.evaluateGoalCompletion(run, snapshot)
 		if goalErr != nil {
-			return "", false, false, goalErr
+			return "", false, false, false, goalErr
 		}
+		goalHandled, goalCandidate = handled, candidate
 		proposals = append(proposals, goalProposals...)
-		if !goalHandled {
-			view := hook.RunCompleteView{
-				SessionID: r.id(), RunID: run.id, Revision: snapshot.Revision,
-				ModelConfig: cloneRuntimeConfig(run.config), Messages: cloneHookMessages(snapshot.History),
+		if !goalHandled || goalCandidate != nil {
+			occurrence, superseded, prepareErr := r.prepareCompletionOccurrence(run, goalCandidate)
+			if prepareErr != nil {
+				return "", false, errors.Is(prepareErr, context.Canceled), false, prepareErr
 			}
-			for _, candidate := range r.components.hooks {
-				candidateView := view
-				candidateView.Messages = cloneAgentMessages(view.Messages)
-				proposal, hookErr := candidate.BeforeRunComplete(run.ctx, candidateView)
-				if hookErr != nil {
-					continue
+			if !superseded && occurrence != nil {
+				continued, gateSuperseded, retryGoal, gateErr := r.executeCompletionOccurrence(run, occurrence)
+				if gateErr != nil {
+					return "", false, errors.Is(gateErr, context.Canceled), false, gateErr
 				}
-				for _, input := range proposal.Messages {
-					if input.Valid() {
-						proposals = append(proposals, agent.MessageInput{Parts: cloneRuntimeParts(input.Parts)})
+				if retryGoal {
+					return "", false, false, true, nil
+				}
+				if continued {
+					return occurrence.nextStep, true, false, false, nil
+				}
+				superseded = gateSuperseded
+			}
+			if !superseded && goalCandidate != nil && occurrence == nil {
+				var retryGoal bool
+				superseded, retryGoal, goalErr = r.finalizeGoalCompletionCandidate(run, *goalCandidate)
+				if goalErr != nil || retryGoal {
+					return "", false, false, retryGoal, goalErr
+				}
+			}
+			if !superseded && goalCandidate == nil {
+				view := hook.RunCompleteView{
+					SessionID: r.id(), RunID: run.id, Revision: snapshot.Revision,
+					ModelConfig: cloneRuntimeConfig(run.config), Messages: cloneHookMessages(snapshot.History),
+				}
+				for _, candidate := range r.components.hooks {
+					candidateView := view
+					candidateView.Messages = cloneAgentMessages(view.Messages)
+					proposal, hookErr := candidate.BeforeRunComplete(run.ctx, candidateView)
+					if hookErr != nil {
+						continue
+					}
+					for _, input := range proposal.Messages {
+						if input.Valid() {
+							proposals = append(proposals, agent.MessageInput{Parts: cloneRuntimeParts(input.Parts)})
+						}
 					}
 				}
 			}
@@ -834,11 +896,11 @@ func (r *runtimeInstance) continueAfterCompletion(run *activeRun) (agent.StepID,
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.active != run || run.cancelRequested || r.closing {
-		return "", false, true, nil
+		return "", false, true, false, nil
 	}
 	snapshot, err = r.viewLocked(context.Background())
 	if err != nil {
-		return "", false, false, err
+		return "", false, false, false, err
 	}
 	steers = pendingByDelivery(snapshot.Queue, session.DeliverySteer)
 	if len(steers) > 0 {
@@ -847,7 +909,7 @@ func (r *runtimeInstance) continueAfterCompletion(run *activeRun) (agent.StepID,
 		proposals = nil
 	}
 	if len(steers) == 0 && len(proposals) == 0 {
-		return "", false, false, nil
+		return "", false, false, false, nil
 	}
 	nextStep := agent.StepID(r.nextID("step"))
 	changes := make([]session.Change, 0, len(steers)*3+len(proposals)*4)
@@ -864,19 +926,41 @@ func (r *runtimeInstance) continueAfterCompletion(run *activeRun) (agent.StepID,
 		changes = r.appendInputConsumption(changes, snapshot, item, run.id, nextStep)
 	}
 	_, err = r.commitLocked(context.Background(), snapshot.Revision, "follow-on", changes)
-	return nextStep, err == nil, false, err
+	return nextStep, err == nil, false, false, err
 }
 
-func (r *runtimeInstance) evaluateGoalCompletion(run *activeRun, snapshot session.Snapshot) ([]agent.MessageInput, bool, error) {
+func (r *runtimeInstance) finalizeGoalCompletionCandidate(run *activeRun, record goal.DecisionRecord) (superseded, retry bool, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active != run || run.cancelRequested || r.closing {
+		return false, false, context.Canceled
+	}
+	snapshot, err := r.viewLocked(context.Background())
+	if err != nil {
+		return false, false, err
+	}
+	if len(pendingByDelivery(snapshot.Queue, session.DeliverySteer)) > 0 {
+		return true, false, nil
+	}
+	if err := recordGoalDecisionIdempotently(context.Background(), r.components.goalStore, record); err != nil {
+		if errors.Is(err, goal.ErrVersionConflict) {
+			return false, true, nil
+		}
+		return false, false, fmt.Errorf("standardagent: record goal decision: %w", err)
+	}
+	return false, false, nil
+}
+
+func (r *runtimeInstance) evaluateGoalCompletion(run *activeRun, snapshot session.Snapshot) ([]agent.MessageInput, bool, *goal.DecisionRecord, error) {
 	if r.components.goalStore == nil || r.components.goalEvaluator == nil {
-		return nil, false, nil
+		return nil, false, nil, nil
 	}
 	current, ok, err := r.components.goalStore.Current(run.ctx, r.id())
 	if err != nil {
-		return nil, true, fmt.Errorf("standardagent: load current goal: %w", err)
+		return nil, true, nil, fmt.Errorf("standardagent: load current goal: %w", err)
 	}
 	if !ok || current.Status != goal.StatusActive {
-		return nil, false, nil
+		return nil, false, nil, nil
 	}
 	evaluationStep := goalEvaluationStep(snapshot, run.id)
 	record := goal.DecisionRecord{
@@ -898,24 +982,39 @@ func (r *runtimeInstance) evaluateGoalCompletion(run *activeRun, snapshot sessio
 	}
 	latest, err := r.session.View(run.ctx)
 	if err != nil {
-		return nil, true, fmt.Errorf("standardagent: verify goal decision revision: %w", err)
+		return nil, true, nil, fmt.Errorf("standardagent: verify goal decision revision: %w", err)
 	}
 	if len(pendingByDelivery(latest.Queue, session.DeliverySteer)) > 0 {
 		// This View is the linearization point for completion evaluation. A user
 		// steer already accepted while the Evaluator was running invalidates the
 		// stale decision; the caller will consume that steer as the next step.
-		return nil, true, nil
+		return nil, true, nil, nil
 	}
-	if _, err := r.components.goalStore.RecordDecision(context.WithoutCancel(run.ctx), record); err != nil {
+	if record.Evaluation.Decision == goal.DecisionDone {
+		return nil, true, &record, nil
+	}
+	if err := recordGoalDecisionIdempotently(context.WithoutCancel(run.ctx), r.components.goalStore, record); err != nil {
 		if errors.Is(err, goal.ErrVersionConflict) {
-			return nil, true, nil
+			return nil, true, nil, nil
 		}
-		return nil, true, fmt.Errorf("standardagent: record goal decision: %w", err)
+		return nil, true, nil, fmt.Errorf("standardagent: record goal decision: %w", err)
 	}
 	if record.Evaluation.Decision != goal.DecisionContinue {
-		return nil, true, nil
+		return nil, true, nil, nil
 	}
-	return []agent.MessageInput{{Parts: cloneRuntimeParts(record.Evaluation.NextInstruction.Parts)}}, true, nil
+	return []agent.MessageInput{{Parts: cloneRuntimeParts(record.Evaluation.NextInstruction.Parts)}}, true, nil, nil
+}
+
+func recordGoalDecisionIdempotently(ctx context.Context, store goal.Store, record goal.DecisionRecord) error {
+	if _, err := store.RecordDecision(ctx, record); err != nil {
+		if _, retryErr := store.RecordDecision(ctx, record); retryErr != nil {
+			if errors.Is(err, goal.ErrVersionConflict) || errors.Is(retryErr, goal.ErrVersionConflict) {
+				return goal.ErrVersionConflict
+			}
+			return errors.Join(err, retryErr)
+		}
+	}
+	return nil
 }
 
 func goalEvaluationStep(snapshot session.Snapshot, runID agent.RunID) agent.StepID {

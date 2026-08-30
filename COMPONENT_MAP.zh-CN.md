@@ -24,9 +24,9 @@
 
 | 资产 | 数量 |
 | --- | ---: |
-| 已映射的标准组件生态位 | 44 |
+| 已映射的标准组件生态位 | 45 |
 | 已标准化的领域词汇 | 9 |
-| 已定义契约的 AgentSlot 自有领域接口 | 35 |
+| 已定义契约的 AgentSlot 自有领域接口 | 36 |
 | 通过一致性验证的组件生态位 | 1 |
 | 已由独立实现证明的组件生态位 | 0 |
 | 已进入标准装配的组件生态位 | 0 |
@@ -168,6 +168,7 @@ Runtime 与选中的 AgentLoop 不按具体类型分支即可消费它们。
 | `hook.input_gate` | `InputGate` | `Chain` | 可选 | 在 Send、Steer 或排队输入编辑生效前接受或拒绝，并可为之后认领未改写输入的精确 Run/Step 提供有界上下文。 | 已定义契约 |
 | `hook.tool_preflight` | `ToolPreflight` | `Chain` | 可选 | 在 ToolCall prepared 之后、Policy 授权或执行之前提供持久、有序的允许、拒绝或审批建议；不能替换调用或绕过 Policy。 | 已定义契约 |
 | `hook.tool_result` | `ToolResultHook` | `Chain` | 可选 | 只处理确实进入执行并形成 succeeded/failed 的确定 ToolResult，可向精确下一 Step 提供有界上下文，但不能改写 ToolResult。 | 已定义契约 |
+| `hook.completion_gate` | `CompletionGate` | `Chain` | 可选 | 在 Run 自然完成边界给出持久、有序的完成或继续决定；continuation context 只进入预分配的下一 Step，用户 steer、取消、Goal 版本和既有 Run 预算仍由 Runtime 独占。 | 已定义契约 |
 | `goal.store` | `goal.Store` | `One` | 可选；与 `goal.evaluator` 同时安装 | 为每个 Session 保存一份受 CAS 保护的目标生命周期，与仅追加的会话 History 分离。 | 已定义契约 |
 | `goal.evaluator` | `goal.Evaluator` | `One` | 可选；与 `goal.store` 同时安装 | 在本来准备结束的 Run 关闭前，给出结构化的继续、阻塞或完成判断。 | 已定义契约 |
 | `session.commit.observer` | `SessionCommitObserver` | `Chain` | 可选 | 异步观察已经生效的 Session revision 及其新增 History sequence 范围；错误和 panic 不能回滚提交。 | 已定义契约 |

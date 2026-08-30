@@ -66,6 +66,7 @@ func (m *runtimeModule) RequiredSlots() []agentslot.Requirement {
 		agentslot.OptionalChain(hook.InputGateSlot),
 		agentslot.OptionalChain(hook.ToolPreflightSlot),
 		agentslot.OptionalChain(hook.ToolResultHookSlot),
+		agentslot.OptionalChain(hook.CompletionGateSlot),
 		agentslot.OptionalOne(goal.StoreSlot),
 		agentslot.OptionalOne(goal.EvaluatorSlot),
 		agentslot.OptionalChain(session.CommitObserverSlot),
@@ -250,6 +251,26 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 					hook: resultHook, descriptor: descriptor, scope: cloneToolResultScope(scope),
 				})
 			}
+			completionGates, err := agentslot.ResolveChain(resolver, hook.CompletionGateSlot)
+			if err != nil {
+				return nil, err
+			}
+			frozenCompletionGates := make([]completionGateBinding, 0, len(completionGates))
+			completionGateKeys := make(map[string]struct{}, len(completionGates))
+			for _, gate := range completionGates {
+				if isNilCompletionGate(gate) {
+					return nil, fmt.Errorf("standardagent: CompletionGate contribution is nil")
+				}
+				descriptor := gate.Descriptor()
+				if err := descriptor.Validate(); err != nil {
+					return nil, err
+				}
+				if _, duplicate := completionGateKeys[descriptor.Key]; duplicate {
+					return nil, fmt.Errorf("standardagent: CompletionGate descriptor key %q is duplicated", descriptor.Key)
+				}
+				completionGateKeys[descriptor.Key] = struct{}{}
+				frozenCompletionGates = append(frozenCompletionGates, completionGateBinding{gate: gate, descriptor: descriptor})
+			}
 			goalStore, hasGoalStore, err := agentslot.ResolveOptionalOne(resolver, goal.StoreSlot)
 			if err != nil {
 				return nil, err
@@ -291,7 +312,8 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 				commands: commands, commandDescriptors: commandDescriptors,
 				tools: selectedTools, dispatcher: dispatcher, catalogs: catalogs, config: cloneAgentRuntimeConfig(m.config), sources: sources,
 				compactor: compactor, hooks: hooks, inputGates: frozenInputGates, toolPreflights: frozenToolPreflights, toolResultHooks: frozenToolResultHooks,
-				goalStore: goalStore, goalEvaluator: goalEvaluator, commitObservers: commitObservers,
+				completionGates: frozenCompletionGates,
+				goalStore:       goalStore, goalEvaluator: goalEvaluator, commitObservers: commitObservers,
 				traces: traces, metrics: metrics, audits: audits, usages: usages, workspaceManager: workspaceManager,
 			})
 			m.state = state
@@ -339,6 +361,19 @@ func isNilToolResultHook(resultHook hook.ToolResultHook) bool {
 	}
 }
 
+func isNilCompletionGate(gate hook.CompletionGate) bool {
+	if gate == nil {
+		return true
+	}
+	value := reflect.ValueOf(gate)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
 func (m *runtimeModule) Start(ctx stdcontext.Context) error {
 	if m.state == nil {
 		return fmt.Errorf("standardagent: runtime state was not constructed")
@@ -377,6 +412,7 @@ type runtimeDependencies struct {
 	inputGates         []inputGateBinding
 	toolPreflights     []toolPreflightBinding
 	toolResultHooks    []toolResultHookBinding
+	completionGates    []completionGateBinding
 	goalStore          goal.Store
 	goalEvaluator      goal.Evaluator
 	commitObservers    []session.SessionCommitObserver
@@ -403,6 +439,7 @@ type runtimeComponents struct {
 	inputGates       []inputGateBinding
 	toolPreflights   []toolPreflightBinding
 	toolResultHooks  []toolResultHookBinding
+	completionGates  []completionGateBinding
 	goalStore        goal.Store
 	goalEvaluator    goal.Evaluator
 	commitObservers  []session.SessionCommitObserver
@@ -428,6 +465,7 @@ func (d runtimeDependencies) runtimeComponents(observations *observationHub) *ru
 		inputGates:       append([]inputGateBinding(nil), d.inputGates...),
 		toolPreflights:   append([]toolPreflightBinding(nil), d.toolPreflights...),
 		toolResultHooks:  append([]toolResultHookBinding(nil), d.toolResultHooks...),
+		completionGates:  append([]completionGateBinding(nil), d.completionGates...),
 		goalStore:        d.goalStore,
 		goalEvaluator:    d.goalEvaluator,
 		commitObservers:  append([]session.SessionCommitObserver(nil), d.commitObservers...),

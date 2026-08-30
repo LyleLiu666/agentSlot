@@ -33,6 +33,8 @@ type ExtensionJournalEntry struct {
 	TargetStepID agent.StepID `json:",omitempty"`
 	MessageID    agent.MessageID
 	ToolCallID   agent.ToolCallID
+	GoalID       string `json:",omitempty"`
+	GoalVersion  uint64 `json:",omitempty"`
 
 	InputDigest      string
 	PreparedRevision agent.Revision `json:",omitempty"`
@@ -64,8 +66,8 @@ func (e ExtensionJournalEntry) Validate(sessionID agent.SessionID) error {
 	if err := e.validateSubject(); err != nil {
 		return err
 	}
-	if (e.Boundary == hook.BoundaryToolPreflight || e.Boundary == hook.BoundaryToolResult) && e.PreparedRevision == 0 {
-		return fmt.Errorf("session: tool extension requires its prepared revision")
+	if (e.Boundary == hook.BoundaryToolPreflight || e.Boundary == hook.BoundaryToolResult || e.Boundary == hook.BoundaryCompletion) && e.PreparedRevision == 0 {
+		return fmt.Errorf("session: execution-boundary extension requires its prepared revision")
 	}
 	if e.PreparedAt.IsZero() {
 		return fmt.Errorf("session: extension journal requires prepared time")
@@ -93,26 +95,28 @@ func (e ExtensionJournalEntry) validateSubject() error {
 	}
 	switch e.Boundary {
 	case hook.BoundaryInputGate:
-		if !e.MessageID.Valid() || e.RunID != "" || e.StepID != "" || e.TargetStepID != "" || e.ToolCallID != "" {
+		if !e.MessageID.Valid() || e.RunID != "" || e.StepID != "" || e.TargetStepID != "" || e.ToolCallID != "" || e.GoalID != "" || e.GoalVersion != 0 {
 			return fmt.Errorf("session: input gate subject is invalid")
 		}
 	case hook.BoundaryToolPreflight:
-		if !e.RunID.Valid() || !e.StepID.Valid() || !e.ToolCallID.Valid() {
+		if !e.RunID.Valid() || !e.StepID.Valid() || !e.ToolCallID.Valid() || e.GoalID != "" || e.GoalVersion != 0 {
 			return fmt.Errorf("session: tool extension subject is incomplete")
 		}
 		if e.TargetStepID != "" {
 			return fmt.Errorf("session: tool preflight cannot target a later step")
 		}
 	case hook.BoundaryToolResult:
-		if !e.RunID.Valid() || !e.StepID.Valid() || !e.TargetStepID.Valid() || !e.ToolCallID.Valid() || e.TargetStepID == e.StepID {
+		if !e.RunID.Valid() || !e.StepID.Valid() || !e.TargetStepID.Valid() || !e.ToolCallID.Valid() || e.TargetStepID == e.StepID || e.GoalID != "" || e.GoalVersion != 0 {
 			return fmt.Errorf("session: tool result extension subject is incomplete")
 		}
 	case hook.BoundaryCompletion:
-		if !e.RunID.Valid() || e.ToolCallID != "" || e.TargetStepID != "" {
+		if !e.RunID.Valid() || !e.StepID.Valid() || !e.TargetStepID.Valid() || e.TargetStepID == e.StepID || !e.MessageID.Valid() || e.ToolCallID != "" ||
+			((e.GoalID == "") != (e.GoalVersion == 0)) ||
+			(e.GoalID != "" && (hook.CompletionGoalCandidate{GoalID: e.GoalID, Version: e.GoalVersion}).Validate() != nil) {
 			return fmt.Errorf("session: completion subject is invalid")
 		}
 	case hook.BoundarySessionLifecycle:
-		if e.RunID != "" || e.StepID != "" || e.TargetStepID != "" || e.MessageID != "" || e.ToolCallID != "" {
+		if e.RunID != "" || e.StepID != "" || e.TargetStepID != "" || e.MessageID != "" || e.ToolCallID != "" || e.GoalID != "" || e.GoalVersion != 0 {
 			return fmt.Errorf("session: lifecycle subject must be Session-scoped")
 		}
 	}
@@ -198,6 +202,14 @@ func (e ExtensionJournalEntry) validateContext(sessionID agent.SessionID) error 
 		}
 		if err := validateExtensionContextInputs(e.ContextInputs, sessionID); err != nil {
 			return err
+		}
+		if e.Boundary == hook.BoundaryToolResult || e.Boundary == hook.BoundaryCompletion {
+			for _, input := range e.ContextInputs {
+				if input.Message == nil || input.SystemPrompt != nil || input.ToolCall != nil || input.ToolResult != nil ||
+					input.Message.RunID != e.RunID || input.Message.StepID != e.TargetStepID || input.Message.Role != agent.RoleUser {
+					return fmt.Errorf("session: extension context is not bound to its exact target step")
+				}
+			}
 		}
 		fingerprint, err := hook.FingerprintTypedInput(e.ContextInputs)
 		if err != nil || fingerprint.Digest != e.ContextDigest || fingerprint.Bytes != e.ContextBytes || fingerprint.Bytes > hook.MaxContextBytes {
@@ -343,7 +355,7 @@ func sameExtensionIdentity(left, right ExtensionJournalEntry) bool {
 	return left.InvocationID == right.InvocationID && left.Sequence == right.Sequence &&
 		left.Descriptor == right.Descriptor && left.Boundary == right.Boundary &&
 		left.SessionID == right.SessionID && left.RunID == right.RunID && left.StepID == right.StepID && left.TargetStepID == right.TargetStepID &&
-		left.MessageID == right.MessageID && left.ToolCallID == right.ToolCallID &&
+		left.MessageID == right.MessageID && left.ToolCallID == right.ToolCallID && left.GoalID == right.GoalID && left.GoalVersion == right.GoalVersion &&
 		left.InputDigest == right.InputDigest && left.PreparedRevision == right.PreparedRevision && left.PreparedAt.Equal(right.PreparedAt)
 }
 

@@ -150,6 +150,10 @@ type Store interface {
 	Current(context.Context, agent.SessionID) (Goal, bool, error)
 	Set(context.Context, SetRequest) (Goal, error)
 	ChangeStatus(context.Context, StateChangeRequest) (Goal, error)
+	// RecordDecision is idempotent by DecisionRecord.ID: repeating an exactly
+	// equal record returns its original result, while reusing the ID for a
+	// different record fails. Runtime relies on this to resolve uncertain
+	// completion commits without applying Goal progress twice.
 	RecordDecision(context.Context, DecisionRecord) (Goal, error)
 }
 

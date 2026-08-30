@@ -359,7 +359,7 @@ The framework-side requirements for the next reliability work are defined in
 the [AgentSlot 运行可靠性设计](docs/reliability/README.zh-CN.md), with separate
 designs for Session/Runtime consistency and the Model execution boundary.
 The [Hook 扩展边界设计](docs/hook-extension-boundary.zh-CN.md) distinguishes the
-narrow legacy `agent.hook`, durable typed `hook.InputGate` / `hook.ToolPreflight` / `hook.ToolResultHook`
+narrow legacy `agent.hook`, durable typed `hook.InputGate` / `hook.ToolPreflight` / `hook.ToolResultHook` / `hook.CompletionGate`
 contracts, and a consuming product's user-configurable Hook system. It also
 defines the admission rules for future lifecycle seams.
 
@@ -559,7 +559,15 @@ Step only after the complete Post chain succeeds. Failures preserve the
 original ToolResult, discard partial context, interrupt before another model
 request, and never replay pending commands after recovery. With no
 ToolResultHook contribution the result path adds no extension state or extra
-commit. Trace, Metric, Audit, and Usage chains are passive, and
+commit. `hook.CompletionGate` owns the fail-closed natural-completion seam:
+ordered gates may complete or continue the same Run with one-shot context for
+a preallocated next Step. Accepted steer and cancellation supersede stale gate
+work; Goal continue/blocked decisions skip gates, while Goal done remains an
+uncommitted candidate until every gate completes. Applied continuation cycles
+are recovered from the journal without resetting Run token/attempt budgets.
+Prepared gates may resume only from matching durable input, pending gates are
+never replayed, and no-gate applications retain the legacy fast path. Trace,
+Metric, Audit, and Usage chains are passive, and
 [`observe/jsonlines`](observe/jsonlines) is an explicit
 default sink. [`session.FileStore`](session/file_store.go) is a crash-safe
 single-process persistent implementation. Sessions without extension

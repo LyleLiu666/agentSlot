@@ -36,7 +36,7 @@ typed Slot；AgentSlot 不提供一个携带任意 map、允许任意修改的�
 | 产品事件族 | 首选通用边界 | 当前状态 | 约束 |
 |---|---|---|---|
 | Run 停止前续跑 | `agent.hook` | 已有 | 只能追加输入；用户 steer 优先；续跑受 Run 预算限制 |
-| Run 停止前阻断或失败收敛 | `hook.CompletionGate` | 已设计、待实现 | 保留 legacy AgentHook；新 gate 的错误由 Runtime 收敛，不能静默当作完成 |
+| Run 停止前阻断或失败收敛 | `hook.CompletionGate` | 框架已实现 | 保留 legacy AgentHook；新 gate 的错误由 Runtime 收敛，不能静默当作完成 |
 | Tool 执行前 | `hook.ToolPreflight` → `policy.guard` / `approval.service` | 框架已实现 | Runtime 先持久化外部 preflight；结果再进入既有 Policy/Approval，allow 不能绕过 Guard；具名产品 adapter 仍属于组装仓库 |
 | Tool 成功或失败后被动处理 | `session.commit.observer` / Observation | 已有 | 只看已提交结果；失败不能改变业务提交 |
 | Tool 结果后同步追加模型上下文 | `hook.ToolResultHook` | 框架已实现 | ToolResult、terminal Journal、next Step 与 Post reservation 原子提交；追加内容成为 ContextContribution，不能改写原结果 |
@@ -241,6 +241,27 @@ ClientMessageID 仍是 correlation，不因引入 gate 变成幂等键。
   额外 commit 或 goroutine。
 - 相邻 Post invocation 使用“上一条 terminal + 下一条 pending”的单次原子提交；正常 `N` 条同步链路的
   journal 状态推进为 `N+2` 次而不是 `2N+1` 次，且 pending 仍先于外部调用发布。
+
+当前 `hook.CompletionGate` 的已实现边界如下：
+
+- Runtime 只在模型无 ToolCall、原本准备自然完成时建立 occurrence；accepted steer 先胜出。active Goal
+  的 continue/blocked 先按 Goal 合同收敛并跳过 Gate，done 只形成带版本的候选，所有 Gate 允许后才提交。
+- view 只暴露 Session/Run/来源 Step/预分配目标 Step、最后一条 assistant 的 provider-neutral parts、当前
+  Run token budget、已 applied follow-on 次数和可选 Goal candidate；Provider continuation、完整 History、
+  配置与写 Session 能力不进入 component。
+- `continue` 必须提供绑定精确 Run/目标 Step 的 user context；多个 Gate 按 Chain 顺序执行，任一 continue
+  使同一 Run 续跑，context 以独立 ContextContribution 追加一次，不改写 assistant History，也不重置
+  token、Attempt、取消或 Goal 预算。
+- Gate 执行期间到达的 steer 会 discard 自动 context 并 cancel 后续 prepared；Cancel 取消 Run。控制型
+  failure/panic/非法结果以 `TerminationExtension` 中断，不冒充 RunCompleted。
+- prepared 只有 descriptor 与从 durable assistant/Goal/预算事实重建的 input digest 完全一致时才恢复执行；
+  pending 恢复为 outcome_unknown 且绝不重放；terminal pending 只应用持久结果。定义缺失或变化 fail closed
+  并结算全部 entry。
+- 同一 completion chain 的相邻调用使用 terminal+next-pending 流水提交；无 Goal 的最后一条 terminal 与
+  effect/context 在同一个原子 commit 中完成，正常 `N` 条链路只需 `N+2` 次 journal 状态提交。Goal done
+  使用 terminal-pending → Goal CAS → effect-applied 的显式跨 Store 顺序，单次 apply 故障会从权威状态重试。
+- 无 CompletionGate contribution 时不创建 extension state、不增加 commit 或 goroutine，并保持 legacy
+  AgentHook 的 best-effort 兼容语义。具体产品的 follow-on 上限属于组装策略，框架提供可恢复计数而不猜默认值。
 
 Runtime coordinator 必须显式区分 create、resume、fork、summary；重复返回已打开 Runtime 不算再次 open。
 close 只来自明确 Gateway CloseSession，不由 View/Subscribe 断开或进程崩溃伪造。

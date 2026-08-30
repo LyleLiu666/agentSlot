@@ -857,7 +857,18 @@ func recoverAggregate(snapshot *Snapshot) (bool, error) {
 		entry.Status = JournalOutcomeUnknown
 		changed = true
 	}
-	if snapshot.RunState == RunRunning && !hasPrepared {
+	hasPreparedCompletion := false
+	for _, entry := range snapshot.ExtensionJournal {
+		if entry.Boundary != hook.BoundaryCompletion || entry.RunID != interruptedRunID {
+			continue
+		}
+		if entry.Status == hook.InvocationPrepared || (entry.Status.Terminal() && entry.EffectDisposition == hook.EffectPending) {
+			hasPreparedCompletion = true
+			break
+		}
+	}
+	hasRecoverableWork := hasPrepared || hasPreparedCompletion
+	if snapshot.RunState == RunRunning && !hasRecoverableWork {
 		if started, terminal := runFacts(snapshot.History, interruptedRunID); started != nil && terminal == nil {
 			interrupted := *started
 			interrupted.Kind = RunInterrupted
@@ -875,7 +886,7 @@ func recoverAggregate(snapshot *Snapshot) (bool, error) {
 	}
 	for index := range snapshot.Queue {
 		item := &snapshot.Queue[index]
-		if !interruptedRunID.Valid() || hasPrepared {
+		if !interruptedRunID.Valid() || hasRecoverableWork {
 			continue
 		}
 		if item.ClaimedBy == interruptedRunID {

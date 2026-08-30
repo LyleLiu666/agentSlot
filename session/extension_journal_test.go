@@ -2,6 +2,7 @@ package session_test
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -423,6 +424,61 @@ func TestExtensionRecoveryNeverReplaysPendingAndIsIdempotent(t *testing.T) {
 		}
 		if again.Revision != recovered.Revision || !reflect.DeepEqual(again.ExtensionJournal, recovered.ExtensionJournal) {
 			t.Fatalf("store %d repeated recovery changed terminal entry", index)
+		}
+	}
+}
+
+func TestCompletionRecoveryKeepsTheActiveRunUntilRuntimeSettlesTheGate(t *testing.T) {
+	file := openFileStore(t, t.TempDir())
+	t.Cleanup(func() { _ = file.Close(context.Background()) })
+	for storeIndex, store := range []session.SessionStore{session.NewMemoryStore(), file} {
+		for _, status := range []hook.InvocationStatus{hook.InvocationPrepared, hook.InvocationPending} {
+			sessionID := agent.SessionID(fmt.Sprintf("completion-store-recovery-%d-%s", storeIndex, status))
+			runID, stepID, targetStep := agent.RunID("run-completion"), agent.StepID("step-source"), agent.StepID("step-target")
+			started := session.RunFact{SessionID: sessionID, RunID: runID, Kind: session.RunStarted, ModelConfig: defaultConfig(), ConfigRevision: 1}
+			assistant := agent.Message{
+				ID: "message-completion", SessionID: sessionID, RunID: runID, StepID: stepID, Role: agent.RoleAssistant,
+				Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "candidate"}},
+			}
+			created, err := store.Create(context.Background(), session.NewSession{
+				Session: agent.Session{ID: sessionID, AgentID: "agent-1", WorkspaceID: "workspace-1"},
+				History: []session.HistoryFact{{Run: &started}, {Message: &assistant}}, ModelConfig: defaultConfig(),
+				RunState: session.RunRunning, ActiveRunID: runID,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			view := hook.CompletionView{
+				InvocationID: "completion-invocation", SessionID: sessionID, AgentID: "agent-1", WorkspaceID: "workspace-1",
+				Revision: created.Revision.Next(), RunID: runID, StepID: stepID, NextStepID: targetStep, LastAssistantMessage: assistant,
+			}
+			fingerprint, err := hook.FingerprintTypedInput(view)
+			if err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now().UTC()
+			entry := session.ExtensionJournalEntry{
+				InvocationID: view.InvocationID, Sequence: 1, Descriptor: hook.ExtensionDescriptor{Key: "completion.fixture", DefinitionDigest: "sha256:" + strings.Repeat("a", 64)},
+				Boundary: hook.BoundaryCompletion, SessionID: sessionID, RunID: runID, StepID: stepID, TargetStepID: targetStep, MessageID: assistant.ID,
+				InputDigest: fingerprint.Digest, PreparedRevision: view.Revision, PreparedAt: now,
+				Status: hook.InvocationPrepared, EffectDisposition: hook.EffectNone, ContextDisposition: hook.ContextNone,
+			}
+			commit := commitExtension(t, store, created, "completion-prepare-"+string(status), entry)
+			if status == hook.InvocationPending {
+				entry.Status, entry.PendingAt = hook.InvocationPending, now.Add(time.Millisecond)
+				commit = commitExtension(t, store, committedSnapshot(t, store, sessionID, commit.Revision), "completion-pending", entry)
+			}
+			recovered, err := store.Recover(context.Background(), session.SessionRef{SessionID: sessionID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantStatus := status
+			if status == hook.InvocationPending {
+				wantStatus = hook.InvocationOutcomeUnknown
+			}
+			if recovered.RunState != session.RunRunning || recovered.ActiveRunID != runID || recovered.ExtensionJournal[0].Status != wantStatus {
+				t.Fatalf("store %d status %s recovery = state:%s/%s journal:%#v", storeIndex, status, recovered.RunState, recovered.ActiveRunID, recovered.ExtensionJournal)
+			}
 		}
 	}
 }
