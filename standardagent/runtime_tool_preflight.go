@@ -70,7 +70,12 @@ func (r *runtimeInstance) evaluateToolPreflights(run *activeRun, calls []agent.T
 		return nil, nil, err
 	}
 	entriesByCall := make(map[agent.ToolCallID][]session.ExtensionJournalEntry, len(calls))
-	for _, entry := range snapshot.ExtensionJournal {
+	journal := snapshot.ExtensionJournal
+	if run.recoveredToolPreflights != nil {
+		journal = run.recoveredToolPreflights
+		run.recoveredToolPreflights = nil
+	}
+	for _, entry := range journal {
 		if entry.Boundary == hook.BoundaryToolPreflight && entry.RunID == run.id {
 			entriesByCall[entry.ToolCallID] = append(entriesByCall[entry.ToolCallID], entry)
 		}

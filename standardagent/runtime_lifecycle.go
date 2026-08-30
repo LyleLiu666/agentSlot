@@ -84,7 +84,8 @@ func (r *runtimeInstance) finishOpen(ctx context.Context, kind hook.OpenKind) er
 	if err != nil {
 		return err
 	}
-	snapshot, err = r.recoverSessionLifecycleEntries(snapshot)
+	recovery := planExtensionRecovery(snapshot)
+	snapshot, err = r.recoverSessionLifecycleEntries(snapshot, recovery.lifecycle)
 	if err != nil {
 		return err
 	}
@@ -105,15 +106,11 @@ func (r *runtimeInstance) finishOpen(ctx context.Context, kind hook.OpenKind) er
 	if err != nil {
 		return err
 	}
-	snapshot, err = r.recoverInputGateEntries(context.Background(), snapshot)
+	snapshot, err = r.recoverExtensionsAfterOpen(context.Background(), snapshot, recovery)
 	if err != nil {
 		return err
 	}
-	snapshot, err = r.recoverToolResultHookEntries(context.Background(), snapshot)
-	if err != nil {
-		return err
-	}
-	if err := r.restorePreparedRun(snapshot); err != nil {
+	if err := r.restorePreparedRun(snapshot, recovery); err != nil {
 		return err
 	}
 	r.mu.Lock()
@@ -146,13 +143,10 @@ func (r *runtimeInstance) beginSynchronousExtensionLocked(parent context.Context
 	}
 }
 
-func (r *runtimeInstance) recoverSessionLifecycleEntries(snapshot session.Snapshot) (session.Snapshot, error) {
+func (r *runtimeInstance) recoverSessionLifecycleEntries(snapshot session.Snapshot, entries []session.ExtensionJournalEntry) (session.Snapshot, error) {
 	changes := make([]session.Change, 0)
 	now := time.Now().UTC()
-	for _, current := range snapshot.ExtensionJournal {
-		if current.Boundary != hook.BoundarySessionLifecycle {
-			continue
-		}
+	for _, current := range entries {
 		entry := current
 		switch entry.Status {
 		case hook.InvocationPrepared:

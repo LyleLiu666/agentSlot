@@ -10,6 +10,7 @@ import (
 
 	agentslot "github.com/LyleLiu666/agentSlot"
 	agent "github.com/LyleLiu666/agentSlot/agent"
+	"github.com/LyleLiu666/agentSlot/session"
 )
 
 var (
@@ -103,11 +104,14 @@ func (f TraceFunc) RecordTrace(ctx context.Context, record TraceRecord) error {
 type MetricKind string
 
 const (
-	MetricCounter           MetricKind = "counter"
-	MetricDurationMS        MetricKind = "duration_ms"
-	MetricRunTotal                     = "agent.run.total"
-	MetricModelAttemptTotal            = "agent.model.attempt.total"
-	MetricToolCallTotal                = "agent.tool.call.total"
+	MetricCounter                 MetricKind = "counter"
+	MetricDurationMS              MetricKind = "duration_ms"
+	MetricGauge                   MetricKind = "gauge"
+	MetricRunTotal                           = "agent.run.total"
+	MetricModelAttemptTotal                  = "agent.model.attempt.total"
+	MetricToolCallTotal                      = "agent.tool.call.total"
+	MetricExtensionJournalEntries            = "agent.extension.journal.entries"
+	MetricExtensionJournalBytes              = "agent.extension.journal.bytes"
 )
 
 type MetricRecord struct {
@@ -120,7 +124,7 @@ type MetricRecord struct {
 }
 
 func (r MetricRecord) Validate() error {
-	if r.Name == "" || (r.Kind != MetricCounter && r.Kind != MetricDurationMS) || r.At.IsZero() || math.IsNaN(r.Value) || math.IsInf(r.Value, 0) || r.Value < 0 {
+	if r.Name == "" || (r.Kind != MetricCounter && r.Kind != MetricDurationMS && r.Kind != MetricGauge) || r.At.IsZero() || math.IsNaN(r.Value) || math.IsInf(r.Value, 0) || r.Value < 0 {
 		return errors.New("observe: invalid metric record")
 	}
 	for key := range r.Attributes {
@@ -140,6 +144,10 @@ func (r MetricRecord) Validate() error {
 	case MetricToolCallTotal:
 		if !r.Identity.SessionID.Valid() || !r.Identity.RunID.Valid() || !r.Identity.StepID.Valid() || !r.Identity.ToolCallID.Valid() || !r.Identity.Actor.Valid() {
 			return errors.New("observe: tool metric requires Session, Run, Step, ToolCall, and Actor identity")
+		}
+	case MetricExtensionJournalEntries, MetricExtensionJournalBytes:
+		if r.Kind != MetricGauge || !r.Identity.SessionID.Valid() || !r.Identity.Actor.Valid() {
+			return errors.New("observe: extension journal metric requires gauge kind and Session/Actor identity")
 		}
 	}
 	return nil
@@ -161,24 +169,35 @@ func (f MetricFunc) RecordMetric(ctx context.Context, record MetricRecord) error
 type AuditKind string
 
 const (
-	AuditToolDecision       AuditKind = "tool.decision"
-	AuditModelConfigChanged AuditKind = "model.config.changed"
+	AuditToolDecision        AuditKind = "tool.decision"
+	AuditModelConfigChanged  AuditKind = "model.config.changed"
+	AuditExtensionTransition AuditKind = "extension.transition"
 )
 
 type AuditRecord struct {
-	Kind     AuditKind `json:"kind"`
-	At       time.Time `json:"at"`
-	Identity Identity  `json:"identity"`
-	Action   string    `json:"action"`
-	Decision string    `json:"decision"`
+	Kind      AuditKind                    `json:"kind"`
+	At        time.Time                    `json:"at"`
+	Identity  Identity                     `json:"identity"`
+	Action    string                       `json:"action"`
+	Decision  string                       `json:"decision"`
+	Extension *session.ExtensionDiagnostic `json:"extension,omitempty"`
 }
 
 func (r AuditRecord) Validate() error {
-	if (r.Kind != AuditToolDecision && r.Kind != AuditModelConfigChanged) || r.At.IsZero() || !r.Identity.SessionID.Valid() || !r.Identity.Actor.Valid() || r.Action == "" || r.Decision == "" {
+	if (r.Kind != AuditToolDecision && r.Kind != AuditModelConfigChanged && r.Kind != AuditExtensionTransition) || r.At.IsZero() || !r.Identity.SessionID.Valid() || !r.Identity.Actor.Valid() || r.Action == "" || r.Decision == "" {
 		return errors.New("observe: invalid audit record")
 	}
 	if r.Kind == AuditToolDecision && (!r.Identity.RunID.Valid() || !r.Identity.StepID.Valid() || !r.Identity.ToolCallID.Valid()) {
 		return errors.New("observe: tool audit requires Run, Step, and ToolCall identity")
+	}
+	if r.Kind == AuditExtensionTransition {
+		if r.Extension == nil || r.Extension.SessionID != r.Identity.SessionID || r.Extension.RunID != r.Identity.RunID ||
+			r.Extension.StepID != r.Identity.StepID || r.Extension.ToolCallID != r.Identity.ToolCallID ||
+			r.Action != string(r.Extension.Boundary) || r.Decision != string(r.Extension.Status) {
+			return errors.New("observe: extension audit must carry one identity-consistent detached diagnostic")
+		}
+	} else if r.Extension != nil {
+		return errors.New("observe: non-extension audit cannot carry an extension diagnostic")
 	}
 	return nil
 }

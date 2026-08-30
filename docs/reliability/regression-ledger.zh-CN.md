@@ -20,6 +20,7 @@
 | ASR-REG-008 | ASR-002、ASR-008 | ToolPreflight deny/approval、并行 Tool batch、schema 失败或 pending 后重启 | Tool 可能绕过 Preflight；allow 可能覆盖 Policy；pending 外部命令可能重放；全批工具可能被无谓串行化 | Hook 自动化第 4 轮 | 已修复，普通门禁已覆盖 |
 | ASR-REG-009 | ASR-002、ASR-008 | ToolResult 已提交、Post pending/terminal/context consume 任一切点失败或重启 | ToolResult 可能被回滚/改写；Post command 可能重放；半套 context 可能进入下一模型请求；idle Session 可能残留未决 entry | Hook 自动化第 5 轮 | 已修复，普通门禁已覆盖 |
 | ASR-REG-010 | ASR-002、ASR-008 | Session create/resume/fork/summary/close、opening 并发、Prompt/Run 未结算、生命周期链中途崩溃 | SessionStart 可能晚于模型或命令；SessionEnd 可能越过未结算 Hook；旧 context 可能重复进入后续 Step；断连或停机可能伪造 End | Hook 自动化第 7 轮 | 已修复，普通门禁已覆盖 |
+| ASR-REG-011 | ASR-002、ASR-008 | 同次恢复包含 lifecycle 未决、active Run prepared、Post terminal/context pending，或多入口读取诊断 | 各边界重复全表扫描和提交；旧命令/context 可能重放；History 可能被误写；Session/Run/page/Audit 状态可能漂移且 journal 大小不可观测 | Hook 自动化第 8 轮 | 已修复，普通门禁已覆盖 |
 
 ## 确定性复现
 
@@ -142,6 +143,20 @@ context 只追加到首个精确 Run/Step，同 component 的新未消费 contex
 open/close receipt 的安全诊断但不阻断安全开关，持久化失败仍返回错误。prepared/pending/部分 terminal 链恢复
 后不重放、不泄漏半套 context；应用停机、断连和崩溃不伪造 End。零 contribution 不增加 Session commit。
 
+### ASR-REG-011
+
+```bash
+go test -race ./observe ./interaction/grpcchannel ./standardagent \
+  -run 'TestExtensionObservation|TestExtensionDiagnosticsUseOne|TestRunDiagnostics|TestRemoteChannelPreservesRun|TestResumeUsesOnePlanned|TestResumeConvergesLifecycle' \
+  -count=1
+```
+
+预期：通过。Runtime open 一次分类 ExtensionJournal；旧 lifecycle 在当前 Start 前收口，Prompt/Post 在
+Start 后共用一个恢复 commit，prepared Pre/Completion 只按持久 Run 证据恢复。组合恢复不重放旧命令，
+不把旧 context 送入模型，Run 形成终态，恢复前 History 保持为恢复后 History 的逐项相同前缀。
+SessionView 最近 32 条、独立 page、RunResult 当前 Run 最多 100 条、Audit transition 使用同一个 detached
+diagnosis；gRPC 不丢字段。Metric 只发布 entry/serialized-byte gauge，不发布 journal payload。
+
 ## 转绿要求
 
 | 编号 | 普通门禁中的最终测试 |
@@ -156,6 +171,7 @@ open/close receipt 的安全诊断但不阻断安全开关，持久化失败仍�
 | ASR-REG-008 | ToolPreflight 原子预约、静态 scope、Policy/Approval 合并、批次失败、append-only、恢复和零开销快路径全部通过 |
 | ASR-REG-009 | ToolResult/Post 原子预约、status scope、一次 context、四切点故障、Cancel、append-only、恢复和零开销快路径全部通过 |
 | ASR-REG-010 | opening barrier、四种 open、明确 close、receipt、Run/Prompt 排空、一次 context、部分链恢复、transport 和零开销快路径全部通过 |
+| ASR-REG-011 | 单次分类恢复、组合 recovery、append-only History、Session/Run/page/Audit 同投影、transport 和 entry/byte gauge 全部通过 |
 
 ## 账本纪律
 

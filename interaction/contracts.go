@@ -150,6 +150,11 @@ type RunResult struct {
 	Revision          agent.Revision
 	Outcome           session.RunFactKind
 	AssistantMessages []agent.Message
+	// ExtensionDiagnostics contains at most MaxRunExtensionDiagnostics newest
+	// entries owned by this Run. It never includes lifecycle or another Run's
+	// diagnostics.
+	ExtensionDiagnostics        []session.ExtensionDiagnostic
+	HasMoreExtensionDiagnostics bool
 }
 
 type RunPendingRequest struct {
@@ -299,6 +304,11 @@ type ExtensionDiagnosticsPage struct {
 	HasMore     bool
 }
 
+const (
+	RecentExtensionDiagnosticLimit = 32
+	MaxRunExtensionDiagnostics     = 100
+)
+
 type SubscribeRequest struct {
 	SessionID agent.SessionID
 	// AfterRevision must equal the current revision returned by SessionView.
@@ -350,14 +360,16 @@ const (
 // contains at most 100 complete logical Steps; older facts are read through
 // History using the first returned HistorySequence as an exclusive cursor.
 type SessionView struct {
-	SessionID      agent.SessionID
-	Revision       agent.Revision
-	RecentHistory  []session.HistoryFact
-	HasMoreHistory bool
-	Queue          []session.QueueItem
-	ModelConfig    session.SessionModelConfig
-	RunState       session.RunState
-	ActiveRunID    agent.RunID
+	SessionID                   agent.SessionID
+	Revision                    agent.Revision
+	RecentHistory               []session.HistoryFact
+	HasMoreHistory              bool
+	RecentExtensionDiagnostics  []session.ExtensionDiagnostic
+	HasMoreExtensionDiagnostics bool
+	Queue                       []session.QueueItem
+	ModelConfig                 session.SessionModelConfig
+	RunState                    session.RunState
+	ActiveRunID                 agent.RunID
 }
 
 type CloseSessionRequest struct {

@@ -481,15 +481,17 @@ reserved identity does not make temporary output or client cursors persistent.
 Every newly applied commit emits
 only a `SessionID + Revision` notification, after which the client reads the
 authoritative SessionView. SessionView contains Queue, model configuration,
-state, and at most the latest 100 complete logical Steps; older History uses an
-exclusive sequence cursor. Temporary events may be dropped under pressure. A
+state, at most the latest 100 complete logical Steps, and the latest 32 safe
+extension diagnostics; older History and extension diagnostics use independent
+exclusive sequence cursors. Temporary events may be dropped under pressure. A
 subscriber that cannot receive a durable revision notification is closed so it
 can reconnect through View instead of growing an unbounded queue. Disconnecting
 a subscriber never cancels its Run. Every external write carries
 ExpectedRevision; stale writes return a typed conflict and are never retried
 implicitly.
 `SendAndWait` wraps the same Run and returns only that Run's durable assistant
-text messages rather than executing a second model path. Run start/terminal
+text messages plus at most 100 newest diagnostics owned by that Run, rather
+than executing a second model path or returning lifecycle/other-Run diagnostics. Run start/terminal
 facts retain the frozen model configuration. The
 optional `hook.input_gate` Chain runs before Send, Steer, and queued-input edits.
 Its prepared journal commit is the caller's CAS linearization point; accepted
@@ -582,8 +584,15 @@ safe open/close into failure; persistence convergence failure still does.
 Disconnect, application shutdown, and process crash never forge SessionEnd.
 With no matching lifecycle contribution, open and close add no journal commit.
 Trace,
-Metric, Audit, and Usage chains are passive, and
-[`observe/jsonlines`](observe/jsonlines) is an explicit
+Metric, Audit, and Usage chains are passive. Every durable extension transition
+uses the same detached diagnostic projection for Gateway and Audit; Metric
+sinks may receive journal entry-count and serialized-byte gauges, never the
+journal payload itself. The Runtime classifies ExtensionJournal entries once
+on open: abandoned lifecycle work settles before the current SessionStart,
+non-replayable Prompt/Post work settles in one post-open commit, and only
+prepared ToolPreflight/Completion work backed by durable Run evidence may
+resume. These recovery transitions append new Store changes and never rewrite
+History. [`observe/jsonlines`](observe/jsonlines) is an explicit
 default sink. [`session.FileStore`](session/file_store.go) is a crash-safe
 single-process persistent implementation. Sessions without extension
 invocations remain byte-schema-compatible `agentslot.session-file/v1` files.

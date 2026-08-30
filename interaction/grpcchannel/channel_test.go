@@ -79,6 +79,46 @@ func TestRemoteChannelPreservesInputGateErrorRevisionAndDiagnostics(t *testing.T
 	}
 }
 
+func TestRemoteChannelPreservesRunAndSessionExtensionDiagnostics(t *testing.T) {
+	diagnostic := session.ExtensionDiagnostic{
+		InvocationID: "invocation-round8", Sequence: 4,
+		Descriptor: hook.ExtensionDescriptor{Key: "round8", DefinitionDigest: "sha256:" + strings.Repeat("c", 64)},
+		Boundary:   hook.BoundaryCompletion, SessionID: "session-1", RunID: "run-1", StepID: "step-1",
+		Status: hook.InvocationSucceeded, Decision: hook.DecisionComplete,
+		Effect: hook.EffectApplied, Context: hook.ContextNone,
+	}
+	backend := &gatewayStub{
+		sendAndWait: func(context.Context, interaction.SendRequest) (interaction.RunResult, error) {
+			return interaction.RunResult{
+				SessionID: "session-1", RunID: "run-1", Revision: 8, Outcome: session.RunCompleted,
+				ExtensionDiagnostics: []session.ExtensionDiagnostic{diagnostic}, HasMoreExtensionDiagnostics: true,
+			}, nil
+		},
+		view: func(context.Context, interaction.SessionViewRequest) (interaction.SessionView, error) {
+			return interaction.SessionView{
+				SessionID: "session-1", Revision: 8,
+				RecentExtensionDiagnostics: []session.ExtensionDiagnostic{diagnostic}, HasMoreExtensionDiagnostics: true,
+			}, nil
+		},
+	}
+	client, stop := startTestChannel(t, backend, agent.ActorIdentity{Kind: agent.ActorRemoteUser, ID: "user-1"})
+	defer stop()
+	result, err := client.SendAndWait(context.Background(), interaction.SendRequest{SessionID: "session-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := client.View(context.Background(), interaction.SessionViewRequest{SessionID: "session-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.ExtensionDiagnostics) != 1 || result.ExtensionDiagnostics[0] != diagnostic || !result.HasMoreExtensionDiagnostics {
+		t.Fatalf("RunResult diagnostics lost across transport: %#v", result)
+	}
+	if len(view.RecentExtensionDiagnostics) != 1 || view.RecentExtensionDiagnostics[0] != diagnostic || !view.HasMoreExtensionDiagnostics {
+		t.Fatalf("SessionView diagnostics lost across transport: %#v", view)
+	}
+}
+
 func TestRemoteSubscriptionClosesOnlyTheConnectionProjection(t *testing.T) {
 	stream := &eventStream{events: []interaction.Event{{Kind: interaction.EventRevision, SessionID: "session-1", Revision: 8}}}
 	backend := &gatewayStub{subscribe: func(context.Context, interaction.SubscribeRequest) (interaction.EventStream, error) {
@@ -266,6 +306,7 @@ type gatewayStub struct {
 	create      func(context.Context, interaction.CreateSessionRequest) (interaction.SessionOpened, error)
 	send        func(context.Context, interaction.SendRequest) (interaction.EnqueueReceipt, error)
 	sendAndWait func(context.Context, interaction.SendRequest) (interaction.RunResult, error)
+	view        func(context.Context, interaction.SessionViewRequest) (interaction.SessionView, error)
 	subscribe   func(context.Context, interaction.SubscribeRequest) (interaction.EventStream, error)
 }
 
@@ -277,6 +318,9 @@ func (g *gatewayStub) Send(ctx context.Context, request interaction.SendRequest)
 }
 func (g *gatewayStub) SendAndWait(ctx context.Context, request interaction.SendRequest) (interaction.RunResult, error) {
 	return g.sendAndWait(ctx, request)
+}
+func (g *gatewayStub) View(ctx context.Context, request interaction.SessionViewRequest) (interaction.SessionView, error) {
+	return g.view(ctx, request)
 }
 func (g *gatewayStub) Subscribe(ctx context.Context, request interaction.SubscribeRequest) (interaction.EventStream, error) {
 	return g.subscribe(ctx, request)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"sort"
@@ -576,6 +577,7 @@ type runtimeAccess interface {
 	view(context.Context, interaction.SessionViewRequest) (interaction.SessionView, error)
 	history(context.Context, interaction.HistoryRequest) (interaction.HistoryPage, error)
 	extensionDiagnostics(context.Context, interaction.ExtensionDiagnosticsRequest) (interaction.ExtensionDiagnosticsPage, error)
+	runResult(context.Context, agent.MessageID) (interaction.RunResult, error)
 	send(context.Context, interaction.SendRequest) (interaction.EnqueueReceipt, error)
 	steer(context.Context, interaction.SteerRequest) (interaction.EnqueueReceipt, error)
 	pending(context.Context, interaction.RunPendingRequest) (interaction.RunReceipt, error)
@@ -618,6 +620,8 @@ type runtimeInstance struct {
 	openErr             error
 	openOccurrence      *sessionLifecycleOccurrence
 	openDiagnosticView  []session.ExtensionDiagnostic
+	extensionSizes      map[hook.InvocationID]int
+	extensionBytes      int
 	prefix              string
 	sequence            atomic.Uint64
 	revisionValue       atomic.Uint64
@@ -662,12 +666,28 @@ func newRuntimeInstance(ctx context.Context, s session.Session, components *runt
 		extensionCtx: extensionCtx, extensionCancel: extensionCancel,
 		prefix: hex.EncodeToString(prefixBytes), events: newEventHub(),
 	}
+	if components.observations != nil && len(components.observations.metrics) > 0 {
+		runtime.extensionSizes = make(map[hook.InvocationID]int, len(snapshot.ExtensionJournal))
+		for _, entry := range snapshot.ExtensionJournal {
+			size := extensionJournalEntrySize(entry)
+			runtime.extensionSizes[entry.InvocationID] = size
+			runtime.extensionBytes += size
+		}
+	}
 	runtime.revisionValue.Store(uint64(s.Revision()))
 	if !runtime.id().Valid() {
 		return nil, agent.NewError(agent.ErrorInternal, "standardagent.runtime", "framework Manager returned an invalid SessionID", nil)
 	}
 	runtime.commitObserver = newSessionCommitObserver(components.commitObservers)
 	return runtime, nil
+}
+
+func extensionJournalEntrySize(entry session.ExtensionJournalEntry) int {
+	raw, err := json.Marshal(entry)
+	if err != nil {
+		return 0
+	}
+	return len(raw)
 }
 
 func nilSession(value session.Session) bool {
@@ -741,12 +761,26 @@ func (r *runtimeInstance) view(ctx context.Context, request interaction.SessionV
 	if err != nil {
 		return interaction.SessionView{}, err
 	}
+	recentDiagnostics, hasMoreDiagnostics := recentExtensionDiagnostics(snapshot.ExtensionJournal, interaction.RecentExtensionDiagnosticLimit)
 	return interaction.SessionView{
 		SessionID: r.id(), Revision: snapshot.Revision,
 		RecentHistory: page.Facts, HasMoreHistory: page.HasMore,
+		RecentExtensionDiagnostics: recentDiagnostics, HasMoreExtensionDiagnostics: hasMoreDiagnostics,
 		Queue: snapshot.Queue, ModelConfig: cloneRuntimeConfig(snapshot.ModelConfig),
 		RunState: snapshot.RunState, ActiveRunID: snapshot.ActiveRunID,
 	}, nil
+}
+
+func recentExtensionDiagnostics(entries []session.ExtensionJournalEntry, limit int) ([]session.ExtensionDiagnostic, bool) {
+	if limit <= 0 {
+		return nil, len(entries) > 0
+	}
+	count := min(limit, len(entries))
+	result := make([]session.ExtensionDiagnostic, 0, count)
+	for index := len(entries) - 1; index >= len(entries)-count; index-- {
+		result = append(result, entries[index].Diagnostic())
+	}
+	return result, len(entries) > count
 }
 
 func (r *runtimeInstance) history(ctx context.Context, request interaction.HistoryRequest) (interaction.HistoryPage, error) {
@@ -789,6 +823,51 @@ func (r *runtimeInstance) extensionDiagnostics(ctx context.Context, request inte
 	return interaction.ExtensionDiagnosticsPage{
 		SessionID: r.id(), Revision: page.Revision, Diagnostics: page.Diagnostics, HasMore: page.HasMore,
 	}, nil
+}
+
+func (r *runtimeInstance) runResult(ctx context.Context, inputID agent.MessageID) (interaction.RunResult, error) {
+	if !inputID.Valid() {
+		return interaction.RunResult{}, invalidInput("gateway.run_result", "Input MessageID is required")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.ensureOpenLocked("gateway.run_result"); err != nil {
+		return interaction.RunResult{}, err
+	}
+	snapshot, err := r.viewLocked(ctx)
+	if err != nil {
+		return interaction.RunResult{}, err
+	}
+	result, err := aggregateRunResult(interaction.SessionView{
+		SessionID: r.id(), Revision: snapshot.Revision, RecentHistory: snapshot.History,
+	}, inputID)
+	if err != nil {
+		return interaction.RunResult{}, err
+	}
+	result.ExtensionDiagnostics, result.HasMoreExtensionDiagnostics = diagnosticsForRun(
+		snapshot.ExtensionJournal, result.RunID, interaction.MaxRunExtensionDiagnostics,
+	)
+	return result, nil
+}
+
+func diagnosticsForRun(entries []session.ExtensionJournalEntry, runID agent.RunID, limit int) ([]session.ExtensionDiagnostic, bool) {
+	if limit <= 0 {
+		return nil, false
+	}
+	diagnostics := make([]session.ExtensionDiagnostic, 0, min(limit, len(entries)))
+	hasMore := false
+	for index := len(entries) - 1; index >= 0; index-- {
+		entry := entries[index]
+		if entry.RunID != runID {
+			continue
+		}
+		if len(diagnostics) == limit {
+			hasMore = true
+			break
+		}
+		diagnostics = append(diagnostics, entry.Diagnostic())
+	}
+	return diagnostics, hasMore
 }
 
 func (r *runtimeInstance) subscribe(ctx context.Context, request interaction.SubscribeRequest) (interaction.EventStream, error) {

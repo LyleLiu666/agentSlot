@@ -287,10 +287,17 @@ CloseSession 持锁校验 caller CAS 后用同一 revision 提交 close prepared
   逐项选择 fail-open/fail-closed；被动 Observer 继续使用原隔离语义。
 - 被动 Observer 的慢、错或 panic 不得阻塞提交；需要影响下一模型 Step 的能力不能伪装成 Observer。
 - 所有影响模型上下文或工具执行的 Hook 结果必须可审计，并能关联 Session、Run、Step 和 ToolCall。
-- Gateway 只投影有界安全诊断；SessionView 给最近摘要，独立只读方法按 immutable extension sequence
-  bounded 分页。不暴露 component 原始输入输出、环境或 additional context 全文。open receipt 返回本次
+- Gateway 只投影有界安全诊断；SessionView 固定返回最近 32 条，RunResult 最多返回当前 Run 最近 100 条，
+  独立只读方法按 immutable extension sequence bounded 分页。四者与 Audit transition 必须调用同一个
+  detached projection，不得各自解释状态。不暴露 component 原始输入输出、环境或 additional context 全文。open receipt 返回本次
   lifecycle 诊断；CloseSession 返回明确 receipt，使“安全关闭已完成但 End component 失败”不会被
   non-nil error 伪装成关闭失败；输入 gate 的 typed error 必须携带 journal 推进后的当前 revision。
+- Runtime open 只扫描一次 ExtensionJournal 并按 typed boundary 分类。旧 lifecycle 先于当前 SessionStart
+  收口；不能安全重建的 Prompt/Post 在 Start 后用一个 Store commit 收口；只有具备持久 Run 证据的
+  prepared ToolPreflight/Completion 可以继续。恢复可以追加 journal transition、Run terminal 和新事实，
+  但不得修改、删除、换位或向旧 History 中插入任何事实。
+- 每个 ExtensionJournal transition 被动发布同一份 payload-free Audit diagnosis；可选 MetricSink 只接收
+  当前 journal entry 数和序列化字节 gauge，不接收 argv、stdin/stdout/stderr、env 或 context payload。
 - Run 因扩展基础设施失败而 interrupted 时使用新的 provider-neutral `TerminationExtension`；不能归因成
   model、tool 或 runtime。组装产品可把该 source 显示成自己的 Hook 名称。
 

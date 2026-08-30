@@ -80,6 +80,10 @@ func (h *observationHub) publishAudit(record observe.AuditRecord) {
 		return
 	}
 	copy := record
+	if record.Extension != nil {
+		diagnostic := *record.Extension
+		copy.Extension = &diagnostic
+	}
 	h.publish(observationEnvelope{audit: &copy})
 }
 

@@ -350,6 +350,63 @@ func TestNoToolPreflightKeepsParallelToolsAndCreatesNoExtensionState(t *testing.
 	}
 }
 
+func TestCancelWinsWhileToolPreflightIsRunningAndSettlesEveryReservation(t *testing.T) {
+	gate := &blockingToolPreflight{
+		descriptor: preflightDescriptor("cancel"), scope: hook.ToolScope{All: true},
+		entered: make(chan struct{}), release: make(chan struct{}),
+	}
+	installed := &countingTool{definition: testToolDefinition(t, "effect")}
+	access, store, stop := startRound7Application(t, preflightExecutor("effect", `{"value":"one"}`),
+		AgentRuntimeConfig{ToolKeys: []string{"effect"}, MaxInlineToolResultBytes: 1024},
+		toolModule{key: "effect", value: installed}, toolPreflightModule{gates: []hook.ToolPreflight{gate}},
+	)
+	defer stop()
+	opened := createRuntimeTestSession(t, access)
+	done := make(chan interaction.RunResult, 1)
+	errs := make(chan error, 1)
+	go func() {
+		result, err := access.SendAndWait(context.Background(), interaction.SendRequest{
+			SessionID: opened.SessionID, ExpectedRevision: opened.Revision, Input: textInput("cancel preflight"),
+		})
+		if err != nil {
+			errs <- err
+			return
+		}
+		done <- result
+	}()
+	waitForSignal(t, gate.entered, "ToolPreflight")
+	snapshot, err := store.Load(t.Context(), session.SessionRef{SessionID: opened.SessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := access.Cancel(t.Context(), interaction.CancelRequest{SessionID: opened.SessionID, ExpectedRevision: snapshot.Revision}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-errs:
+		t.Fatal(err)
+	case result := <-done:
+		if result.Outcome != session.RunCanceled {
+			t.Fatalf("cancel result = %#v", result)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceled preflight Run did not finish")
+	}
+	if installed.calls.Load() != 0 {
+		t.Fatalf("Tool ran %d times after cancellation", installed.calls.Load())
+	}
+	final, err := store.Load(t.Context(), session.SessionRef{SessionID: opened.SessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range final.ExtensionJournal {
+		if entry.Boundary == hook.BoundaryToolPreflight &&
+			(!entry.Status.Terminal() || entry.EffectDisposition == hook.EffectPending) {
+			t.Fatalf("cancel left Preflight invocation unsettled: %#v", entry)
+		}
+	}
+}
+
 func TestPreparedToolPreflightReplaysExactlyOnceAfterRecovery(t *testing.T) {
 	store, call, descriptor := seedToolPreflightRecoverySession(t, hook.InvocationPrepared)
 	gate := &recordingToolPreflight{
@@ -512,6 +569,12 @@ func preflightExecutor(toolKey string, arguments string) *model.FakeModelExecuto
 func seedToolPreflightRecoverySession(t *testing.T, status hook.InvocationStatus) (*session.MemoryStore, agent.ToolCall, hook.ExtensionDescriptor) {
 	t.Helper()
 	store := session.NewMemoryStore()
+	call, descriptor := seedToolPreflightRecoverySessionInStore(t, store, status)
+	return store, call, descriptor
+}
+
+func seedToolPreflightRecoverySessionInStore(t *testing.T, store session.SessionStore, status hook.InvocationStatus) (agent.ToolCall, hook.ExtensionDescriptor) {
+	t.Helper()
 	config := testDefaultModel()
 	assistant := agent.Message{
 		ID: "message-preflight-recovery", SessionID: "session-preflight-recovery", RunID: "run-preflight-recovery", StepID: "step-preflight-recovery",
@@ -537,7 +600,7 @@ func seedToolPreflightRecoverySession(t *testing.T, status hook.InvocationStatus
 		t.Fatal(err)
 	}
 	if status == "" {
-		return store, call, descriptor
+		return call, descriptor
 	}
 	view := hook.ToolPreflightView{
 		InvocationID: "preflight-recovery-invocation", SessionID: call.SessionID, AgentID: "agent", WorkspaceID: "workspace",
@@ -570,7 +633,7 @@ func seedToolPreflightRecoverySession(t *testing.T, status hook.InvocationStatus
 			t.Fatal(err)
 		}
 	}
-	return store, call, descriptor
+	return call, descriptor
 }
 
 func preflightBatchExecutor(calls ...model.ToolCallRequest) *model.FakeModelExecutor {

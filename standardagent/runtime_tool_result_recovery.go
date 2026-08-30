@@ -1,25 +1,19 @@
 package standardagent
 
 import (
-	"context"
 	"time"
 
-	"github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/hook"
 	"github.com/LyleLiu666/agentSlot/session"
 )
 
-// recoverToolResultHookEntries settles abandoned Post invocations only after
+// toolResultRecoveryChanges settles abandoned Post invocations only after
 // SessionStore recovery has interrupted the owning Run. External commands are
 // never replayed: prepared work is canceled, pending work remains unknown, and
 // terminal context for the abandoned next Step is discarded.
-func (r *runtimeInstance) recoverToolResultHookEntries(ctx context.Context, snapshot session.Snapshot) (session.Snapshot, error) {
+func toolResultRecoveryChanges(entries []session.ExtensionJournalEntry, now time.Time) []session.Change {
 	changes := make([]session.Change, 0)
-	now := time.Now().UTC()
-	for _, existing := range snapshot.ExtensionJournal {
-		if existing.Boundary != hook.BoundaryToolResult {
-			continue
-		}
+	for _, existing := range entries {
 		entry := existing
 		switch entry.Status {
 		case hook.InvocationPrepared:
@@ -54,11 +48,5 @@ func (r *runtimeInstance) recoverToolResultHookEntries(ctx context.Context, snap
 		entryCopy := entry
 		changes = append(changes, session.Change{Kind: session.UpdateExtensionJournal, Extension: &entryCopy})
 	}
-	if len(changes) == 0 {
-		return snapshot, nil
-	}
-	if _, err := r.commitLockedAs(ctx, snapshot.Revision, "tool-result-hook-recovery", agent.ActorIdentity{}, changes); err != nil {
-		return session.Snapshot{}, err
-	}
-	return r.session.View(ctx)
+	return changes
 }

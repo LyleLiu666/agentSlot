@@ -449,9 +449,9 @@ product configuration.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `audit.sink` | `AuditSink` | `Chain` | optional | Receives model-config and tool-policy decision facts without message content or tool arguments. | Contracted |
+| `audit.sink` | `AuditSink` | `Chain` | optional | Receives model-config, tool-policy, and payload-free extension-transition facts without message content, tool arguments, or extension context. | Contracted |
 | `trace.sink` | `TraceSink` | `Chain` | optional | Receives correlated Runtime, Run, model-attempt, and tool lifecycle facts. | Contracted |
-| `metric.sink` | `MetricSink` | `Chain` | optional | Receives normalized counters and duration measurements with detached attributes. | Contracted |
+| `metric.sink` | `MetricSink` | `Chain` | optional | Receives normalized counters, durations, and gauges—including extension-journal entry/byte gauges—with detached attributes. | Contracted |
 | `health.contributor` | `HealthContributor` | `Chain` | optional | Reports component readiness and health without exposing configuration values. | Mapped |
 
 The `observe` package fixes another finite vocabulary family: correlated

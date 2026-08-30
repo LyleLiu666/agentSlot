@@ -454,7 +454,10 @@ func extensionPage(entries []ExtensionJournalEntry, request ExtensionPageRequest
 	return page, nil
 }
 
-func extensionDiagnostic(entry ExtensionJournalEntry) ExtensionDiagnostic {
+// Diagnostic returns the detached, payload-free projection of this durable
+// invocation. Gateway, receipts, Run results, and passive audit records use
+// this one conversion so their status and disposition fields cannot drift.
+func (entry ExtensionJournalEntry) Diagnostic() ExtensionDiagnostic {
 	view := ExtensionDiagnostic{
 		InvocationID: entry.InvocationID, Sequence: entry.Sequence, Descriptor: entry.Descriptor, Boundary: entry.Boundary,
 		SessionID: entry.SessionID, RunID: entry.RunID, StepID: entry.StepID, TargetStepID: entry.TargetStepID, MessageID: entry.MessageID, ToolCallID: entry.ToolCallID,
@@ -470,3 +473,5 @@ func extensionDiagnostic(entry ExtensionJournalEntry) ExtensionDiagnostic {
 	}
 	return view
 }
+
+func extensionDiagnostic(entry ExtensionJournalEntry) ExtensionDiagnostic { return entry.Diagnostic() }

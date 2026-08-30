@@ -1,7 +1,6 @@
 package standardagent
 
 import (
-	"context"
 	"time"
 
 	"github.com/LyleLiu666/agentSlot/agent"
@@ -9,13 +8,15 @@ import (
 	"github.com/LyleLiu666/agentSlot/session"
 )
 
-func (r *runtimeInstance) recoverInputGateEntries(ctx context.Context, snapshot session.Snapshot) (session.Snapshot, error) {
+func inputGateRecoveryChanges(snapshot session.Snapshot, entries []session.ExtensionJournalEntry, now time.Time) []session.Change {
 	changes := make([]session.Change, 0)
-	now := time.Now().UTC()
-	for _, existing := range snapshot.ExtensionJournal {
-		if existing.Boundary != hook.BoundaryInputGate {
-			continue
+	unclaimedMessages := make(map[agent.MessageID]struct{}, len(snapshot.Queue))
+	for _, item := range snapshot.Queue {
+		if !item.Claimed() {
+			unclaimedMessages[item.Message.ID] = struct{}{}
 		}
+	}
+	for _, existing := range entries {
 		entry := existing
 		switch entry.Status {
 		case hook.InvocationPrepared:
@@ -61,7 +62,10 @@ func (r *runtimeInstance) recoverInputGateEntries(ctx context.Context, snapshot 
 					entry.ContextDisposition = hook.ContextDiscarded
 					entry.ContextInputs = nil
 				}
-			} else if entry.ContextDisposition == hook.ContextPending && !unclaimedQueueMessage(snapshot.Queue, entry.MessageID) {
+			} else if entry.ContextDisposition == hook.ContextPending {
+				if _, stillUnclaimed := unclaimedMessages[entry.MessageID]; stillUnclaimed {
+					continue
+				}
 				entry.ContextDisposition = hook.ContextDiscarded
 				entry.ContextInputs = nil
 				changed = true
@@ -72,22 +76,7 @@ func (r *runtimeInstance) recoverInputGateEntries(ctx context.Context, snapshot 
 			}
 		}
 	}
-	if len(changes) == 0 {
-		return snapshot, nil
-	}
-	if _, err := r.commitLockedAs(ctx, snapshot.Revision, "input-gate-recovery", agent.ActorIdentity{}, changes); err != nil {
-		return session.Snapshot{}, err
-	}
-	return r.session.View(ctx)
-}
-
-func unclaimedQueueMessage(queue []session.QueueItem, messageID agent.MessageID) bool {
-	for _, item := range queue {
-		if item.Message.ID == messageID {
-			return !item.Claimed()
-		}
-	}
-	return false
+	return changes
 }
 
 func hasInputGateJournal(entries []session.ExtensionJournalEntry) bool {

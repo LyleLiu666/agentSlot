@@ -114,39 +114,8 @@ func (g *gateway) SendAndWait(ctx context.Context, request interaction.SendReque
 		if err := runtime.idle(operationCtx, interaction.WhenIdleRequest{SessionID: request.SessionID}); err != nil {
 			return interaction.RunResult{}, err
 		}
-		snapshot, err := historyThroughInput(operationCtx, runtime, request.SessionID, receipt.MessageID)
-		if err != nil {
-			return interaction.RunResult{}, err
-		}
-		return aggregateRunResult(snapshot, receipt.MessageID)
+		return runtime.runResult(operationCtx, receipt.MessageID)
 	})
-}
-
-func historyThroughInput(ctx context.Context, runtime runtimeAccess, sessionID agent.SessionID, inputID agent.MessageID) (interaction.SessionView, error) {
-	var before session.HistorySequence
-	var facts []session.HistoryFact
-	var revision agent.Revision
-	for {
-		page, err := runtime.history(ctx, interaction.HistoryRequest{SessionID: sessionID, BeforeHistorySequence: before, StepLimit: 100})
-		if err != nil {
-			return interaction.SessionView{}, err
-		}
-		if revision == 0 {
-			revision = page.Revision
-		}
-		facts = append(page.Facts, facts...)
-		found := false
-		for _, fact := range page.Facts {
-			if fact.Message != nil && fact.Message.ID == inputID {
-				found = true
-				break
-			}
-		}
-		if found || !page.HasMore || len(page.Facts) == 0 {
-			return interaction.SessionView{SessionID: sessionID, Revision: revision, RecentHistory: facts}, nil
-		}
-		before = page.Facts[0].Sequence
-	}
 }
 
 func aggregateRunResult(snapshot interaction.SessionView, inputID agent.MessageID) (interaction.RunResult, error) {

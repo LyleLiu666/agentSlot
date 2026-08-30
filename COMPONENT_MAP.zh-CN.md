@@ -372,9 +372,9 @@ Runtime 预留、并由最终持久 assistant Message 复用的 `MessageID`，�
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `audit.sink` | `AuditSink` | `Chain` | 可选 | 接收模型配置变更和工具策略决策事实，不包含消息内容或工具参数。 | 已定义契约 |
+| `audit.sink` | `AuditSink` | `Chain` | 可选 | 接收模型配置、工具策略和不含 payload 的扩展状态转换事实，不包含消息内容、工具参数或扩展上下文。 | 已定义契约 |
 | `trace.sink` | `TraceSink` | `Chain` | 可选 | 接收相互关联的 Runtime、Run、模型 Attempt 和工具生命周期事实。 | 已定义契约 |
-| `metric.sink` | `MetricSink` | `Chain` | 可选 | 接收带隔离属性副本的标准化计数与耗时度量。 | 已定义契约 |
+| `metric.sink` | `MetricSink` | `Chain` | 可选 | 接收带隔离属性副本的标准化计数、耗时和 gauge，包括 ExtensionJournal 条目数与字节数。 | 已定义契约 |
 | `health.contributor` | `HealthContributor` | `Chain` | 可选 | 报告组件就绪状态与健康状况，但不暴露配置值。 | 已映射 |
 
 `observe` 包固定另一组有限词汇：相互关联的 Runtime/Run/模型 Attempt/工具 Trace 事实、

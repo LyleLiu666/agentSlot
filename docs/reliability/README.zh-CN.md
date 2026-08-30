@@ -90,6 +90,9 @@ AgentSlot 的固定 Runtime 已经负责 Session 真值、CAS 提交、Run 生�
 7. Provider 私有 continuation 对 Runtime 保持 opaque，只有对应 Executor 可以解释。
 8. 重试性是当前实现和产品策略，不是不可变历史事实；未知副作用从 Journal 推导，不重复造一份 Run 状态。
 9. ExtensionJournal 可以推进一次调用的状态与 effect/context disposition，但不得修改、删除、换位或插入旧 History；pending 恢复为 outcome_unknown，不能自动重放。
+10. Runtime open 对 ExtensionJournal 只做一次分类扫描；旧 lifecycle 在当前 Start 前收口，Prompt/Post 在
+    Start 后用一个恢复 commit 收口，可安全重建的 prepared Pre/Completion 才进入 Run 恢复。恢复只能追加
+    Store transition/fact，History 已有前缀必须逐项不变。
 
 ## 非目标
 

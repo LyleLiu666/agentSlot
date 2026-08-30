@@ -42,6 +42,10 @@ type activeRun struct {
 	prepareRevision agent.Revision
 	usedTokens      int64
 	controlActor    agent.ActorIdentity
+	// recoveredToolPreflights is non-nil only for the first prepared batch
+	// reconstructed during Runtime open. It reuses the unified journal plan;
+	// later batches discover their newly committed reservations normally.
+	recoveredToolPreflights []session.ExtensionJournalEntry
 }
 
 func (r *activeRun) signalPrepared(revision agent.Revision) {
@@ -54,7 +58,7 @@ func (r *activeRun) signalPrepared(revision agent.Revision) {
 // restorePreparedRun reconstructs only the safe, pre-execution portion of an
 // interrupted Run. SessionStore recovery has already converted every call
 // that may have crossed the execution boundary to outcome_unknown.
-func (r *runtimeInstance) restorePreparedRun(snapshot session.Snapshot) error {
+func (r *runtimeInstance) restorePreparedRun(snapshot session.Snapshot, recovery extensionRecoveryPlan) error {
 	if snapshot.RunState != session.RunRunning {
 		return nil
 	}
@@ -70,7 +74,7 @@ func (r *runtimeInstance) restorePreparedRun(snapshot session.Snapshot) error {
 		step = entry.StepID
 		calls = append(calls, *entry.ToolCall)
 	}
-	completionEntries := unsettledCompletionEntries(snapshot.ExtensionJournal, snapshot.ActiveRunID)
+	completionEntries := unsettledCompletionEntries(recovery.completion, snapshot.ActiveRunID)
 	if len(calls) > 0 && len(completionEntries) > 0 {
 		return agent.NewError(agent.ErrorInternal, "standardagent.restore", "running Session has conflicting resumable work", nil)
 	}
@@ -95,6 +99,7 @@ func (r *runtimeInstance) restorePreparedRun(snapshot session.Snapshot) error {
 	run := &activeRun{
 		id: snapshot.ActiveRunID, config: cloneRuntimeConfig(started.ModelConfig), configRevision: started.ConfigRevision,
 		ctx: runContext, cancel: cancel, done: make(chan struct{}), prepared: make(chan struct{}), usedTokens: usedTokens,
+		recoveredToolPreflights: extensionEntriesForRun(recovery.toolPreflight, snapshot.ActiveRunID),
 	}
 	var completion *completionOccurrence
 	if len(completionEntries) > 0 {
@@ -1390,6 +1395,7 @@ func (r *runtimeInstance) commitLockedAs(ctx context.Context, expected agent.Rev
 func (r *runtimeInstance) publishCommitObservations(changes []session.Change, actor agent.ActorIdentity) {
 	now := time.Now().UTC()
 	actor = normalizedObservationActor(actor)
+	extensionChanged := false
 	for _, change := range changes {
 		if change.RunFact != nil {
 			kind := observe.TraceRunStarted
@@ -1420,6 +1426,33 @@ func (r *runtimeInstance) publishCommitObservations(changes []session.Change, ac
 				Action:   current.ProviderKey + "/" + current.ModelID, Decision: "committed",
 			})
 		}
+		if change.Extension != nil {
+			diagnostic := change.Extension.Diagnostic()
+			r.components.observations.publishAudit(observe.AuditRecord{
+				Kind: observe.AuditExtensionTransition, At: now,
+				Identity: observe.Identity{
+					SessionID: diagnostic.SessionID, RunID: diagnostic.RunID, StepID: diagnostic.StepID,
+					ToolCallID: diagnostic.ToolCallID, Actor: actor,
+				},
+				Action: string(diagnostic.Boundary), Decision: string(diagnostic.Status), Extension: &diagnostic,
+			})
+			if r.extensionSizes != nil {
+				previous := r.extensionSizes[change.Extension.InvocationID]
+				current := extensionJournalEntrySize(*change.Extension)
+				r.extensionBytes += current - previous
+				r.extensionSizes[change.Extension.InvocationID] = current
+				extensionChanged = true
+			}
+		}
+	}
+	if extensionChanged {
+		identity := observe.Identity{SessionID: r.id(), Actor: actor}
+		r.components.observations.publishMetric(observe.MetricRecord{
+			Name: observe.MetricExtensionJournalEntries, Kind: observe.MetricGauge, Value: float64(len(r.extensionSizes)), At: now, Identity: identity,
+		})
+		r.components.observations.publishMetric(observe.MetricRecord{
+			Name: observe.MetricExtensionJournalBytes, Kind: observe.MetricGauge, Value: float64(r.extensionBytes), At: now, Identity: identity,
+		})
 	}
 }
 
