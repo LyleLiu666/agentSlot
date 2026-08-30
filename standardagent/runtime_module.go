@@ -64,6 +64,7 @@ func (m *runtimeModule) RequiredSlots() []agentslot.Requirement {
 		agentslot.OptionalOne(agentcontext.CompactorSlot),
 		agentslot.OptionalChain(hook.HookSlot),
 		agentslot.OptionalChain(hook.InputGateSlot),
+		agentslot.OptionalChain(hook.ToolPreflightSlot),
 		agentslot.OptionalOne(goal.StoreSlot),
 		agentslot.OptionalOne(goal.EvaluatorSlot),
 		agentslot.OptionalChain(session.CommitObserverSlot),
@@ -196,6 +197,32 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 				inputGateKeys[descriptor.Key] = struct{}{}
 				frozenInputGates = append(frozenInputGates, inputGateBinding{gate: gate, descriptor: descriptor})
 			}
+			toolPreflights, err := agentslot.ResolveChain(resolver, hook.ToolPreflightSlot)
+			if err != nil {
+				return nil, err
+			}
+			frozenToolPreflights := make([]toolPreflightBinding, 0, len(toolPreflights))
+			toolPreflightKeys := make(map[string]struct{}, len(toolPreflights))
+			for _, preflight := range toolPreflights {
+				if isNilToolPreflight(preflight) {
+					return nil, fmt.Errorf("standardagent: ToolPreflight contribution is nil")
+				}
+				descriptor := preflight.Descriptor()
+				if err := descriptor.Validate(); err != nil {
+					return nil, err
+				}
+				if _, duplicate := toolPreflightKeys[descriptor.Key]; duplicate {
+					return nil, fmt.Errorf("standardagent: ToolPreflight descriptor key %q is duplicated", descriptor.Key)
+				}
+				scope := preflight.Scope()
+				if err := scope.Validate(); err != nil {
+					return nil, err
+				}
+				toolPreflightKeys[descriptor.Key] = struct{}{}
+				frozenToolPreflights = append(frozenToolPreflights, toolPreflightBinding{
+					preflight: preflight, descriptor: descriptor, scope: cloneToolScope(scope),
+				})
+			}
 			goalStore, hasGoalStore, err := agentslot.ResolveOptionalOne(resolver, goal.StoreSlot)
 			if err != nil {
 				return nil, err
@@ -236,7 +263,7 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 				manager:   manager, store: store, executor: executor, counter: counter, attemptObservers: attemptObservers,
 				commands: commands, commandDescriptors: commandDescriptors,
 				tools: selectedTools, dispatcher: dispatcher, catalogs: catalogs, config: cloneAgentRuntimeConfig(m.config), sources: sources,
-				compactor: compactor, hooks: hooks, inputGates: frozenInputGates,
+				compactor: compactor, hooks: hooks, inputGates: frozenInputGates, toolPreflights: frozenToolPreflights,
 				goalStore: goalStore, goalEvaluator: goalEvaluator, commitObservers: commitObservers,
 				traces: traces, metrics: metrics, audits: audits, usages: usages, workspaceManager: workspaceManager,
 			})
@@ -251,6 +278,19 @@ func isNilInputGate(gate hook.InputGate) bool {
 		return true
 	}
 	value := reflect.ValueOf(gate)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
+func isNilToolPreflight(preflight hook.ToolPreflight) bool {
+	if preflight == nil {
+		return true
+	}
+	value := reflect.ValueOf(preflight)
 	switch value.Kind() {
 	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
 		return value.IsNil()
@@ -295,6 +335,7 @@ type runtimeDependencies struct {
 	compactor          agentcontext.ContextCompactor
 	hooks              []hook.AgentHook
 	inputGates         []inputGateBinding
+	toolPreflights     []toolPreflightBinding
 	goalStore          goal.Store
 	goalEvaluator      goal.Evaluator
 	commitObservers    []session.SessionCommitObserver
@@ -319,6 +360,7 @@ type runtimeComponents struct {
 	compactor        agentcontext.ContextCompactor
 	hooks            []hook.AgentHook
 	inputGates       []inputGateBinding
+	toolPreflights   []toolPreflightBinding
 	goalStore        goal.Store
 	goalEvaluator    goal.Evaluator
 	commitObservers  []session.SessionCommitObserver
@@ -342,6 +384,7 @@ func (d runtimeDependencies) runtimeComponents(observations *observationHub) *ru
 		compactor:        d.compactor,
 		hooks:            append([]hook.AgentHook(nil), d.hooks...),
 		inputGates:       append([]inputGateBinding(nil), d.inputGates...),
+		toolPreflights:   append([]toolPreflightBinding(nil), d.toolPreflights...),
 		goalStore:        d.goalStore,
 		goalEvaluator:    d.goalEvaluator,
 		commitObservers:  append([]session.SessionCommitObserver(nil), d.commitObservers...),

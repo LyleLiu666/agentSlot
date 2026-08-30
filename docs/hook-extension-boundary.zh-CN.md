@@ -37,7 +37,7 @@ typed Slot；AgentSlot 不提供一个携带任意 map、允许任意修改的�
 |---|---|---|---|
 | Run 停止前续跑 | `agent.hook` | 已有 | 只能追加输入；用户 steer 优先；续跑受 Run 预算限制 |
 | Run 停止前阻断或失败收敛 | `hook.CompletionGate` | 已设计、待实现 | 保留 legacy AgentHook；新 gate 的错误由 Runtime 收敛，不能静默当作完成 |
-| Tool 执行前 | `hook.ToolPreflight` → `policy.guard` / `approval.service` | 已设计、待实现 | Runtime 先持久化外部 preflight；结果再进入既有 Policy/Approval，allow 不能绕过 Guard |
+| Tool 执行前 | `hook.ToolPreflight` → `policy.guard` / `approval.service` | 框架已实现 | Runtime 先持久化外部 preflight；结果再进入既有 Policy/Approval，allow 不能绕过 Guard；具名产品 adapter 仍属于组装仓库 |
 | Tool 成功或失败后被动处理 | `session.commit.observer` / Observation | 已有 | 只看已提交结果；失败不能改变业务提交 |
 | Tool 结果后同步追加模型上下文 | `hook.ToolResultHook` | 已设计、待实现 | ToolResult 与调用意图先提交；追加内容成为 ContextContribution，不能改写原结果 |
 | 用户输入提交前 | `hook.InputGate` | 框架已实现 | Gateway 先持久化调用 occurrence；只能拒绝或附加独立上下文，不能暗改用户原文；具名产品 adapter 仍属于组装仓库 |
@@ -198,6 +198,23 @@ ClientMessageID 仍是 correlation，不因引入 gate 变成幂等键。
   v2 文件；只在 Session 历史上确有 InputGate journal 时，Delete 才额外检查待丢弃 context。
 - `interaction.InputGateError` 返回 SessionID、journal 推进后的 CurrentRevision 和有界安全 diagnostics；
   gRPC adapter 保留同一 typed 语义，调用方不需要解析错误字符串。
+
+当前 `hook.ToolPreflight` 的已实现边界如下：
+
+- ToolCall、Tool RunJournal prepared 与全部静态匹配的 ToolPreflight prepared 使用同一个 `model-complete`
+  commit；sequence 由单调游标分配，不随批次大小反复扫描 change 列表。
+- Tool 不存在或 schema 不合法时不调用 component，预约统一 canceled/discarded，ToolResult 保留原
+  `tool_not_found` / `invalid_arguments` 语义。
+- 全批 preflight 按 ToolCall、再按 Chain 顺序执行；deny 只短路当前 Tool，基础设施失败才让全批 Tool
+  在未执行状态安全失败，并以 `TerminationExtension` 中断 Run。
+- allow、deny 与 require approval 先形成只读 authorization advice；既有 Guard/Approval 仍是最终权力面。
+  allow 不能批准 Guard deny，require approval 复用原 ToolCall，不产生替代调用。
+- prepared 可在 descriptor 和规范化 typed input 完全一致时恢复；旧 prepared ToolCall 完全没有预约时可
+  一次补齐完整集合；partial、digest 漂移或 pending/outcome unknown 一律 fail closed，外部 component 和 Tool
+  都不重放。
+- ToolPreflight 只推进 ExtensionJournal 和后续 ToolResult/Run facts，不改写已经发布的 Message、ToolCall
+  或任何 History 前缀。无 contribution 时不创建 extension state、不增加 Store commit、不创建 goroutine，
+  原 ParallelSafe Tool 仍并行执行。
 
 Runtime coordinator 必须显式区分 create、resume、fork、summary；重复返回已打开 Runtime 不算再次 open。
 close 只来自明确 Gateway CloseSession，不由 View/Subscribe 断开或进程崩溃伪造。

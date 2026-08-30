@@ -33,10 +33,11 @@ type ExtensionJournalEntry struct {
 	MessageID  agent.MessageID
 	ToolCallID agent.ToolCallID
 
-	InputDigest string
-	PreparedAt  time.Time
-	PendingAt   time.Time `json:",omitempty"`
-	FinishedAt  time.Time `json:",omitempty"`
+	InputDigest      string
+	PreparedRevision agent.Revision `json:",omitempty"`
+	PreparedAt       time.Time
+	PendingAt        time.Time `json:",omitempty"`
+	FinishedAt       time.Time `json:",omitempty"`
 
 	Status             hook.InvocationStatus
 	Result             *hook.InvocationResult `json:",omitempty"`
@@ -61,6 +62,9 @@ func (e ExtensionJournalEntry) Validate(sessionID agent.SessionID) error {
 	}
 	if err := e.validateSubject(); err != nil {
 		return err
+	}
+	if e.Boundary == hook.BoundaryToolPreflight && e.PreparedRevision == 0 {
+		return fmt.Errorf("session: tool preflight requires its prepared revision")
 	}
 	if e.PreparedAt.IsZero() {
 		return fmt.Errorf("session: extension journal requires prepared time")
@@ -331,7 +335,7 @@ func sameExtensionIdentity(left, right ExtensionJournalEntry) bool {
 		left.Descriptor == right.Descriptor && left.Boundary == right.Boundary &&
 		left.SessionID == right.SessionID && left.RunID == right.RunID && left.StepID == right.StepID &&
 		left.MessageID == right.MessageID && left.ToolCallID == right.ToolCallID &&
-		left.InputDigest == right.InputDigest && left.PreparedAt.Equal(right.PreparedAt)
+		left.InputDigest == right.InputDigest && left.PreparedRevision == right.PreparedRevision && left.PreparedAt.Equal(right.PreparedAt)
 }
 
 func sameExtensionTerminalOutcome(left, right ExtensionJournalEntry) bool {
@@ -366,28 +370,29 @@ type ExtensionPage struct {
 // ExtensionDiagnostic is the safe detached projection shared by Store and
 // Gateway. It intentionally omits ContextInputs and all process protocol data.
 type ExtensionDiagnostic struct {
-	InvocationID  hook.InvocationID
-	Sequence      ExtensionSequence
-	Descriptor    hook.ExtensionDescriptor
-	Boundary      hook.BoundaryKind
-	SessionID     agent.SessionID
-	RunID         agent.RunID
-	StepID        agent.StepID
-	MessageID     agent.MessageID
-	ToolCallID    agent.ToolCallID
-	InputDigest   string
-	PreparedAt    time.Time
-	PendingAt     time.Time
-	FinishedAt    time.Time
-	Status        hook.InvocationStatus
-	Decision      hook.Decision
-	Reason        string
-	ErrorCode     agent.ErrorCode
-	ErrorReason   string
-	Effect        hook.EffectDisposition
-	Context       hook.ContextDisposition
-	ContextDigest string
-	ContextBytes  int
+	InvocationID     hook.InvocationID
+	Sequence         ExtensionSequence
+	Descriptor       hook.ExtensionDescriptor
+	Boundary         hook.BoundaryKind
+	SessionID        agent.SessionID
+	RunID            agent.RunID
+	StepID           agent.StepID
+	MessageID        agent.MessageID
+	ToolCallID       agent.ToolCallID
+	InputDigest      string
+	PreparedRevision agent.Revision
+	PreparedAt       time.Time
+	PendingAt        time.Time
+	FinishedAt       time.Time
+	Status           hook.InvocationStatus
+	Decision         hook.Decision
+	Reason           string
+	ErrorCode        agent.ErrorCode
+	ErrorReason      string
+	Effect           hook.EffectDisposition
+	Context          hook.ContextDisposition
+	ContextDigest    string
+	ContextBytes     int
 }
 
 func extensionPage(entries []ExtensionJournalEntry, request ExtensionPageRequest) (ExtensionPage, error) {
@@ -419,7 +424,8 @@ func extensionDiagnostic(entry ExtensionJournalEntry) ExtensionDiagnostic {
 	view := ExtensionDiagnostic{
 		InvocationID: entry.InvocationID, Sequence: entry.Sequence, Descriptor: entry.Descriptor, Boundary: entry.Boundary,
 		SessionID: entry.SessionID, RunID: entry.RunID, StepID: entry.StepID, MessageID: entry.MessageID, ToolCallID: entry.ToolCallID,
-		InputDigest: entry.InputDigest, PreparedAt: entry.PreparedAt, PendingAt: entry.PendingAt, FinishedAt: entry.FinishedAt,
+		InputDigest: entry.InputDigest, PreparedRevision: entry.PreparedRevision,
+		PreparedAt: entry.PreparedAt, PendingAt: entry.PendingAt, FinishedAt: entry.FinishedAt,
 		Status: entry.Status, ErrorCode: entry.ErrorCode, ErrorReason: entry.ErrorReason,
 		Effect: entry.EffectDisposition, Context: entry.ContextDisposition, ContextDigest: entry.ContextDigest, ContextBytes: entry.ContextBytes,
 	}

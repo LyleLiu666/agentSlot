@@ -10,6 +10,7 @@ import (
 
 	agentslot "github.com/LyleLiu666/agentSlot"
 	agent "github.com/LyleLiu666/agentSlot/agent"
+	"github.com/LyleLiu666/agentSlot/hook"
 	"github.com/LyleLiu666/agentSlot/observe"
 	"github.com/LyleLiu666/agentSlot/policy"
 	"github.com/LyleLiu666/agentSlot/tool"
@@ -78,7 +79,28 @@ type toolDispatchOutcome struct {
 	contractViolation bool
 }
 
+type toolPreflightAuthorization struct {
+	denied          bool
+	approvalReasons []string
+}
+
+func (a *toolPreflightAuthorization) merge(result *hook.InvocationResult) {
+	if result == nil {
+		return
+	}
+	switch result.Decision {
+	case hook.DecisionDeny:
+		a.denied = true
+	case hook.DecisionRequireApproval:
+		a.approvalReasons = append(a.approvalReasons, result.Reason)
+	}
+}
+
 func (d *toolDispatcher) dispatchPrepared(ctx context.Context, calls []agent.ToolCall, beforeInvoke func(agent.ToolCall) error, scope workspace.Scope, boundary workspace.Boundary) toolDispatchOutcome {
+	return d.dispatchPreparedAuthorized(ctx, calls, nil, beforeInvoke, scope, boundary)
+}
+
+func (d *toolDispatcher) dispatchPreparedAuthorized(ctx context.Context, calls []agent.ToolCall, preflight []toolPreflightAuthorization, beforeInvoke func(agent.ToolCall) error, scope workspace.Scope, boundary workspace.Boundary) toolDispatchOutcome {
 	outcome := toolDispatchOutcome{results: make([]tool.ToolResult, len(calls))}
 	for index := 0; index < len(calls); {
 		if outcome.contractViolation {
@@ -89,7 +111,7 @@ func (d *toolDispatcher) dispatchPrepared(ctx context.Context, calls []agent.Too
 		}
 		installed, ok := d.tools[calls[index].Name]
 		if !ok || installed.safety == tool.Serial {
-			result, violation := d.invoke(ctx, calls[index], beforeInvoke, scope, boundary)
+			result, violation := d.invoke(ctx, calls[index], authorizationAt(preflight, index), beforeInvoke, scope, boundary)
 			outcome.results[index] = result
 			outcome.contractViolation = outcome.contractViolation || violation
 			index++
@@ -109,7 +131,7 @@ func (d *toolDispatcher) dispatchPrepared(ctx context.Context, calls []agent.Too
 			wait.Add(1)
 			go func(callIndex int) {
 				defer wait.Done()
-				outcome.results[callIndex], violations[callIndex-index] = d.invoke(ctx, calls[callIndex], beforeInvoke, scope, boundary)
+				outcome.results[callIndex], violations[callIndex-index] = d.invoke(ctx, calls[callIndex], authorizationAt(preflight, callIndex), beforeInvoke, scope, boundary)
 			}(callIndex)
 		}
 		wait.Wait()
@@ -121,15 +143,32 @@ func (d *toolDispatcher) dispatchPrepared(ctx context.Context, calls []agent.Too
 	return outcome
 }
 
-func (d *toolDispatcher) invoke(ctx context.Context, call agent.ToolCall, beforeInvoke func(agent.ToolCall) error, scope workspace.Scope, boundary workspace.Boundary) (result tool.ToolResult, contractViolation bool) {
+func authorizationAt(authorizations []toolPreflightAuthorization, index int) toolPreflightAuthorization {
+	if index < 0 || index >= len(authorizations) {
+		return toolPreflightAuthorization{}
+	}
+	return authorizations[index]
+}
+
+func (d *toolDispatcher) validateCall(call agent.ToolCall) *tool.ToolResult {
 	installed, ok := d.tools[call.Name]
 	if !ok {
-		return failedToolResult(call.ID, "tool_not_found", "requested tool is not installed"), false
+		result := failedToolResult(call.ID, "tool_not_found", "requested tool is not installed")
+		return &result
 	}
 	if err := installed.definition.InputSchema.ValidateArguments(call.Arguments); err != nil {
-		return failedToolResult(call.ID, "invalid_arguments", "tool arguments do not match the declared schema"), false
+		result := failedToolResult(call.ID, "invalid_arguments", "tool arguments do not match the declared schema")
+		return &result
 	}
-	if failure := d.authorize(ctx, call, scope); failure != nil {
+	return nil
+}
+
+func (d *toolDispatcher) invoke(ctx context.Context, call agent.ToolCall, preflight toolPreflightAuthorization, beforeInvoke func(agent.ToolCall) error, scope workspace.Scope, boundary workspace.Boundary) (result tool.ToolResult, contractViolation bool) {
+	if validation := d.validateCall(call); validation != nil {
+		return *validation, false
+	}
+	installed := d.tools[call.Name]
+	if failure := d.authorize(ctx, call, scope, preflight); failure != nil {
 		return *failure, false
 	}
 	if beforeInvoke != nil {
@@ -164,7 +203,7 @@ func (d *toolDispatcher) invoke(ctx context.Context, call agent.ToolCall, before
 // whether an action may run without becoming a second execution controller.
 // Every extension receives a detached Action; only the dispatcher retains the
 // invocation that can reach the Tool.
-func (d *toolDispatcher) authorize(ctx context.Context, call agent.ToolCall, scope workspace.Scope) *tool.ToolResult {
+func (d *toolDispatcher) authorize(ctx context.Context, call agent.ToolCall, scope workspace.Scope, preflight toolPreflightAuthorization) *tool.ToolResult {
 	action := policy.Action{
 		Kind: policy.ActionTool,
 		Tool: &policy.ToolAction{
@@ -187,7 +226,12 @@ func (d *toolDispatcher) authorize(ctx context.Context, call agent.ToolCall, sco
 		return &result
 	}
 
-	var approvalReasons []string
+	if preflight.denied {
+		d.auditTool(call, "preflight_deny")
+		result := failedToolResult(call.ID, "preflight_denied", "tool execution was denied by preflight policy")
+		return &result
+	}
+	approvalReasons := append([]string(nil), preflight.approvalReasons...)
 	for _, guard := range d.guards {
 		decision, err := evaluateGuard(ctx, guard, action.Clone())
 		if err != nil || decision.Validate() != nil {

@@ -17,6 +17,7 @@
 | ASR-REG-005 | ASR-002、ASR-007 | FileStore 临时文件发生短写、sync/close/rename 前失败，或 rename 后目录 sync 失败 | 短写可能发布截断文档；故障点没有可重复的原子性与幂等语义证据 | 第 9 轮 | 已修复，确定性发布门禁已覆盖 |
 | ASR-REG-006 | ASR-002、ASR-008 | ExtensionJournal 状态推进、FileStore 首次升级或进程在 pending 后退出 | 身份可能因 JSON 表示漂移；半个 v2 可能发布；pending 可能被重放；扩展 context 可能污染 History | Hook 自动化第 1 轮 | 已修复，普通门禁已覆盖 |
 | ASR-REG-007 | ASR-002、ASR-008 | InputGate accept/reject、慢 Hook、Queue edit/delete/claim 竞态或重启 | 输入可能在 CAS 推进后半可见；旧 context 可能串到新内容；一次性 context 可能在每个后续模型请求中重复投影并放大 token | Hook 自动化第 3 轮 | 已修复，普通门禁已覆盖 |
+| ASR-REG-008 | ASR-002、ASR-008 | ToolPreflight deny/approval、并行 Tool batch、schema 失败或 pending 后重启 | Tool 可能绕过 Preflight；allow 可能覆盖 Policy；pending 外部命令可能重放；全批工具可能被无谓串行化 | Hook 自动化第 4 轮 | 已修复，普通门禁已覆盖 |
 
 ## 确定性复现
 
@@ -96,6 +97,19 @@ go test -race ./hook ./session ./standardagent ./interaction/grpcchannel \
 Session 不被阻塞；ContextContribution 只投影到精确 Run/Step；prepared/pending 不重放；typed error 的
 SessionID、当前 revision 和安全 diagnostics 可经 gRPC 往返。
 
+### ASR-REG-008
+
+```bash
+go test -race ./hook ./session ./standardagent \
+  -run 'TestToolPreflight|TestToolCallAndAllPreflight|TestInvalidToolArguments|TestPreparedToolPreflight|TestPendingToolPreflight|TestNoToolPreflight' \
+  -count=1
+```
+
+预期：通过。ToolCall 与完整 Preflight reservation 同 commit；schema 失败不调用 component；deny 不执行原
+Tool 且不终止同批其他合法 Tool；require approval 与 Guard reason 合并且仍经唯一 ApprovalService；基础设施
+失败在任何 Tool 执行前收口并以 extension 归因中断；prepared 精确恢复一次，pending 变 unknown 后不重放；
+History 前缀不改写；零 contribution 不产生 ExtensionJournal，ParallelSafe Tool 仍并行。
+
 ## 转绿要求
 
 | 编号 | 普通门禁中的最终测试 |
@@ -107,6 +121,7 @@ SessionID、当前 revision 和安全 diagnostics 可经 gRPC 往返。
 | ASR-REG-005 | FileStore 短写、rename 前失败、取消、rename 后模糊结果和幂等观察矩阵全部通过 |
 | ASR-REG-006 | ExtensionJournal 状态机、append-only History、memory/file parity、v1/v2、恢复与 Gateway 分页全部通过 |
 | ASR-REG-007 | InputGate CAS、append-only message、一次 context、并发竞态、取消/panic、恢复和 typed transport 全部通过 |
+| ASR-REG-008 | ToolPreflight 原子预约、静态 scope、Policy/Approval 合并、批次失败、append-only、恢复和零开销快路径全部通过 |
 
 ## 账本纪律
 

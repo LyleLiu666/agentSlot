@@ -281,16 +281,33 @@ func (r *runtimeLoopRun) Act(ctx context.Context, action agentloop.Action) (agen
 		}
 		calls := append([]agent.ToolCall(nil), r.pendingTools...)
 		r.stateMu.Unlock()
-		dispatched := r.runtime.components.dispatcher.dispatchPrepared(r.run.ctx, calls, func(call agent.ToolCall) error {
-			return r.runtime.markToolExecuting(r.run, call)
-		}, r.runtime.workspaceScope(), r.runtime.workspaceBoundary)
+		preflight, preflightFailure, preflightErr := r.runtime.evaluateToolPreflights(r.run, calls)
+		dispatched := toolDispatchOutcome{}
+		if preflightErr == nil && preflightFailure == nil {
+			dispatched = r.runtime.components.dispatcher.dispatchPreparedAuthorized(r.run.ctx, calls, preflight, func(call agent.ToolCall) error {
+				return r.runtime.markToolExecuting(r.run, call)
+			}, r.runtime.workspaceScope(), r.runtime.workspaceBoundary)
+		} else if preflightFailure != nil {
+			dispatched.results = preflightFailedResults(calls)
+		}
+		if preflightErr != nil {
+			r.stateMu.Lock()
+			r.pendingTools = nil
+			r.state = agentloop.StateFailed
+			r.termination = terminationFromError(session.TerminationSession, agent.CodeSessionOperationFailed, preflightErr)
+			state := r.state
+			r.stateMu.Unlock()
+			return state, preflightErr
+		}
 		next, canceled, err := r.runtime.commitToolResults(r.run, calls, dispatched.results)
 		r.stateMu.Lock()
 		r.pendingTools = nil
-		if err != nil || dispatched.contractViolation {
+		if err != nil || dispatched.contractViolation || preflightFailure != nil {
 			r.state = agentloop.StateFailed
 			if err != nil {
 				r.termination = terminationFromError(session.TerminationSession, agent.CodeSessionOperationFailed, err)
+			} else if preflightFailure != nil {
+				r.termination = toolPreflightTermination(preflightFailure)
 			} else {
 				r.termination = fixedRunTermination(session.TerminationTool, agent.ErrorInternal, agent.CodeToolExecutionFailed)
 			}
@@ -755,6 +772,8 @@ func (r *runtimeInstance) commitCompletion(run *activeRun, step agent.StepID, me
 	}
 	changes := []session.Change{{Kind: session.AppendMessage, Message: &assistant}}
 	calls := make([]agent.ToolCall, 0, len(output.ToolCalls))
+	preparedRevision := snapshot.Revision.Next()
+	nextExtensionSequence := session.ExtensionSequence(len(snapshot.ExtensionJournal) + 1)
 	for _, requested := range output.ToolCalls {
 		call := agent.ToolCall{
 			ID: agent.ToolCallID(r.nextID("call")), MessageID: assistant.ID, SessionID: r.id(),
@@ -766,6 +785,10 @@ func (r *runtimeInstance) commitCompletion(run *activeRun, step agent.StepID, me
 			session.Change{Kind: session.AppendToolCall, ToolCall: &call},
 			session.Change{Kind: session.UpdateRunJournal, Journal: &prepared},
 		)
+		changes, err = r.appendToolPreflightReservations(call, preparedRevision, &nextExtensionSequence, changes)
+		if err != nil {
+			return nil, false, err
+		}
 		calls = append(calls, call)
 	}
 	_, err = r.commitLocked(context.Background(), snapshot.Revision, "model-complete", changes)
@@ -982,6 +1005,9 @@ func (r *runtimeInstance) finishRun(run *activeRun, outcome stepOutcome, termina
 	case stepCanceled:
 		terminalKind = session.RunCanceled
 	case stepBudgetExceeded, stepWaiting:
+		terminalKind = session.RunInterrupted
+	}
+	if outcome == stepFailed && termination != nil && termination.Source == session.TerminationExtension {
 		terminalKind = session.RunInterrupted
 	}
 	if terminalKind == session.RunCompleted {

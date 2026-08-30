@@ -358,6 +358,10 @@ operations ecosystems.
 The framework-side requirements for the next reliability work are defined in
 the [AgentSlot 运行可靠性设计](docs/reliability/README.zh-CN.md), with separate
 designs for Session/Runtime consistency and the Model execution boundary.
+The [Hook 扩展边界设计](docs/hook-extension-boundary.zh-CN.md) distinguishes the
+narrow legacy `agent.hook`, durable typed `hook.InputGate` / `hook.ToolPreflight`
+contracts, and a consuming product's user-configurable Hook system. It also
+defines the admission rules for future lifecycle seams.
 
 A runnable standard LLM agent requires exactly one AgentLoop, exactly one
 SessionStore, exactly one ModelExecutor, and at least one GatewayChannel. The
@@ -538,11 +542,16 @@ explicitly install `interaction.NewModelCommandModule`; slash, menu, and
 structured clients then invoke that one Gateway command backend. The
 `interaction/inprocess` package provides a function-style GatewayChannel, and
 [`interaction/cli`](interaction/cli) provides a lifecycle-owned line protocol;
-both expose only GatewayAccess. `policy.guard` and `approval.service` now gate
-tool execution without gaining loop control. A durable ToolCall is `prepared`
-while policy or approval is pending, and crosses to `pending` immediately
-before invocation. Recovery can resume only the original prepared call;
-pending calls become `outcome_unknown` and are never replayed. Trace, Metric, Audit, and Usage
+both expose only GatewayAccess. `hook.ToolPreflight` can contribute ordered,
+durably journaled allow, deny, or require-approval advice before tool
+authorization. Static exact/all scope is frozen at build time; ToolCall and the
+complete matching reservation set are prepared atomically. `policy.guard` and
+`approval.service` still gate tool execution, and Hook allow cannot override
+them. A durable ToolCall crosses to `pending` only immediately before
+invocation. Recovery can resume only an exact prepared call/preflight set;
+pending calls or preflights become `outcome_unknown` and are never replayed.
+With no ToolPreflight contribution, no extension commit is added and
+ParallelSafe tools retain their original scheduling. Trace, Metric, Audit, and Usage
 chains are passive, and [`observe/jsonlines`](observe/jsonlines) is an explicit
 default sink. [`session.FileStore`](session/file_store.go) is a crash-safe
 single-process persistent implementation. Sessions without extension
