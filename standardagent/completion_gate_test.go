@@ -58,7 +58,7 @@ func TestGoalDoneIsNotCommittedUntilCompletionGateAllowsIt(t *testing.T) {
 		model.FakeExecution{Events: []model.ModelEvent{complete("after stop continuation")}},
 	)
 	goalStore := goal.NewMemoryStore()
-	evaluator := &goalEvaluatorSequence{evaluations: []goal.Evaluation{
+	evaluator := &completionGoalEvaluatorSequence{evaluations: []goal.Evaluation{
 		{Decision: goal.DecisionDone, Reason: goal.ReasonObjectiveMet},
 		{Decision: goal.DecisionDone, Reason: goal.ReasonObjectiveMet},
 	}}
@@ -74,7 +74,7 @@ func TestGoalDoneIsNotCommittedUntilCompletionGateAllowsIt(t *testing.T) {
 		}
 	}
 	access, _, stop := startRound7Application(t, executor, AgentRuntimeConfig{},
-		goalStoreModule{store: goalStore}, goalEvaluatorModule{evaluator: evaluator}, completionGateModule{gates: []hook.CompletionGate{gate}})
+		completionGoalStoreModule{store: goalStore}, completionGoalEvaluatorModule{evaluator: evaluator}, completionGateModule{gates: []hook.CompletionGate{gate}})
 	defer stop()
 	opened := createRuntimeTestSession(t, access)
 	gate.setSessionID(opened.SessionID)
@@ -318,13 +318,13 @@ func TestGoalContinueSkipsStopAndAppliedFollowOnCountIsRestoredFromJournal(t *te
 		model.FakeExecution{Events: []model.ModelEvent{complete("stop continuation result")}},
 	)
 	goalStore := goal.NewMemoryStore()
-	evaluator := &goalEvaluatorSequence{evaluations: []goal.Evaluation{
+	evaluator := &completionGoalEvaluatorSequence{evaluations: []goal.Evaluation{
 		{Decision: goal.DecisionContinue, Reason: goal.ReasonProgressPossible, NextInstruction: textInput("goal next instruction")},
 		{Decision: goal.DecisionDone, Reason: goal.ReasonObjectiveMet},
 		{Decision: goal.DecisionDone, Reason: goal.ReasonObjectiveMet},
 	}}
 	gate := newCompletionGateSequence("goal-order", hook.CompletionContinue, hook.CompletionComplete)
-	access, _, stop := startRound7Application(t, executor, AgentRuntimeConfig{}, goalStoreModule{store: goalStore}, goalEvaluatorModule{evaluator: evaluator}, completionGateModule{gates: []hook.CompletionGate{gate}})
+	access, _, stop := startRound7Application(t, executor, AgentRuntimeConfig{}, completionGoalStoreModule{store: goalStore}, completionGoalEvaluatorModule{evaluator: evaluator}, completionGateModule{gates: []hook.CompletionGate{gate}})
 	defer stop()
 	opened := createRuntimeTestSession(t, access)
 	if _, err := goalStore.Set(t.Context(), goal.SetRequest{SessionID: opened.SessionID, Objective: "finish in order", MaxFollowOns: 4}); err != nil {
@@ -401,11 +401,11 @@ func TestCompletionGatePersistenceCutPointsFailClosedWithoutDanglingInvocations(
 func TestGoalCandidateTerminalCommitFaultDoesNotCommitGoalOrLeaveDanglingEffect(t *testing.T) {
 	store := newTransitionFaultStore("completion-gate-terminal")
 	goalStore := goal.NewMemoryStore()
-	evaluator := &goalEvaluatorSequence{evaluations: []goal.Evaluation{{Decision: goal.DecisionDone, Reason: goal.ReasonObjectiveMet}}}
+	evaluator := &completionGoalEvaluatorSequence{evaluations: []goal.Evaluation{{Decision: goal.DecisionDone, Reason: goal.ReasonObjectiveMet}}}
 	gate := newCompletionGateSequence("goal-terminal-fault", hook.CompletionContinue)
 	executor := newRound7Executor(nil, nil, model.FakeExecution{Events: []model.ModelEvent{complete("candidate")}})
 	access, stop := startToolPreflightApplication(t, store, executor, AgentRuntimeConfig{},
-		goalStoreModule{store: goalStore}, goalEvaluatorModule{evaluator: evaluator}, completionGateModule{gates: []hook.CompletionGate{gate}})
+		completionGoalStoreModule{store: goalStore}, completionGoalEvaluatorModule{evaluator: evaluator}, completionGateModule{gates: []hook.CompletionGate{gate}})
 	defer stop()
 	opened := createRuntimeTestSession(t, access)
 	if _, err := goalStore.Set(t.Context(), goal.SetRequest{SessionID: opened.SessionID, Objective: "do not commit early", MaxFollowOns: 2}); err != nil {
@@ -475,11 +475,11 @@ func TestCompletionApplyCommitThatBecameDurableBeforeItsErrorIsNotMisreportedAsF
 
 func TestGoalDecisionThatBecameDurableBeforeItsErrorIsRetriedIdempotently(t *testing.T) {
 	goalStore := &appliedGoalFaultStore{MemoryStore: goal.NewMemoryStore()}
-	evaluator := &goalEvaluatorSequence{evaluations: []goal.Evaluation{{Decision: goal.DecisionDone, Reason: goal.ReasonObjectiveMet}}}
+	evaluator := &completionGoalEvaluatorSequence{evaluations: []goal.Evaluation{{Decision: goal.DecisionDone, Reason: goal.ReasonObjectiveMet}}}
 	gate := newCompletionGateSequence("durable-goal", hook.CompletionComplete)
 	executor := newRound7Executor(nil, nil, model.FakeExecution{Events: []model.ModelEvent{complete("candidate")}})
 	access, _, stop := startRound7Application(t, executor, AgentRuntimeConfig{},
-		goalStoreModule{store: goalStore}, goalEvaluatorModule{evaluator: evaluator}, completionGateModule{gates: []hook.CompletionGate{gate}})
+		completionGoalStoreModule{store: goalStore}, completionGoalEvaluatorModule{evaluator: evaluator}, completionGateModule{gates: []hook.CompletionGate{gate}})
 	defer stop()
 	opened := createRuntimeTestSession(t, access)
 	if _, err := goalStore.Set(t.Context(), goal.SetRequest{SessionID: opened.SessionID, Objective: "finish once", MaxFollowOns: 2}); err != nil {
@@ -566,7 +566,7 @@ func TestRecoveryConvergesWhenGoalDecisionWasCommittedBeforeCompletionEffect(t *
 	}
 	gate := newCompletionGateSequence("recovery", hook.CompletionComplete)
 	access, stop := startToolPreflightApplication(t, store, model.NewFakeModelExecutor(), AgentRuntimeConfig{},
-		goalStoreModule{store: goalStore}, goalEvaluatorModule{evaluator: &goalEvaluatorSequence{}}, completionGateModule{gates: []hook.CompletionGate{gate}})
+		completionGoalStoreModule{store: goalStore}, completionGoalEvaluatorModule{evaluator: &completionGoalEvaluatorSequence{}}, completionGateModule{gates: []hook.CompletionGate{gate}})
 	defer stop()
 	if _, err := access.ResumeSession(t.Context(), interaction.ResumeSessionRequest{SessionID: sessionID}); err != nil {
 		t.Fatal(err)
@@ -586,11 +586,11 @@ func TestRecoveryConvergesWhenGoalDecisionWasCommittedBeforeCompletionEffect(t *
 func TestGoalDoneAndCompletionEffectConvergeAfterOneApplyCommitFault(t *testing.T) {
 	store := newTransitionFaultStore("completion-gate-apply")
 	goalStore := goal.NewMemoryStore()
-	evaluator := &goalEvaluatorSequence{evaluations: []goal.Evaluation{{Decision: goal.DecisionDone, Reason: goal.ReasonObjectiveMet}}}
+	evaluator := &completionGoalEvaluatorSequence{evaluations: []goal.Evaluation{{Decision: goal.DecisionDone, Reason: goal.ReasonObjectiveMet}}}
 	gate := newCompletionGateSequence("goal-apply-retry", hook.CompletionComplete)
 	executor := newRound7Executor(nil, nil, model.FakeExecution{Events: []model.ModelEvent{complete("candidate")}})
 	access, stop := startToolPreflightApplication(t, store, executor, AgentRuntimeConfig{},
-		goalStoreModule{store: goalStore}, goalEvaluatorModule{evaluator: evaluator}, completionGateModule{gates: []hook.CompletionGate{gate}})
+		completionGoalStoreModule{store: goalStore}, completionGoalEvaluatorModule{evaluator: evaluator}, completionGateModule{gates: []hook.CompletionGate{gate}})
 	defer stop()
 	opened := createRuntimeTestSession(t, access)
 	if _, err := goalStore.Set(t.Context(), goal.SetRequest{SessionID: opened.SessionID, Objective: "finish durably", MaxFollowOns: 2}); err != nil {
@@ -763,6 +763,38 @@ func (m completionGateModule) Register(reg agentslot.Registrar) error {
 	}
 	return reg.Contribute(contributions...)
 }
+
+type completionGoalStoreModule struct{ store goal.Store }
+
+func (completionGoalStoreModule) ID() string { return "test.completion-goal-store" }
+func (m completionGoalStoreModule) Register(reg agentslot.Registrar) error {
+	return reg.Contribute(agentslot.Set(goal.StoreSlot, m.store))
+}
+
+type completionGoalEvaluatorModule struct{ evaluator goal.Evaluator }
+
+func (completionGoalEvaluatorModule) ID() string { return "test.completion-goal-evaluator" }
+func (m completionGoalEvaluatorModule) Register(reg agentslot.Registrar) error {
+	return reg.Contribute(agentslot.Set(goal.EvaluatorSlot, m.evaluator))
+}
+
+type completionGoalEvaluatorSequence struct {
+	mu          sync.Mutex
+	evaluations []goal.Evaluation
+}
+
+func (e *completionGoalEvaluatorSequence) Evaluate(context.Context, goal.EvaluationRequest, model.AttemptRecorder) (goal.Evaluation, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(e.evaluations) == 0 {
+		return goal.Evaluation{Decision: goal.DecisionDone, Reason: goal.ReasonObjectiveMet}, nil
+	}
+	result := e.evaluations[0]
+	e.evaluations = e.evaluations[1:]
+	return result, nil
+}
+
+var _ goal.Evaluator = (*completionGoalEvaluatorSequence)(nil)
 
 func historyHasUnchangedText(history []session.HistoryFact, text string) bool {
 	for _, fact := range history {
