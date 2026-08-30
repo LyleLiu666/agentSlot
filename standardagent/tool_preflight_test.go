@@ -451,7 +451,7 @@ func seedToolPreflightRecoverySession(t *testing.T, status hook.InvocationStatus
 	}
 	view := hook.ToolPreflightView{
 		InvocationID: "preflight-recovery-invocation", SessionID: call.SessionID, AgentID: "agent", WorkspaceID: "workspace",
-		Revision: created.Revision.Next(), RunID: call.RunID, StepID: call.StepID, ToolCallID: call.ID, ToolKey: call.Name, Arguments: call.Arguments,
+		Revision: created.Revision.Next(), RunID: call.RunID, StepID: call.StepID, MessageID: call.MessageID, ToolCallID: call.ID, ToolKey: call.Name, Arguments: call.Arguments,
 	}
 	fingerprint, err := hook.FingerprintTypedInput(view)
 	if err != nil {

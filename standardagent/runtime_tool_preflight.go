@@ -35,7 +35,7 @@ func (r *runtimeInstance) appendToolPreflightReservations(call agent.ToolCall, r
 		}
 		view := hook.ToolPreflightView{
 			InvocationID: hook.InvocationID(r.nextID("preflight")), SessionID: r.id(), AgentID: r.agentID, WorkspaceID: r.workspaceID,
-			Revision: revision, RunID: call.RunID, StepID: call.StepID, ToolCallID: call.ID,
+			Revision: revision, RunID: call.RunID, StepID: call.StepID, MessageID: call.MessageID, ToolCallID: call.ID,
 			ToolKey: call.Name, Arguments: append([]byte(nil), call.Arguments...),
 		}
 		fingerprint, err := hook.FingerprintTypedInput(view)
@@ -45,7 +45,7 @@ func (r *runtimeInstance) appendToolPreflightReservations(call agent.ToolCall, r
 		entry := session.ExtensionJournalEntry{
 			InvocationID: view.InvocationID, Sequence: *nextSequence,
 			Descriptor: binding.descriptor, Boundary: hook.BoundaryToolPreflight,
-			SessionID: r.id(), RunID: call.RunID, StepID: call.StepID, ToolCallID: call.ID,
+			SessionID: r.id(), RunID: call.RunID, StepID: call.StepID, MessageID: call.MessageID, ToolCallID: call.ID,
 			InputDigest: fingerprint.Digest, PreparedRevision: revision, PreparedAt: now,
 			Status: hook.InvocationPrepared, EffectDisposition: hook.EffectNone, ContextDisposition: hook.ContextNone,
 		}
@@ -249,7 +249,7 @@ func validateToolPreflightReservations(r *runtimeInstance, call agent.ToolCall, 
 func toolPreflightView(r *runtimeInstance, entry session.ExtensionJournalEntry, call agent.ToolCall) hook.ToolPreflightView {
 	return hook.ToolPreflightView{
 		InvocationID: entry.InvocationID, SessionID: r.id(), AgentID: r.agentID, WorkspaceID: r.workspaceID,
-		Revision: entry.PreparedRevision, RunID: call.RunID, StepID: call.StepID, ToolCallID: call.ID,
+		Revision: entry.PreparedRevision, RunID: call.RunID, StepID: call.StepID, MessageID: call.MessageID, ToolCallID: call.ID,
 		ToolKey: call.Name, Arguments: append([]byte(nil), call.Arguments...),
 	}
 }

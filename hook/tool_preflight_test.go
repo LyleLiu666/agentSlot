@@ -20,7 +20,7 @@ func TestToolPreflightContractFreezesStaticScopeAndFiniteDecision(t *testing.T) 
 	}
 	view := hook.ToolPreflightView{
 		InvocationID: "preflight-1", SessionID: "session-1", AgentID: "agent-1", WorkspaceID: "workspace-1",
-		Revision: 7, RunID: "run-1", StepID: "step-1", ToolCallID: "call-1", ToolKey: "apply_patch",
+		Revision: 7, RunID: "run-1", StepID: "step-1", MessageID: "message-1", ToolCallID: "call-1", ToolKey: "apply_patch",
 		Arguments: json.RawMessage(`{"path":"README.md"}`),
 	}
 	if err := view.Validate(); err != nil {
@@ -63,7 +63,7 @@ func TestToolPreflightContractRejectsDynamicOrAmbiguousAuthority(t *testing.T) {
 	}
 	invalidView := hook.ToolPreflightView{
 		InvocationID: "preflight-1", SessionID: "session-1", AgentID: "agent-1", WorkspaceID: "workspace-1",
-		Revision: 7, RunID: "run-1", StepID: "step-1", ToolCallID: agent.ToolCallID("call-1"), ToolKey: "shell",
+		Revision: 7, RunID: "run-1", StepID: "step-1", MessageID: "message-1", ToolCallID: agent.ToolCallID("call-1"), ToolKey: "shell",
 		Arguments: json.RawMessage(`{"value":1,"value":2}`),
 	}
 	if err := invalidView.Validate(); err == nil {

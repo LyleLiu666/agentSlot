@@ -74,6 +74,7 @@ type ToolPreflightView struct {
 	Revision     agent.Revision
 	RunID        agent.RunID
 	StepID       agent.StepID
+	MessageID    agent.MessageID
 	ToolCallID   agent.ToolCallID
 	ToolKey      string
 	Arguments    json.RawMessage
@@ -81,7 +82,7 @@ type ToolPreflightView struct {
 
 func (v ToolPreflightView) Validate() error {
 	if !v.InvocationID.Valid() || !v.SessionID.Valid() || !v.AgentID.Valid() || !v.WorkspaceID.Valid() ||
-		v.Revision == 0 || !v.RunID.Valid() || !v.StepID.Valid() || !v.ToolCallID.Valid() ||
+		v.Revision == 0 || !v.RunID.Valid() || !v.StepID.Valid() || !v.MessageID.Valid() || !v.ToolCallID.Valid() ||
 		!validSafeIdentity(v.ToolKey, MaxExtensionKeyBytes) || !jsonvalue.Valid(v.Arguments) {
 		return fmt.Errorf("hook: invalid tool preflight view")
 	}
