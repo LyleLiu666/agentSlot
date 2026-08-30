@@ -18,7 +18,9 @@ Session。
 3. component 只能返回 `accept`、`reject` 和有界 additional context，不能替换 `MessageInput`，也不能取得
    Runtime、Session 或 Store。
 4. 每个 invocation 依次推进 prepared、pending、terminal，再由业务结果原子推进 effect/context disposition。
-   panic、普通 error、声明式失败、caller cancellation 和 deadline 都形成稳定失败分类与安全诊断。
+   panic、普通 error、声明式失败、caller cancellation 和 deadline 都形成稳定失败分类与安全诊断；如果
+   component 在 cancellation 后明确声明外部副作用 `outcome_unknown`，Runtime 保留该更强结论，不把它
+   降级成普通 canceled。
 5. accept 后的 Send、Steer、EditQueued 使用内部最新 revision，并重新校验 active Run 或 Queue subject；
    Delete、claim 或其他 edit 获胜时，过期结果被拒绝和 discard。
 6. Queue claim、用户 `AppendMessage`、Hook `AppendContextContribution` 和 context consumed 同 commit 完成。
