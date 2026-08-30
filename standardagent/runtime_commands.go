@@ -243,7 +243,7 @@ func (r *runtimeInstance) finishClose(runDone <-chan struct{}, occurrence *sessi
 	}
 	receipt := interaction.CloseSessionReceipt{SessionID: r.id(), Revision: r.revision()}
 	if occurrence != nil {
-		diagnostics, err := r.lifecycleDiagnostics(occurrence.entries)
+		diagnostics, err := r.extensionDiagnosticsForEntries(occurrence.entries)
 		receipt.Diagnostics = diagnostics
 		closeErr = errors.Join(closeErr, err)
 	}

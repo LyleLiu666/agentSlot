@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"sync"
 	"time"
 
@@ -47,7 +46,7 @@ func (r *runtimeInstance) open(ctx context.Context, kind hook.OpenKind) error {
 	r.openOnce.Do(func() {
 		r.openErr = r.finishOpen(ctx, kind)
 		if r.openErr == nil && r.openOccurrence != nil {
-			r.openDiagnosticView, r.openErr = r.lifecycleDiagnostics(r.openOccurrence.entries)
+			r.openDiagnosticView, r.openErr = r.extensionDiagnosticsForEntries(r.openOccurrence.entries)
 		}
 		if r.openErr == nil {
 			r.components.observations.publishTrace(observe.TraceRecord{
@@ -439,30 +438,6 @@ func invokeSessionLifecycle(ctx context.Context, lifecycle hook.SessionLifecycle
 		}
 	}()
 	return lifecycle.Evaluate(ctx, view)
-}
-
-func (r *runtimeInstance) lifecycleDiagnostics(entries []session.ExtensionJournalEntry) ([]session.ExtensionDiagnostic, error) {
-	if len(entries) == 0 {
-		return nil, nil
-	}
-	page, err := r.components.store.ExtensionDiagnostics(context.Background(), session.ExtensionPageRequest{
-		SessionID: r.id(), Limit: session.MaxExtensionPageLimit,
-	})
-	if err != nil {
-		return nil, err
-	}
-	ids := make(map[hook.InvocationID]struct{}, len(entries))
-	for _, entry := range entries {
-		ids[entry.InvocationID] = struct{}{}
-	}
-	result := make([]session.ExtensionDiagnostic, 0, len(entries))
-	for _, diagnostic := range page.Diagnostics {
-		if _, ok := ids[diagnostic.InvocationID]; ok {
-			result = append(result, diagnostic)
-		}
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Sequence < result[j].Sequence })
-	return result, nil
 }
 
 func bindLifecycleContext(inputs []model.Input, runID agent.RunID, stepID agent.StepID) []model.Input {

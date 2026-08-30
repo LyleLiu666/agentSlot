@@ -160,6 +160,35 @@ func TestSessionLifecycleOpeningBarrierPrecedesEveryGatewayOperation(t *testing.
 	}
 }
 
+func TestSessionLifecycleReceiptsSurfaceProjectionStoreFailures(t *testing.T) {
+	t.Run("open", func(t *testing.T) {
+		projectionErr := errors.New("open diagnostics unavailable")
+		store := extensionDiagnosticsFailureStore{SessionStore: session.NewMemoryStore(), err: projectionErr}
+		lifecycle := &recordingSessionLifecycle{key: "open-projection", phases: []hook.LifecyclePhase{hook.LifecycleOpen}}
+		access, stop := startToolPreflightApplication(t, store, model.NewFakeModelExecutor(), AgentRuntimeConfig{}, sessionLifecycleModule{lifecycles: []hook.SessionLifecycle{lifecycle}})
+		defer stop()
+
+		_, err := access.CreateSession(t.Context(), interaction.CreateSessionRequest{AgentID: "agent-1", WorkspaceID: "workspace-1"})
+		if !errors.Is(err, projectionErr) {
+			t.Fatalf("CreateSession error = %v, want diagnostics Store failure", err)
+		}
+	})
+
+	t.Run("close", func(t *testing.T) {
+		projectionErr := errors.New("close diagnostics unavailable")
+		store := extensionDiagnosticsFailureStore{SessionStore: session.NewMemoryStore(), err: projectionErr}
+		lifecycle := &recordingSessionLifecycle{key: "close-projection", phases: []hook.LifecyclePhase{hook.LifecycleClose}}
+		access, stop := startToolPreflightApplication(t, store, model.NewFakeModelExecutor(), AgentRuntimeConfig{}, sessionLifecycleModule{lifecycles: []hook.SessionLifecycle{lifecycle}})
+		defer stop()
+		opened := createRuntimeTestSession(t, access)
+
+		_, err := access.CloseSession(t.Context(), interaction.CloseSessionRequest{SessionID: opened.SessionID, ExpectedRevision: opened.Revision})
+		if !errors.Is(err, projectionErr) {
+			t.Fatalf("CloseSession error = %v, want diagnostics Store failure", err)
+		}
+	})
+}
+
 func TestSessionLifecycleExplicitCloseReturnsReceiptAndShutdownDoesNotForgeEnd(t *testing.T) {
 	lifecycle := &recordingSessionLifecycle{key: "end", phases: []hook.LifecyclePhase{hook.LifecycleOpen, hook.LifecycleClose}}
 	lifecycle.evaluate = func(view hook.SessionLifecycleView) (hook.SessionLifecycleResult, error) {

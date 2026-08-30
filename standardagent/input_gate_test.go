@@ -53,6 +53,45 @@ func TestInputGateRejectAdvancesRevisionWithoutMutatingTheProposedInput(t *testi
 	}
 }
 
+func TestInputGateErrorPreservesAProjectionReadFailure(t *testing.T) {
+	store := session.NewMemoryStore()
+	manager, err := session.NewManager(store, testDefaultModel())
+	if err != nil {
+		t.Fatal(err)
+	}
+	managed, err := manager.Create(t.Context(), session.CreateRequest{AgentID: "agent-1", WorkspaceID: "workspace-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectionErr := errors.New("extension diagnostics unavailable")
+	runtime := &runtimeInstance{
+		session: managed,
+		components: &runtimeComponents{store: extensionDiagnosticsFailureStore{
+			SessionStore: store,
+			err:          projectionErr,
+		}},
+	}
+	primaryErr := agent.NewCodedError(agent.ErrorConflict, agent.CodeInputRejected, "test.input_gate", "input rejected", nil)
+	err = runtime.inputGateError(managed.Revision(), &inputGateOccurrence{entries: []session.ExtensionJournalEntry{{InvocationID: "input-gate-1"}}}, primaryErr)
+
+	var gateErr *interaction.InputGateError
+	if !errors.As(err, &gateErr) || !errors.Is(err, primaryErr) || !errors.Is(err, projectionErr) {
+		t.Fatalf("input gate error = %v / %#v, want primary and projection failures", err, gateErr)
+	}
+	if agent.CodeOf(err) != agent.CodeInputRejected || len(gateErr.Diagnostics) != 0 {
+		t.Fatalf("input gate classification/diagnostics = %q / %#v", agent.CodeOf(err), gateErr.Diagnostics)
+	}
+}
+
+type extensionDiagnosticsFailureStore struct {
+	session.SessionStore
+	err error
+}
+
+func (s extensionDiagnosticsFailureStore) ExtensionDiagnostics(context.Context, session.ExtensionPageRequest) (session.ExtensionPage, error) {
+	return session.ExtensionPage{}, s.err
+}
+
 func TestInputGateContextIsSeparateFromTheUserMessageAndConsumedOnce(t *testing.T) {
 	gate := &recordingInputGate{descriptor: inputGateDescriptor("context")}
 	gate.evaluate = func(view hook.InputGateView) hook.InputGateResult {

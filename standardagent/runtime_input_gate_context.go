@@ -1,7 +1,7 @@
 package standardagent
 
 import (
-	"context"
+	"errors"
 	"fmt"
 
 	"github.com/LyleLiu666/agentSlot/agent"
@@ -128,16 +128,9 @@ func cloneInputGateView(source hook.InputGateView) hook.InputGateView {
 }
 
 func (r *runtimeInstance) inputGateError(revision agent.Revision, occurrence *inputGateOccurrence, cause error) error {
-	page, _ := r.components.store.ExtensionDiagnostics(context.Background(), session.ExtensionPageRequest{SessionID: r.id(), Limit: session.MaxExtensionPageLimit})
-	ids := make(map[hook.InvocationID]struct{}, len(occurrence.entries))
-	for _, entry := range occurrence.entries {
-		ids[entry.InvocationID] = struct{}{}
-	}
-	diagnostics := make([]session.ExtensionDiagnostic, 0, len(occurrence.entries))
-	for index := len(page.Diagnostics) - 1; index >= 0; index-- {
-		if _, ok := ids[page.Diagnostics[index].InvocationID]; ok {
-			diagnostics = append(diagnostics, page.Diagnostics[index])
-		}
+	diagnostics, err := r.extensionDiagnosticsForEntries(occurrence.entries)
+	if err != nil {
+		cause = errors.Join(cause, err)
 	}
 	return &interaction.InputGateError{SessionID: r.id(), CurrentRevision: revision, Diagnostics: diagnostics, Cause: cause}
 }
