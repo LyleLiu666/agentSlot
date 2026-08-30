@@ -39,7 +39,7 @@ typed Slot；AgentSlot 不提供一个携带任意 map、允许任意修改的�
 | Run 停止前阻断或失败收敛 | `hook.CompletionGate` | 已设计、待实现 | 保留 legacy AgentHook；新 gate 的错误由 Runtime 收敛，不能静默当作完成 |
 | Tool 执行前 | `hook.ToolPreflight` → `policy.guard` / `approval.service` | 框架已实现 | Runtime 先持久化外部 preflight；结果再进入既有 Policy/Approval，allow 不能绕过 Guard；具名产品 adapter 仍属于组装仓库 |
 | Tool 成功或失败后被动处理 | `session.commit.observer` / Observation | 已有 | 只看已提交结果；失败不能改变业务提交 |
-| Tool 结果后同步追加模型上下文 | `hook.ToolResultHook` | 已设计、待实现 | ToolResult 与调用意图先提交；追加内容成为 ContextContribution，不能改写原结果 |
+| Tool 结果后同步追加模型上下文 | `hook.ToolResultHook` | 框架已实现 | ToolResult、terminal Journal、next Step 与 Post reservation 原子提交；追加内容成为 ContextContribution，不能改写原结果 |
 | 用户输入提交前 | `hook.InputGate` | 框架已实现 | Gateway 先持久化调用 occurrence；只能拒绝或附加独立上下文，不能暗改用户原文；具名产品 adapter 仍属于组装仓库 |
 | Session 打开与关闭 | `hook.SessionLifecycle` | 已设计、待实现 | coordinator 明确 open kind；只读身份和状态，不能持有 Runtime 或改写旧 History |
 | PermissionRequest | `approval.service` | 已有 | 不再创建同义 Hook 权力面 |
@@ -215,6 +215,25 @@ ClientMessageID 仍是 correlation，不因引入 gate 变成幂等键。
 - ToolPreflight 只推进 ExtensionJournal 和后续 ToolResult/Run facts，不改写已经发布的 Message、ToolCall
   或任何 History 前缀。无 contribution 时不创建 extension state、不增加 Store commit、不创建 goroutine，
   原 ParallelSafe Tool 仍并行执行。
+
+当前 `hook.ToolResultHook` 的已实现边界如下：
+
+- 构建期冻结 exact/all Tool key 与 `succeeded | failed` status scope；`outcome_unknown` 明确不触发新的外部
+  Post 副作用。同一 Slot descriptor key 重复、nil contribution 或非法 scope 在启动前失败。
+- 只有 Tool Journal 已从 prepared 进入 pending，且实际 Tool 返回合法 succeeded/failed 时建立 Post
+  occurrence；schema、Policy、Approval、Preflight 拒绝和恢复产生的 unknown 都不冒充 Tool 执行后事件。
+- ToolResult、Tool Journal terminal、精确 next Step identity 与全部匹配 Post prepared 使用同一个
+  `tool-results` commit；view 同时保留来源 Step 和 context 目标 Step，规范化 ToolCall/ToolResult 后冻结 digest。
+- Post 按 ToolCall、再按 Chain 顺序运行。全部成功后，Runtime 在一个 commit 中按相同顺序追加下一 Step
+  ContextContribution，并把 context 一次性标为 consumed；原 ToolResult 的 status/output/error/artifact 不改写。
+- runner/panic/协议失败保留已提交 ToolResult，丢弃此前半成品 context、取消后续 reservation，并以
+  `TerminationExtension` 在下一模型请求前中断 Run。Cancel 胜出时同样收口全部 entry，不把 context 投给
+  已放弃 Step。
+- result、pending、terminal、context consume 四个持久切点均有故障注入；terminal commit 结果不确定时
+  重读权威 entry，pending 明确转 outcome_unknown，绝不重放 component。进程恢复只结算或丢弃持久后果，
+  不调用 Post command。
+- Post 只追加 ToolResult、ContextContribution、RunFact 和 ExtensionJournal 事实，不回写任何已发布
+  Message/ToolCall/ToolResult History 前缀。无 contribution 时没有 extension change、额外 commit 或 goroutine。
 
 Runtime coordinator 必须显式区分 create、resume、fork、summary；重复返回已打开 Runtime 不算再次 open。
 close 只来自明确 Gateway CloseSession，不由 View/Subscribe 断开或进程崩溃伪造。

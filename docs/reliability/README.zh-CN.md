@@ -14,6 +14,7 @@ AgentSlot 应固化所有 Agent 产品都必须遵守的**持久事实、生命�
 - [Model 执行与失败语义](model-execution-boundary.zh-CN.md)
 - [InputGate 框架验收记录](input-gate-round-3.zh-CN.md)
 - [ToolPreflight 框架验收记录](tool-preflight-round-4.zh-CN.md)
+- [ToolResultHook 框架验收记录](tool-result-hook-round-5.zh-CN.md)
 - [可靠性回归账本](regression-ledger.zh-CN.md)
 
 ## 为什么必须在 AgentSlot 内设计

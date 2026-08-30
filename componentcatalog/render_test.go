@@ -54,7 +54,7 @@ After.
 		t.Fatal(err)
 	}
 	text := string(result)
-	if strings.Contains(text, "stale") || !strings.Contains(text, "Mapped standard component ecosystems | 42") || !strings.Contains(text, "`model.token-counter`") || !strings.Contains(text, "After.") {
+	if strings.Contains(text, "stale") || !strings.Contains(text, "Mapped standard component ecosystems | 44") || !strings.Contains(text, "`model.token-counter`") || !strings.Contains(text, "After.") {
 		t.Fatalf("RewriteMarkdown result:\n%s", text)
 	}
 	second, err := RewriteMarkdown(LocaleEnglish, result)
@@ -77,7 +77,7 @@ func TestRewriteChineseInventoryUsesPublishedHeadings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(result), "stale") || !strings.Contains(string(result), "| 已映射的标准组件生态位 | 42 |") {
+	if strings.Contains(string(result), "stale") || !strings.Contains(string(result), "| 已映射的标准组件生态位 | 44 |") {
 		t.Fatalf("Chinese inventory was not generated:\n%s", result)
 	}
 }

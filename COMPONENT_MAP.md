@@ -28,9 +28,9 @@ Current repository reality:
 
 | Inventory | Count |
 | --- | ---: |
-| Mapped standard component ecosystems | 42 |
+| Mapped standard component ecosystems | 44 |
 | Standardized domain vocabularies | 9 |
-| Contracted AgentSlot-owned domain interfaces | 33 |
+| Contracted AgentSlot-owned domain interfaces | 35 |
 | Conformant component ecosystems | 1 |
 | Proven component ecosystems | 0 |
 | Assembled standard component ecosystems | 0 |
@@ -196,6 +196,8 @@ Slots, and several modules may contribute to one `Many` or `Chain` Slot.
 | `interaction.command` | `InteractionCommand` | `Many` | optional | Registers a keyed UI-neutral command with the fixed Gateway; Channels render the shared descriptor as slash commands, menus, buttons, forms, or command palettes. | Contracted |
 | `agent.hook` | `AgentHook` | `Chain` | optional | Proposes controlled follow-on input before run completion; it cannot mutate Session state or become a second Runtime controller. | Contracted |
 | `hook.input_gate` | `InputGate` | `Chain` | optional | Accepts or rejects a proposed Send, Steer, or queued edit before mutation and may contribute bounded context to the exact Run/Step that later claims the unchanged input. | Contracted |
+| `hook.tool_preflight` | `ToolPreflight` | `Chain` | optional | Provides durable ordered allow, deny, or approval advice after ToolCall preparation and before policy authorization or execution; it cannot replace the call or bypass policy. | Contracted |
+| `hook.tool_result` | `ToolResultHook` | `Chain` | optional | Observes only certain succeeded or failed results from tools that actually entered execution and may contribute bounded context to the exact next Step without rewriting ToolResult. | Contracted |
 | `goal.store` | `goal.Store` | `One` | optional; installed with `goal.evaluator` | Owns one CAS-protected objective lifecycle per Session, separate from append-only conversation History. | Contracted |
 | `goal.evaluator` | `goal.Evaluator` | `One` | optional; installed with `goal.store` | Makes a structured continue/blocked/done decision before an otherwise finished Run closes. | Contracted |
 | `session.commit.observer` | `SessionCommitObserver` | `Chain` | optional | Asynchronously observes applied Session revisions and their appended History sequence ranges; failures and panics cannot roll back a commit. | Contracted |

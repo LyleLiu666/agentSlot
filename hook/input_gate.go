@@ -118,24 +118,8 @@ func (r InputGateResult) Validate(sessionID agent.SessionID) error {
 		}
 		return nil
 	}
-	if len(r.Context) > MaxContextInputs {
-		return fmt.Errorf("hook: input gate context exceeds the input limit")
-	}
-	for _, input := range r.Context {
-		wrongMessageSession := input.Message != nil && input.Message.SessionID != sessionID
-		wrongCallSession := input.ToolCall != nil && input.ToolCall.SessionID != sessionID
-		if !input.Valid() || input.SystemPrompt != nil || wrongMessageSession || wrongCallSession {
-			return fmt.Errorf("hook: invalid input gate context")
-		}
-	}
-	if err := model.ValidateInputs(r.Context); err != nil {
-		return fmt.Errorf("hook: input gate context violates the model protocol")
-	}
-	if len(r.Context) > 0 {
-		fingerprint, err := FingerprintTypedInput(r.Context)
-		if err != nil || fingerprint.Bytes > MaxContextBytes {
-			return fmt.Errorf("hook: input gate context exceeds the byte limit")
-		}
+	if err := validateContextProposal(r.Context, sessionID); err != nil {
+		return fmt.Errorf("hook: invalid input gate context: %w", err)
 	}
 	return nil
 }

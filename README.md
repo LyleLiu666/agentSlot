@@ -359,7 +359,7 @@ The framework-side requirements for the next reliability work are defined in
 the [AgentSlot 运行可靠性设计](docs/reliability/README.zh-CN.md), with separate
 designs for Session/Runtime consistency and the Model execution boundary.
 The [Hook 扩展边界设计](docs/hook-extension-boundary.zh-CN.md) distinguishes the
-narrow legacy `agent.hook`, durable typed `hook.InputGate` / `hook.ToolPreflight`
+narrow legacy `agent.hook`, durable typed `hook.InputGate` / `hook.ToolPreflight` / `hook.ToolResultHook`
 contracts, and a consuming product's user-configurable Hook system. It also
 defines the admission rules for future lifecycle seams.
 
@@ -551,8 +551,16 @@ them. A durable ToolCall crosses to `pending` only immediately before
 invocation. Recovery can resume only an exact prepared call/preflight set;
 pending calls or preflights become `outcome_unknown` and are never replayed.
 With no ToolPreflight contribution, no extension commit is added and
-ParallelSafe tools retain their original scheduling. Trace, Metric, Audit, and Usage
-chains are passive, and [`observe/jsonlines`](observe/jsonlines) is an explicit
+ParallelSafe tools retain their original scheduling. `hook.ToolResultHook`
+sees only certain succeeded/failed results from Tools that actually entered
+pending. ToolResult, terminal Journal, next-Step identity, and matching Post
+reservations commit atomically; bounded context is appended once to that next
+Step only after the complete Post chain succeeds. Failures preserve the
+original ToolResult, discard partial context, interrupt before another model
+request, and never replay pending commands after recovery. With no
+ToolResultHook contribution the result path adds no extension state or extra
+commit. Trace, Metric, Audit, and Usage chains are passive, and
+[`observe/jsonlines`](observe/jsonlines) is an explicit
 default sink. [`session.FileStore`](session/file_store.go) is a crash-safe
 single-process persistent implementation. Sessions without extension
 invocations remain byte-schema-compatible `agentslot.session-file/v1` files.

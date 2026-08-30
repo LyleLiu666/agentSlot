@@ -84,6 +84,30 @@ func TestExtensionJournalTransitionsKeepIdentityAndDispositionsIndependent(t *te
 	}
 }
 
+func TestToolResultExtensionPersistsAndProjectsItsDistinctContextTargetStep(t *testing.T) {
+	store, created := newExtensionSession(t, session.NewMemoryStore(), "tool-result-target")
+	entry := preparedExtensionEntry(t, created.Session.ID, 1, "post-invocation")
+	entry.Boundary = hook.BoundaryToolResult
+	entry.RunID, entry.StepID, entry.TargetStepID = "run-1", "step-source", "step-target"
+	entry.MessageID, entry.ToolCallID, entry.PreparedRevision = "message-1", "call-1", created.Revision.Next()
+	commitExtension(t, store, created, "prepare-post", entry)
+	page, err := store.ExtensionDiagnostics(t.Context(), session.ExtensionPageRequest{SessionID: created.Session.ID, Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Diagnostics) != 1 || page.Diagnostics[0].StepID != "step-source" || page.Diagnostics[0].TargetStepID != "step-target" {
+		t.Fatalf("tool result diagnostic = %#v", page.Diagnostics)
+	}
+	entry.InvocationID, entry.Sequence, entry.TargetStepID = "post-invalid", 2, entry.StepID
+	_, err = store.Commit(t.Context(), session.CommitRequest{
+		SessionID: created.Session.ID, ExpectedRevision: page.Revision, IdempotencyKey: "invalid-post-target",
+		Changes: []session.Change{{Kind: session.UpdateExtensionJournal, Extension: &entry}},
+	})
+	if err == nil {
+		t.Fatal("tool result extension accepted its source Step as context target")
+	}
+}
+
 func TestExtensionJournalAcceptsOnlyTheDeclaredLegalStatusPaths(t *testing.T) {
 	paths := []struct {
 		name        string

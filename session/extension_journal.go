@@ -27,11 +27,12 @@ type ExtensionJournalEntry struct {
 	Descriptor   hook.ExtensionDescriptor
 	Boundary     hook.BoundaryKind
 
-	SessionID  agent.SessionID
-	RunID      agent.RunID
-	StepID     agent.StepID
-	MessageID  agent.MessageID
-	ToolCallID agent.ToolCallID
+	SessionID    agent.SessionID
+	RunID        agent.RunID
+	StepID       agent.StepID
+	TargetStepID agent.StepID `json:",omitempty"`
+	MessageID    agent.MessageID
+	ToolCallID   agent.ToolCallID
 
 	InputDigest      string
 	PreparedRevision agent.Revision `json:",omitempty"`
@@ -63,8 +64,8 @@ func (e ExtensionJournalEntry) Validate(sessionID agent.SessionID) error {
 	if err := e.validateSubject(); err != nil {
 		return err
 	}
-	if e.Boundary == hook.BoundaryToolPreflight && e.PreparedRevision == 0 {
-		return fmt.Errorf("session: tool preflight requires its prepared revision")
+	if (e.Boundary == hook.BoundaryToolPreflight || e.Boundary == hook.BoundaryToolResult) && e.PreparedRevision == 0 {
+		return fmt.Errorf("session: tool extension requires its prepared revision")
 	}
 	if e.PreparedAt.IsZero() {
 		return fmt.Errorf("session: extension journal requires prepared time")
@@ -86,24 +87,32 @@ func (e ExtensionJournalEntry) Validate(sessionID agent.SessionID) error {
 
 func (e ExtensionJournalEntry) validateSubject() error {
 	if (e.RunID != "" && !e.RunID.Valid()) || (e.StepID != "" && !e.StepID.Valid()) ||
+		(e.TargetStepID != "" && !e.TargetStepID.Valid()) ||
 		(e.MessageID != "" && !e.MessageID.Valid()) || (e.ToolCallID != "" && !e.ToolCallID.Valid()) {
 		return fmt.Errorf("session: extension subject identity is invalid")
 	}
 	switch e.Boundary {
 	case hook.BoundaryInputGate:
-		if !e.MessageID.Valid() || e.RunID != "" || e.StepID != "" || e.ToolCallID != "" {
+		if !e.MessageID.Valid() || e.RunID != "" || e.StepID != "" || e.TargetStepID != "" || e.ToolCallID != "" {
 			return fmt.Errorf("session: input gate subject is invalid")
 		}
-	case hook.BoundaryToolPreflight, hook.BoundaryToolResult:
+	case hook.BoundaryToolPreflight:
 		if !e.RunID.Valid() || !e.StepID.Valid() || !e.ToolCallID.Valid() {
 			return fmt.Errorf("session: tool extension subject is incomplete")
 		}
+		if e.TargetStepID != "" {
+			return fmt.Errorf("session: tool preflight cannot target a later step")
+		}
+	case hook.BoundaryToolResult:
+		if !e.RunID.Valid() || !e.StepID.Valid() || !e.TargetStepID.Valid() || !e.ToolCallID.Valid() || e.TargetStepID == e.StepID {
+			return fmt.Errorf("session: tool result extension subject is incomplete")
+		}
 	case hook.BoundaryCompletion:
-		if !e.RunID.Valid() || e.ToolCallID != "" {
+		if !e.RunID.Valid() || e.ToolCallID != "" || e.TargetStepID != "" {
 			return fmt.Errorf("session: completion subject is invalid")
 		}
 	case hook.BoundarySessionLifecycle:
-		if e.RunID != "" || e.StepID != "" || e.MessageID != "" || e.ToolCallID != "" {
+		if e.RunID != "" || e.StepID != "" || e.TargetStepID != "" || e.MessageID != "" || e.ToolCallID != "" {
 			return fmt.Errorf("session: lifecycle subject must be Session-scoped")
 		}
 	}
@@ -333,7 +342,7 @@ func validateExtensionTransition(current, next ExtensionJournalEntry) error {
 func sameExtensionIdentity(left, right ExtensionJournalEntry) bool {
 	return left.InvocationID == right.InvocationID && left.Sequence == right.Sequence &&
 		left.Descriptor == right.Descriptor && left.Boundary == right.Boundary &&
-		left.SessionID == right.SessionID && left.RunID == right.RunID && left.StepID == right.StepID &&
+		left.SessionID == right.SessionID && left.RunID == right.RunID && left.StepID == right.StepID && left.TargetStepID == right.TargetStepID &&
 		left.MessageID == right.MessageID && left.ToolCallID == right.ToolCallID &&
 		left.InputDigest == right.InputDigest && left.PreparedRevision == right.PreparedRevision && left.PreparedAt.Equal(right.PreparedAt)
 }
@@ -377,6 +386,7 @@ type ExtensionDiagnostic struct {
 	SessionID        agent.SessionID
 	RunID            agent.RunID
 	StepID           agent.StepID
+	TargetStepID     agent.StepID
 	MessageID        agent.MessageID
 	ToolCallID       agent.ToolCallID
 	InputDigest      string
@@ -423,7 +433,7 @@ func extensionPage(entries []ExtensionJournalEntry, request ExtensionPageRequest
 func extensionDiagnostic(entry ExtensionJournalEntry) ExtensionDiagnostic {
 	view := ExtensionDiagnostic{
 		InvocationID: entry.InvocationID, Sequence: entry.Sequence, Descriptor: entry.Descriptor, Boundary: entry.Boundary,
-		SessionID: entry.SessionID, RunID: entry.RunID, StepID: entry.StepID, MessageID: entry.MessageID, ToolCallID: entry.ToolCallID,
+		SessionID: entry.SessionID, RunID: entry.RunID, StepID: entry.StepID, TargetStepID: entry.TargetStepID, MessageID: entry.MessageID, ToolCallID: entry.ToolCallID,
 		InputDigest: entry.InputDigest, PreparedRevision: entry.PreparedRevision,
 		PreparedAt: entry.PreparedAt, PendingAt: entry.PendingAt, FinishedAt: entry.FinishedAt,
 		Status: entry.Status, ErrorCode: entry.ErrorCode, ErrorReason: entry.ErrorReason,

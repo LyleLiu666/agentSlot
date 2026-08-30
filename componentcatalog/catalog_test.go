@@ -10,7 +10,7 @@ func TestStandardCatalogPreservesApprovedInventory(t *testing.T) {
 	if err := catalog.Validate(); err != nil {
 		t.Fatalf("Standard().Validate() error = %v", err)
 	}
-	if got, want := len(catalog.Components), 42; got != want {
+	if got, want := len(catalog.Components), 44; got != want {
 		t.Fatalf("component count = %d, want %d", got, want)
 	}
 
@@ -18,7 +18,7 @@ func TestStandardCatalogPreservesApprovedInventory(t *testing.T) {
 		"agent.hook", "agent.loop", "agent.provider", "approval.service", "artifact.store",
 		"audit.sink", "authorization.provider", "billing.ledger", "checkpoint.store",
 		"context.compactor", "context.source", "credential.resolver", "execution.environment",
-		"gateway.channel", "goal.evaluator", "goal.store", "health.contributor", "hook.input_gate",
+		"gateway.channel", "goal.evaluator", "goal.store", "health.contributor", "hook.input_gate", "hook.tool_preflight", "hook.tool_result",
 		"interaction.command", "job.store", "mailbox", "memory.store", "metric.sink",
 		"model.attempt.observer", "model.catalog", "model.executor", "model.middleware",
 		"model.provider", "model.selector", "model.token-counter", "policy.guard",
@@ -39,11 +39,11 @@ func TestStandardCatalogPreservesApprovedInventory(t *testing.T) {
 	}
 
 	counts := catalog.Counts()
-	if counts.Mapped != 9 || counts.Contracted != 32 || counts.Conformant != 1 || counts.Proven != 0 || counts.Assembled != 0 {
+	if counts.Mapped != 9 || counts.Contracted != 34 || counts.Conformant != 1 || counts.Proven != 0 || counts.Assembled != 0 {
 		t.Fatalf("maturity counts = %#v", counts)
 	}
-	if counts.AtLeastContracted() != 33 {
-		t.Fatalf("at-least-contracted count = %d, want 33", counts.AtLeastContracted())
+	if counts.AtLeastContracted() != 35 {
+		t.Fatalf("at-least-contracted count = %d, want 35", counts.AtLeastContracted())
 	}
 	if component, ok := catalog.Lookup("session.store"); !ok || component.Maturity != MaturityContracted || component.Evidence.ConformanceSuite != "session.store/v1" || len(component.Evidence.KnownGaps) == 0 {
 		t.Fatalf("session.store = %#v, %v", component, ok)

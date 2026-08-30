@@ -18,6 +18,7 @@
 | ASR-REG-006 | ASR-002、ASR-008 | ExtensionJournal 状态推进、FileStore 首次升级或进程在 pending 后退出 | 身份可能因 JSON 表示漂移；半个 v2 可能发布；pending 可能被重放；扩展 context 可能污染 History | Hook 自动化第 1 轮 | 已修复，普通门禁已覆盖 |
 | ASR-REG-007 | ASR-002、ASR-008 | InputGate accept/reject、慢 Hook、Queue edit/delete/claim 竞态或重启 | 输入可能在 CAS 推进后半可见；旧 context 可能串到新内容；一次性 context 可能在每个后续模型请求中重复投影并放大 token | Hook 自动化第 3 轮 | 已修复，普通门禁已覆盖 |
 | ASR-REG-008 | ASR-002、ASR-008 | ToolPreflight deny/approval、并行 Tool batch、schema 失败或 pending 后重启 | Tool 可能绕过 Preflight；allow 可能覆盖 Policy；pending 外部命令可能重放；全批工具可能被无谓串行化 | Hook 自动化第 4 轮 | 已修复，普通门禁已覆盖 |
+| ASR-REG-009 | ASR-002、ASR-008 | ToolResult 已提交、Post pending/terminal/context consume 任一切点失败或重启 | ToolResult 可能被回滚/改写；Post command 可能重放；半套 context 可能进入下一模型请求；idle Session 可能残留未决 entry | Hook 自动化第 5 轮 | 已修复，普通门禁已覆盖 |
 
 ## 确定性复现
 
@@ -110,6 +111,19 @@ Tool 且不终止同批其他合法 Tool；require approval 与 Guard reason 合
 失败在任何 Tool 执行前收口并以 extension 归因中断；prepared 精确恢复一次，pending 变 unknown 后不重放；
 History 前缀不改写；零 contribution 不产生 ExtensionJournal，ParallelSafe Tool 仍并行。
 
+### ASR-REG-009
+
+```bash
+go test -race ./hook ./session ./standardagent \
+  -run 'TestToolResult|TestPostHook|TestCancelWinsWhileToolResultHook' \
+  -count=1
+```
+
+预期：通过。只有真正执行并形成 succeeded/failed 的 Tool 触发匹配 Post；ToolResult、terminal Journal、next
+Step 与完整 reservation 集合原子提交；Post context 按 ToolCall/Chain 顺序一次性进入精确 next Step。四个
+持久切点失败均保留原 ToolResult并收口全部 entry；pending/commit outcome unknown 不重放 command；中途
+失败和 Cancel 丢弃半套 context；History 前缀不改写；零 contribution 保持原结果提交快路径。
+
 ## 转绿要求
 
 | 编号 | 普通门禁中的最终测试 |
@@ -122,6 +136,7 @@ History 前缀不改写；零 contribution 不产生 ExtensionJournal，Parallel
 | ASR-REG-006 | ExtensionJournal 状态机、append-only History、memory/file parity、v1/v2、恢复与 Gateway 分页全部通过 |
 | ASR-REG-007 | InputGate CAS、append-only message、一次 context、并发竞态、取消/panic、恢复和 typed transport 全部通过 |
 | ASR-REG-008 | ToolPreflight 原子预约、静态 scope、Policy/Approval 合并、批次失败、append-only、恢复和零开销快路径全部通过 |
+| ASR-REG-009 | ToolResult/Post 原子预约、status scope、一次 context、四切点故障、Cancel、append-only、恢复和零开销快路径全部通过 |
 
 ## 账本纪律
 

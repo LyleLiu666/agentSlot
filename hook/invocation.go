@@ -9,7 +9,9 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/LyleLiu666/agentSlot/agent"
 	"github.com/LyleLiu666/agentSlot/internal/jsonvalue"
+	"github.com/LyleLiu666/agentSlot/model"
 )
 
 const (
@@ -202,6 +204,29 @@ func ValidateSafeReason(value string) error {
 	for _, character := range value {
 		if unicode.IsControl(character) || unicode.In(character, unicode.Cf, unicode.Zl, unicode.Zp) {
 			return fmt.Errorf("hook: reason must be one safe display line")
+		}
+	}
+	return nil
+}
+
+func validateContextProposal(inputs []model.Input, sessionID agent.SessionID) error {
+	if len(inputs) > MaxContextInputs {
+		return fmt.Errorf("hook: extension context exceeds the input limit")
+	}
+	for _, input := range inputs {
+		wrongMessageSession := input.Message != nil && input.Message.SessionID != sessionID
+		wrongCallSession := input.ToolCall != nil && input.ToolCall.SessionID != sessionID
+		if !input.Valid() || input.SystemPrompt != nil || wrongMessageSession || wrongCallSession {
+			return fmt.Errorf("hook: invalid extension context")
+		}
+	}
+	if err := model.ValidateInputs(inputs); err != nil {
+		return fmt.Errorf("hook: extension context violates the model protocol")
+	}
+	if len(inputs) > 0 {
+		fingerprint, err := FingerprintTypedInput(inputs)
+		if err != nil || fingerprint.Bytes > MaxContextBytes {
+			return fmt.Errorf("hook: extension context exceeds the byte limit")
 		}
 	}
 	return nil

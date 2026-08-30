@@ -299,15 +299,17 @@ func (r *runtimeLoopRun) Act(ctx context.Context, action agentloop.Action) (agen
 			r.stateMu.Unlock()
 			return state, preflightErr
 		}
-		next, canceled, err := r.runtime.commitToolResults(r.run, calls, dispatched.results)
+		next, postFailure, canceled, err := r.runtime.commitToolResults(r.run, calls, dispatched.results)
 		r.stateMu.Lock()
 		r.pendingTools = nil
-		if err != nil || dispatched.contractViolation || preflightFailure != nil {
+		if err != nil || dispatched.contractViolation || preflightFailure != nil || postFailure != nil {
 			r.state = agentloop.StateFailed
 			if err != nil {
 				r.termination = terminationFromError(session.TerminationSession, agent.CodeSessionOperationFailed, err)
 			} else if preflightFailure != nil {
 				r.termination = toolPreflightTermination(preflightFailure)
+			} else if postFailure != nil {
+				r.termination = toolResultHookTermination(postFailure)
 			} else {
 				r.termination = fixedRunTermination(session.TerminationTool, agent.ErrorInternal, agent.CodeToolExecutionFailed)
 			}
@@ -940,15 +942,16 @@ func (r *runtimeInstance) appendInputConsumption(changes []session.Change, snaps
 	return append(changes, consumePendingInputContexts(snapshot, item.Message.ID, runID, stepID)...)
 }
 
-func (r *runtimeInstance) commitToolResults(run *activeRun, calls []agent.ToolCall, results []tool.ToolResult) (agent.StepID, bool, error) {
+func (r *runtimeInstance) commitToolResults(run *activeRun, calls []agent.ToolCall, results []tool.ToolResult) (agent.StepID, *toolResultHookFailure, bool, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.active != run {
-		return "", true, nil
+		r.mu.Unlock()
+		return "", nil, true, nil
 	}
 	snapshot, err := r.viewLocked(context.Background())
 	if err != nil {
-		return "", false, err
+		r.mu.Unlock()
+		return "", nil, false, err
 	}
 	changes := make([]session.Change, 0, len(results)*2+8)
 	for index, result := range results {
@@ -968,11 +971,29 @@ func (r *runtimeInstance) commitToolResults(run *activeRun, calls []agent.ToolCa
 		)
 	}
 	nextStep := agent.StepID(r.nextID("step"))
+	occurrences, changes, err := r.appendToolResultReservations(snapshot, calls, results, nextStep, snapshot.Revision.Next(), changes)
+	if err != nil {
+		r.mu.Unlock()
+		return "", nil, false, err
+	}
 	for _, item := range pendingByDelivery(snapshot.Queue, session.DeliverySteer) {
 		changes = r.appendInputConsumption(changes, snapshot, item, run.id, nextStep)
 	}
 	_, err = r.commitLocked(context.Background(), snapshot.Revision, "tool-results", changes)
-	return nextStep, run.cancelRequested || r.closing, err
+	canceled := run.cancelRequested || r.closing
+	r.mu.Unlock()
+	if err != nil {
+		return "", nil, false, err
+	}
+	if canceled {
+		if settleErr := r.settleToolResultHookAbort(run, nil, remainingToolResultEntries(occurrences, 0, 0), "tool_result_hook_canceled"); settleErr != nil {
+			fallbackErr := r.settleToolResultHooksAfterPersistenceError(run, allToolResultEntryIDs(occurrences), "tool_result_hook_canceled")
+			return "", nil, true, errors.Join(settleErr, fallbackErr)
+		}
+		return nextStep, nil, true, nil
+	}
+	failure, canceled, err := r.evaluateToolResultHooks(run, occurrences)
+	return nextStep, failure, canceled, err
 }
 
 func (r *runtimeInstance) finishRun(run *activeRun, outcome stepOutcome, termination *session.RunTermination) (*activeRun, agent.StepID) {

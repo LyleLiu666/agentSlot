@@ -65,6 +65,7 @@ func (m *runtimeModule) RequiredSlots() []agentslot.Requirement {
 		agentslot.OptionalChain(hook.HookSlot),
 		agentslot.OptionalChain(hook.InputGateSlot),
 		agentslot.OptionalChain(hook.ToolPreflightSlot),
+		agentslot.OptionalChain(hook.ToolResultHookSlot),
 		agentslot.OptionalOne(goal.StoreSlot),
 		agentslot.OptionalOne(goal.EvaluatorSlot),
 		agentslot.OptionalChain(session.CommitObserverSlot),
@@ -223,6 +224,32 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 					preflight: preflight, descriptor: descriptor, scope: cloneToolScope(scope),
 				})
 			}
+			toolResultHooks, err := agentslot.ResolveChain(resolver, hook.ToolResultHookSlot)
+			if err != nil {
+				return nil, err
+			}
+			frozenToolResultHooks := make([]toolResultHookBinding, 0, len(toolResultHooks))
+			toolResultHookKeys := make(map[string]struct{}, len(toolResultHooks))
+			for _, resultHook := range toolResultHooks {
+				if isNilToolResultHook(resultHook) {
+					return nil, fmt.Errorf("standardagent: ToolResultHook contribution is nil")
+				}
+				descriptor := resultHook.Descriptor()
+				if err := descriptor.Validate(); err != nil {
+					return nil, err
+				}
+				if _, duplicate := toolResultHookKeys[descriptor.Key]; duplicate {
+					return nil, fmt.Errorf("standardagent: ToolResultHook descriptor key %q is duplicated", descriptor.Key)
+				}
+				scope := resultHook.Scope()
+				if err := scope.Validate(); err != nil {
+					return nil, err
+				}
+				toolResultHookKeys[descriptor.Key] = struct{}{}
+				frozenToolResultHooks = append(frozenToolResultHooks, toolResultHookBinding{
+					hook: resultHook, descriptor: descriptor, scope: cloneToolResultScope(scope),
+				})
+			}
 			goalStore, hasGoalStore, err := agentslot.ResolveOptionalOne(resolver, goal.StoreSlot)
 			if err != nil {
 				return nil, err
@@ -263,7 +290,7 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 				manager:   manager, store: store, executor: executor, counter: counter, attemptObservers: attemptObservers,
 				commands: commands, commandDescriptors: commandDescriptors,
 				tools: selectedTools, dispatcher: dispatcher, catalogs: catalogs, config: cloneAgentRuntimeConfig(m.config), sources: sources,
-				compactor: compactor, hooks: hooks, inputGates: frozenInputGates, toolPreflights: frozenToolPreflights,
+				compactor: compactor, hooks: hooks, inputGates: frozenInputGates, toolPreflights: frozenToolPreflights, toolResultHooks: frozenToolResultHooks,
 				goalStore: goalStore, goalEvaluator: goalEvaluator, commitObservers: commitObservers,
 				traces: traces, metrics: metrics, audits: audits, usages: usages, workspaceManager: workspaceManager,
 			})
@@ -291,6 +318,19 @@ func isNilToolPreflight(preflight hook.ToolPreflight) bool {
 		return true
 	}
 	value := reflect.ValueOf(preflight)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
+func isNilToolResultHook(resultHook hook.ToolResultHook) bool {
+	if resultHook == nil {
+		return true
+	}
+	value := reflect.ValueOf(resultHook)
 	switch value.Kind() {
 	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
 		return value.IsNil()
@@ -336,6 +376,7 @@ type runtimeDependencies struct {
 	hooks              []hook.AgentHook
 	inputGates         []inputGateBinding
 	toolPreflights     []toolPreflightBinding
+	toolResultHooks    []toolResultHookBinding
 	goalStore          goal.Store
 	goalEvaluator      goal.Evaluator
 	commitObservers    []session.SessionCommitObserver
@@ -361,6 +402,7 @@ type runtimeComponents struct {
 	hooks            []hook.AgentHook
 	inputGates       []inputGateBinding
 	toolPreflights   []toolPreflightBinding
+	toolResultHooks  []toolResultHookBinding
 	goalStore        goal.Store
 	goalEvaluator    goal.Evaluator
 	commitObservers  []session.SessionCommitObserver
@@ -385,6 +427,7 @@ func (d runtimeDependencies) runtimeComponents(observations *observationHub) *ru
 		hooks:            append([]hook.AgentHook(nil), d.hooks...),
 		inputGates:       append([]inputGateBinding(nil), d.inputGates...),
 		toolPreflights:   append([]toolPreflightBinding(nil), d.toolPreflights...),
+		toolResultHooks:  append([]toolResultHookBinding(nil), d.toolResultHooks...),
 		goalStore:        d.goalStore,
 		goalEvaluator:    d.goalEvaluator,
 		commitObservers:  append([]session.SessionCommitObserver(nil), d.commitObservers...),

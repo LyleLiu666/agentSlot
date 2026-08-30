@@ -625,6 +625,12 @@ func newRuntimeInstance(ctx context.Context, s session.Session, components *runt
 		runtime.events.close()
 		return nil, err
 	}
+	snapshot, err = runtime.recoverToolResultHookEntries(ctx, snapshot)
+	if err != nil {
+		runtime.commitObserver.stop()
+		runtime.events.close()
+		return nil, err
+	}
 	if err := runtime.restorePreparedRun(snapshot); err != nil {
 		runtime.commitObserver.stop()
 		runtime.events.close()
