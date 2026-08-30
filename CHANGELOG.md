@@ -4,6 +4,30 @@ This file records published AgentSlot releases. The project is pre-1.0: a
 validation release is usable through Go modules, but its public API may change
 when real consumers expose a flawed boundary.
 
+## Unreleased
+
+### Added
+
+- Added the provider-neutral ExtensionJournal persistence prerequisite with
+  immutable invocation identity, semantic typed-input digests, separate
+  command/effect/context state, pending-to-unknown recovery, bounded safe
+  diagnostics, and the independent `extension` Run termination source. This
+  does not claim that the designed typed Hook Slots are Runtime-wired.
+- Added `GatewayAccess.ExtensionDiagnostics`, including the runnable gRPC
+  profile operation, with exclusive immutable sequence pagination (default 50,
+  maximum 100) and no raw context or process payloads.
+
+### Compatibility and maturity
+
+- FileStore continues writing `agentslot.session-file/v1` while a Session has
+  no ExtensionJournal entries. Its first real entry atomically upgrades that
+  Session to `agentslot.session-file/v2`; new code reads both and never
+  downgrades v2. Older binaries cannot read an upgraded v2 Session.
+- `GatewayAccess` and `SessionStore` gain public methods and are source-breaking
+  for implementations. The previous `session.store/v1` conformance result
+  remains historical evidence for the pre-extension contract; the expanded
+  contract is Contracted until a full `session.store/v2` suite passes.
+
 ## v0.1.10 - 2026-08-29
 
 ### Fixed

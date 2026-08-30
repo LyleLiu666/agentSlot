@@ -248,6 +248,12 @@ func (g *gateway) History(ctx context.Context, request interaction.HistoryReques
 	})
 }
 
+func (g *gateway) ExtensionDiagnostics(ctx context.Context, request interaction.ExtensionDiagnosticsRequest) (interaction.ExtensionDiagnosticsPage, error) {
+	return withRuntime(ctx, g, request.SessionID, func(operationCtx context.Context, runtime runtimeAccess) (interaction.ExtensionDiagnosticsPage, error) {
+		return runtime.extensionDiagnostics(operationCtx, request)
+	})
+}
+
 func (g *gateway) Subscribe(ctx context.Context, request interaction.SubscribeRequest) (interaction.EventStream, error) {
 	return withRuntime(ctx, g, request.SessionID, func(operationCtx context.Context, runtime runtimeAccess) (interaction.EventStream, error) {
 		return runtime.subscribe(operationCtx, request)

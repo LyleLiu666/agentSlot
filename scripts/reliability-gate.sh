@@ -31,7 +31,7 @@ fi
 
 echo "[agentslot:fault-injection] running deterministic crash and recovery matrix"
 go test ./session ./model/modeltest ./standardagent \
-	-run 'TestFileStoreFaultInjection|TestMemoryStoreRecovery|TestRunChecksFakeExecutor|TestRuntimeRejectsModelStreamClosed|TestRuntimeCancellation|TestAgentLoopReturnCancels' \
+	-run 'TestFileStoreFaultInjection|TestMemoryStoreRecovery|TestExtensionRecovery|TestRunChecksFakeExecutor|TestRuntimeRejectsModelStreamClosed|TestRuntimeCancellation|TestAgentLoopReturnCancels' \
 	-count=1
 
 echo "[agentslot:race] running complete race-enabled suite"

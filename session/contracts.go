@@ -124,6 +124,7 @@ type Snapshot struct {
 	RetainedContexts []ContextView
 	Queue            []QueueItem
 	RunJournal       []JournalEntry
+	ExtensionJournal []ExtensionJournalEntry `json:",omitempty"`
 	Events           []SessionEvent
 	ModelConfig      SessionModelConfig
 	RunState         RunState
@@ -411,20 +412,21 @@ const MaxRunTerminationMessageBytes = 1024
 type TerminationSource string
 
 const (
-	TerminationModel   TerminationSource = "model"
-	TerminationContext TerminationSource = "context"
-	TerminationLoop    TerminationSource = "loop"
-	TerminationTool    TerminationSource = "tool"
-	TerminationPolicy  TerminationSource = "policy"
-	TerminationBudget  TerminationSource = "budget"
-	TerminationSession TerminationSource = "session"
-	TerminationRuntime TerminationSource = "runtime"
+	TerminationModel     TerminationSource = "model"
+	TerminationContext   TerminationSource = "context"
+	TerminationLoop      TerminationSource = "loop"
+	TerminationTool      TerminationSource = "tool"
+	TerminationPolicy    TerminationSource = "policy"
+	TerminationBudget    TerminationSource = "budget"
+	TerminationSession   TerminationSource = "session"
+	TerminationRuntime   TerminationSource = "runtime"
+	TerminationExtension TerminationSource = "extension"
 )
 
 func (s TerminationSource) Valid() bool {
 	switch s {
 	case TerminationModel, TerminationContext, TerminationLoop, TerminationTool,
-		TerminationPolicy, TerminationBudget, TerminationSession, TerminationRuntime:
+		TerminationPolicy, TerminationBudget, TerminationSession, TerminationRuntime, TerminationExtension:
 		return true
 	default:
 		return false
@@ -659,6 +661,7 @@ type SessionStore interface {
 	Recover(context.Context, SessionRef) (Snapshot, error)
 	Commit(context.Context, CommitRequest) (Commit, error)
 	HistoryPage(context.Context, HistoryPageRequest) (HistoryPage, error)
+	ExtensionDiagnostics(context.Context, ExtensionPageRequest) (ExtensionPage, error)
 	ListSessions(context.Context, ListRequest) (ListResult, error)
 }
 
@@ -810,6 +813,7 @@ const (
 	SetModelConfig            ChangeKind = "set_model_config"
 	SetRunState               ChangeKind = "set_run_state"
 	UpdateRunJournal          ChangeKind = "update_run_journal"
+	UpdateExtensionJournal    ChangeKind = "update_extension_journal"
 )
 
 // Change is a provider-neutral, single-payload aggregate update accepted by
@@ -835,6 +839,7 @@ type Change struct {
 	ModelConfig           *SessionModelConfig
 	RunState              *RunStateChange
 	Journal               *JournalEntry
+	Extension             *ExtensionJournalEntry
 }
 
 // Validate checks a durable change's stable identity and containment.
@@ -945,6 +950,13 @@ func (c Change) Validate(sessionID agent.SessionID) error {
 		if err := c.Journal.Validate(sessionID); err != nil {
 			return err
 		}
+	case UpdateExtensionJournal:
+		if c.Extension == nil {
+			return fmt.Errorf("session: extension journal change is missing")
+		}
+		if err := c.Extension.Validate(sessionID); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("session: unsupported change kind %q", c.Kind)
 	}
@@ -972,6 +984,7 @@ func (c Change) payloadCount() int {
 		c.ModelConfig != nil,
 		c.RunState != nil,
 		c.Journal != nil,
+		c.Extension != nil,
 	} {
 		if present {
 			count++

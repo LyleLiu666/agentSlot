@@ -16,10 +16,12 @@ import (
 
 	agentslot "github.com/LyleLiu666/agentSlot"
 	agent "github.com/LyleLiu666/agentSlot/agent"
+	"github.com/LyleLiu666/agentSlot/hook"
 )
 
 const (
-	fileStoreFormat           = "agentslot.session-file/v1"
+	fileStoreFormatV1         = "agentslot.session-file/v1"
+	fileStoreFormatV2         = "agentslot.session-file/v2"
 	maxFileStoreDocumentBytes = 256 << 20
 )
 
@@ -145,7 +147,7 @@ func (s *FileStore) Create(ctx context.Context, initial NewSession) (Snapshot, e
 		Fork: initial.Fork,
 	})
 	snapshot.Session.Revision = snapshot.Revision
-	document := fileStoreDocument{Format: fileStoreFormat, Snapshot: snapshot, UpdatedAt: s.list.recordCreate(snapshot.Session.ID), Idempotency: make(map[string]fileStoreCommit)}
+	document := fileStoreDocument{Format: fileStoreFormatV1, Snapshot: snapshot, UpdatedAt: s.list.recordCreate(snapshot.Session.ID), Idempotency: make(map[string]fileStoreCommit)}
 	if err := s.persistLocked(ctx, path, document); err != nil {
 		return Snapshot{}, err
 	}
@@ -171,6 +173,32 @@ func (s *FileStore) HistoryPage(ctx context.Context, request HistoryPageRequest)
 	page, err := historyPage(document.Snapshot.History, request)
 	if err != nil {
 		return HistoryPage{}, err
+	}
+	page.AgentID = document.Snapshot.Session.AgentID
+	page.WorkspaceID = document.Snapshot.Session.WorkspaceID
+	page.Revision = document.Snapshot.Revision
+	return page, nil
+}
+
+func (s *FileStore) ExtensionDiagnostics(ctx context.Context, request ExtensionPageRequest) (ExtensionPage, error) {
+	if err := contextErr(ctx, "session.file_store.extension_diagnostics"); err != nil {
+		return ExtensionPage{}, err
+	}
+	if !request.SessionID.Valid() {
+		return ExtensionPage{}, invalid("session.file_store.extension_diagnostics", "session ID is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.ensureOpenLocked("session.file_store.extension_diagnostics"); err != nil {
+		return ExtensionPage{}, err
+	}
+	document, err := s.readLocked(request.SessionID)
+	if err != nil {
+		return ExtensionPage{}, err
+	}
+	page, err := extensionPage(document.Snapshot.ExtensionJournal, request)
+	if err != nil {
+		return ExtensionPage{}, err
 	}
 	page.AgentID = document.Snapshot.Session.AgentID
 	page.WorkspaceID = document.Snapshot.Session.WorkspaceID
@@ -321,6 +349,9 @@ func (s *FileStore) Commit(ctx context.Context, request CommitRequest) (Commit, 
 		FirstHistorySequence: first, LastHistorySequence: last, Applied: true,
 	}
 	document.Snapshot = working
+	if document.Format == fileStoreFormatV1 && len(working.ExtensionJournal) > 0 {
+		document.Format = fileStoreFormatV2
+	}
 	document.UpdatedAt = s.list.nextUpdatedAt(document.UpdatedAt)
 	if document.Idempotency == nil {
 		document.Idempotency = make(map[string]fileStoreCommit)
@@ -387,6 +418,18 @@ func (s *FileStore) readDocumentLocked(path string, expectedID agent.SessionID) 
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return fileStoreDocument{}, unrecoverableFile(id, "session file contains trailing data", err)
 	}
+	if document.Format == fileStoreFormatV1 {
+		// Only legacy v1 documents pay for this second, shape-only decode. It
+		// distinguishes an absent v2 field from an explicitly empty/null field
+		// without retaining a second raw copy of every normal v2 document.
+		extensionFieldPresent, err := fileExtensionJournalFieldPresent(file)
+		if err != nil {
+			return fileStoreDocument{}, unrecoverableFile(id, "cannot inspect session file schema", err)
+		}
+		if extensionFieldPresent {
+			return fileStoreDocument{}, unrecoverableFile(id, "v1 session file contains a v2 field", nil)
+		}
+	}
 	if info, err = file.Stat(); err != nil || info.Size() > maxFileStoreDocumentBytes {
 		return fileStoreDocument{}, unrecoverableFile(id, "session file changed or exceeded the safety limit while reading", err)
 	}
@@ -403,6 +446,22 @@ func (s *FileStore) readDocumentLocked(path string, expectedID agent.SessionID) 
 		return fileStoreDocument{}, unrecoverableFile(id, "session file violates aggregate invariants", err)
 	}
 	return document, nil
+}
+
+func fileExtensionJournalFieldPresent(file *os.File) (bool, error) {
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return false, err
+	}
+	var probe struct {
+		Snapshot struct {
+			ExtensionJournal json.RawMessage
+		} `json:"snapshot"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(file, maxFileStoreDocumentBytes+1))
+	if err := decoder.Decode(&probe); err != nil {
+		return false, err
+	}
+	return probe.Snapshot.ExtensionJournal != nil, nil
 }
 
 func (s *FileStore) persistLocked(ctx context.Context, path string, document fileStoreDocument) error {
@@ -461,8 +520,14 @@ func (s *FileStore) persistLocked(ctx context.Context, path string, document fil
 }
 
 func validateFileDocument(id agent.SessionID, document fileStoreDocument) error {
-	if document.Format != fileStoreFormat {
+	if document.Format != fileStoreFormatV1 && document.Format != fileStoreFormatV2 {
 		return fmt.Errorf("unsupported format %q", document.Format)
+	}
+	if document.Format == fileStoreFormatV1 && len(document.Snapshot.ExtensionJournal) != 0 {
+		return errors.New("v1 session file cannot contain an extension journal")
+	}
+	if document.Format == fileStoreFormatV2 && len(document.Snapshot.ExtensionJournal) == 0 {
+		return errors.New("v2 session file requires an extension journal")
 	}
 	snapshot := document.Snapshot
 	if snapshot.Session.ID != id || snapshot.Revision == 0 || snapshot.Session.Revision != snapshot.Revision {
@@ -520,6 +585,19 @@ func validateFileDocument(id agent.SessionID, document fileStoreDocument) error 
 		if unfinishedJournal(entry.Status) && (snapshot.RunState != RunRunning || entry.RunID != snapshot.ActiveRunID) {
 			return errors.New("unfinished journal does not belong to the active run")
 		}
+	}
+	invocations := make(map[hook.InvocationID]struct{}, len(snapshot.ExtensionJournal))
+	for index, entry := range snapshot.ExtensionJournal {
+		if err := entry.Validate(id); err != nil {
+			return err
+		}
+		if entry.Sequence != ExtensionSequence(index+1) {
+			return errors.New("extension sequence is not contiguous")
+		}
+		if _, duplicate := invocations[entry.InvocationID]; duplicate {
+			return errors.New("duplicate extension invocation ID")
+		}
+		invocations[entry.InvocationID] = struct{}{}
 	}
 	if err := validateContext(snapshot.Context, id); err != nil {
 		return err

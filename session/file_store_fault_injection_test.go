@@ -7,11 +7,44 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	agent "github.com/LyleLiu666/agentSlot/agent"
+	"github.com/LyleLiu666/agentSlot/hook"
 	"github.com/LyleLiu666/agentSlot/model"
 )
+
+func TestFileStoreFaultInjectionDoesNotHalfPublishV2Upgrade(t *testing.T) {
+	store, created, path, before := newFaultInjectionStore(t, "v2-upgrade")
+	store.persistence.rename = func(string, string) error { return errors.New("injected rename failure") }
+	fingerprint, err := hook.FingerprintTypedInput(struct {
+		SessionID agent.SessionID `json:"session_id"`
+	}{SessionID: created.Session.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := ExtensionJournalEntry{
+		InvocationID: "fault-upgrade-invocation", Sequence: 1,
+		Descriptor: extensionDescriptorFixture(), Boundary: hook.BoundarySessionLifecycle,
+		SessionID: created.Session.ID, InputDigest: fingerprint.Digest,
+		PreparedAt: time.Date(2026, time.August, 30, 10, 0, 0, 0, time.UTC),
+		Status:     hook.InvocationPrepared, EffectDisposition: hook.EffectNone, ContextDisposition: hook.ContextNone,
+	}
+	_, err = store.Commit(context.Background(), CommitRequest{
+		SessionID: created.Session.ID, ExpectedRevision: created.Revision, IdempotencyKey: "upgrade-v2",
+		Changes: []Change{{Kind: UpdateExtensionJournal, Extension: &entry}},
+	})
+	if !agent.IsKind(err, agent.ErrorUnavailable) {
+		t.Fatalf("v2 upgrade error = %v", err)
+	}
+	assertFaultDidNotPublish(t, store, path, before, created.Session.ID, created.Revision)
+}
+
+func extensionDescriptorFixture() hook.ExtensionDescriptor {
+	return hook.ExtensionDescriptor{Key: "fault.fixture", DefinitionDigest: "sha256:" + strings.Repeat("a", 64)}
+}
 
 func TestFileStoreFaultInjectionRejectsShortWriteWithoutPublishing(t *testing.T) {
 	store, created, path, before := newFaultInjectionStore(t, "short-write")

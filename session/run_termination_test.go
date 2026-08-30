@@ -42,6 +42,20 @@ func TestRunTerminationUsesFiniteSafeProviderNeutralVocabulary(t *testing.T) {
 	}
 }
 
+func TestRunTerminationClassifiesExtensionFailureWithoutBlamingRuntimeOrTool(t *testing.T) {
+	termination := session.RunTermination{
+		Source: session.TerminationExtension,
+		Kind:   agent.ErrorUnavailable,
+		Code:   agent.ErrorCode("hook_outcome_unknown"),
+	}
+	if err := termination.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if termination.Source == session.TerminationRuntime || termination.Source == session.TerminationTool || termination.Source == session.TerminationModel {
+		t.Fatalf("extension termination was aliased to %q", termination.Source)
+	}
+}
+
 func TestRunFactTerminationIsForbiddenForSuccessAndOptionalForLegacyRead(t *testing.T) {
 	started := session.RunFact{
 		SessionID: "session-legacy", RunID: "run-1", Kind: session.RunStarted,

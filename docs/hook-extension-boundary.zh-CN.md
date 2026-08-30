@@ -134,6 +134,8 @@ prepared -> failed | canceled
 - terminal context 只消费一次，消费或丢弃与对应业务 mutation/Step commit 关联。
 - command status 与 effect 必须分开：任何 terminal outcome 的固定成功/失败后果都先记 pending，再记
   applied/discarded；旧 revision 决策或尚未提交的 RunInterrupted 不能只靠 terminal status 猜测。
+- terminal pending、对应业务 mutation 与 applied/discarded 可以作为同一个 `Store.Commit` 内的有序
+  changes 原子提交；状态语义仍分离，但不强迫 FileStore 为无恢复窗口的连续步骤多做一次全量写入。
 - occurrence 提前结束时，未调用的 prepared entry 必须转为 canceled，idle Session 不留悬空 prepared。
 - digest 基于规范化 typed value，不比较可能因空格、转义或 object key 顺序变化的原始 JSON 文本。
 

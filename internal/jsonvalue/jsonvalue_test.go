@@ -39,3 +39,27 @@ func TestValidRejectsAmbiguousOrMultipleValues(t *testing.T) {
 		}
 	}
 }
+
+func TestCanonicalIsStableCompactAndRejectsAmbiguity(t *testing.T) {
+	left, err := Canonical([]byte(`{ "z": -0, "a": [10e-1, "a\u002fb"] }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := Canonical([]byte(`{"a":[1.0,"a/b"],"z":0}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(left) != string(right) || string(left) != `{"a":[1,"a/b"],"z":0}` {
+		t.Fatalf("canonical left=%s right=%s", left, right)
+	}
+	large, err := Canonical([]byte(`1e1000000000`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(large) != `1e1000000000` {
+		t.Fatalf("large canonical number expanded: %s", large)
+	}
+	if _, err := Canonical([]byte(`{"a":1,"a":2}`)); err == nil {
+		t.Fatal("canonical encoding accepted duplicate members")
+	}
+}

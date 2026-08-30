@@ -164,6 +164,10 @@ func TestRemoteProfileDispatchesEveryGatewayOperation(t *testing.T) {
 		},
 		func() error { _, err := client.View(ctx, interaction.SessionViewRequest{}); return err },
 		func() error { _, err := client.History(ctx, interaction.HistoryRequest{}); return err },
+		func() error {
+			_, err := client.ExtensionDiagnostics(ctx, interaction.ExtensionDiagnosticsRequest{})
+			return err
+		},
 		func() error { _, err := client.Commands(ctx, interaction.CommandScope{}); return err },
 		func() error { _, err := client.InvokeCommand(ctx, interaction.CommandInvocation{}); return err },
 		func() error { return client.CloseSession(ctx, interaction.CloseSessionRequest{}) },
@@ -330,6 +334,10 @@ func (g *completeGatewayStub) View(context.Context, interaction.SessionViewReque
 func (g *completeGatewayStub) History(context.Context, interaction.HistoryRequest) (interaction.HistoryPage, error) {
 	g.record()
 	return interaction.HistoryPage{}, nil
+}
+func (g *completeGatewayStub) ExtensionDiagnostics(context.Context, interaction.ExtensionDiagnosticsRequest) (interaction.ExtensionDiagnosticsPage, error) {
+	g.record()
+	return interaction.ExtensionDiagnosticsPage{}, nil
 }
 func (g *completeGatewayStub) Subscribe(context.Context, interaction.SubscribeRequest) (interaction.EventStream, error) {
 	g.record()

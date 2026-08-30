@@ -537,6 +537,7 @@ type runtimeAccess interface {
 	revision() agent.Revision
 	view(context.Context, interaction.SessionViewRequest) (interaction.SessionView, error)
 	history(context.Context, interaction.HistoryRequest) (interaction.HistoryPage, error)
+	extensionDiagnostics(context.Context, interaction.ExtensionDiagnosticsRequest) (interaction.ExtensionDiagnosticsPage, error)
 	send(context.Context, interaction.SendRequest) (interaction.EnqueueReceipt, error)
 	steer(context.Context, interaction.SteerRequest) (interaction.EnqueueReceipt, error)
 	pending(context.Context, interaction.RunPendingRequest) (interaction.RunReceipt, error)
@@ -712,6 +713,26 @@ func (r *runtimeInstance) history(ctx context.Context, request interaction.Histo
 		return interaction.HistoryPage{}, err
 	}
 	return interaction.HistoryPage{SessionID: r.id(), Revision: snapshot.Revision, Facts: page.Facts, HasMore: page.HasMore}, nil
+}
+
+func (r *runtimeInstance) extensionDiagnostics(ctx context.Context, request interaction.ExtensionDiagnosticsRequest) (interaction.ExtensionDiagnosticsPage, error) {
+	if request.SessionID != r.id() {
+		return interaction.ExtensionDiagnosticsPage{}, invalidInput("gateway.extension_diagnostics", "SessionID is required")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.ensureOpenLocked("gateway.extension_diagnostics"); err != nil {
+		return interaction.ExtensionDiagnosticsPage{}, err
+	}
+	page, err := r.components.store.ExtensionDiagnostics(ctx, session.ExtensionPageRequest{
+		SessionID: request.SessionID, BeforeExtensionSequence: request.BeforeExtensionSequence, Limit: request.Limit,
+	})
+	if err != nil {
+		return interaction.ExtensionDiagnosticsPage{}, err
+	}
+	return interaction.ExtensionDiagnosticsPage{
+		SessionID: r.id(), Revision: page.Revision, Diagnostics: page.Diagnostics, HasMore: page.HasMore,
+	}, nil
 }
 
 func (r *runtimeInstance) subscribe(ctx context.Context, request interaction.SubscribeRequest) (interaction.EventStream, error) {

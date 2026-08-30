@@ -33,12 +33,13 @@ AgentSlot 的固定 Runtime 已经负责 Session 真值、CAS 提交、Run 生�
 | ASR-005 | 通用失败事实 | 非成功 Run 在 Store 可提交时保留稳定、脱敏、可程序判断的最终原因 |
 | ASR-006 | 预算与取消闭合 | 物理 Attempt 不逃逸 Run 预算，取消能终止等待、重试和续传 |
 | ASR-007 | 黑盒一致性验证 | 标准契约通过可复用 conformance 与故障注入测试证明，而非只靠参考实现单测 |
+| ASR-008 | 扩展调用恢复 | 外部扩展调用的意图、执行边界、终态和业务后果分别持久化；pending 不重放，且不改写 History |
 
 ## 固化边界
 
 ### 应进入 AgentSlot 的内容
 
-- Session aggregate、History、Queue、RunJournal 和 Run lifecycle 的不变量。
+- Session aggregate、History、Queue、RunJournal、ExtensionJournal 和 Run lifecycle 的不变量。
 - Runtime 内存状态与持久 Session 状态的收敛规则。
 - ToolCall、Model Attempt、Run 和 Step 的稳定身份及包含关系。
 - Provider-neutral 的 `ModelExecutor`、`ModelStream`、`Completion`、Attempt 记录和取消协议。
@@ -85,6 +86,7 @@ AgentSlot 的固定 Runtime 已经负责 Session 真值、CAS 提交、Run 生�
 6. Model delta 和 reset 是临时事件；只有完整、合法的 `EventComplete` 可以进入 History。
 7. Provider 私有 continuation 对 Runtime 保持 opaque，只有对应 Executor 可以解释。
 8. 重试性是当前实现和产品策略，不是不可变历史事实；未知副作用从 Journal 推导，不重复造一份 Run 状态。
+9. ExtensionJournal 可以推进一次调用的状态与 effect/context disposition，但不得修改、删除、换位或插入旧 History；pending 恢复为 outcome_unknown，不能自动重放。
 
 ## 非目标
 
@@ -112,6 +114,7 @@ AgentSlot 的固定 Runtime 已经负责 Session 真值、CAS 提交、Run 生�
 - 先写复现历史事故的确定性测试，再修改实现。
 - `session.store` conformance 增加 JSON 表示变化、恢复中断和终态一致性场景。
 - FileStore 的短写、临时文件 sync/close、取消、rename 与目录 sync 故障通过包私有注入边界进入普通测试；rename 前失败保持旧文档，rename 后模糊结果依靠幂等记录安全观察。
+- ExtensionJournal 的 memory/file parity、v1/v2 条件升级、损坏读取、pending 恢复、payload 清理和有界诊断进入普通门禁；未使用扩展的 Session 继续保持 v1。
 - `model.executor/v1` conformance 已建立，覆盖公共 stream lifecycle、终态关闭、Attempt 配对和共享 token budget；当前 FakeExecutor 与参考 OpenAI-compatible Executor 驱动同一套测试，因此只能达到 Conformant，不能称为 Proven。
 - `scripts/reliability-gate.sh` 固定执行格式检查、故障矩阵、完整 race、vet 和 build；它不读取真实 Provider 凭据，也不依赖外网。
 - 公共状态或合同变化必须同步更新 `COMPONENT_MAP.md` 与 `COMPONENT_MAP.zh-CN.md`。

@@ -707,6 +707,10 @@ func (s *seededStore) Commit(ctx context.Context, request session.CommitRequest)
 func (s *seededStore) HistoryPage(ctx context.Context, request session.HistoryPageRequest) (session.HistoryPage, error) {
 	return s.inner.HistoryPage(ctx, request)
 }
+
+func (s *seededStore) ExtensionDiagnostics(ctx context.Context, request session.ExtensionPageRequest) (session.ExtensionPage, error) {
+	return s.inner.ExtensionDiagnostics(ctx, request)
+}
 func (s *seededStore) ListSessions(ctx context.Context, request session.ListRequest) (session.ListResult, error) {
 	return s.inner.ListSessions(ctx, request)
 }
