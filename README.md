@@ -358,6 +358,9 @@ operations ecosystems.
 The framework-side requirements for the next reliability work are defined in
 the [AgentSlot 运行可靠性设计](docs/reliability/README.zh-CN.md), with separate
 designs for Session/Runtime consistency and the Model execution boundary.
+The [Hook 扩展边界设计](docs/hook-extension-boundary.zh-CN.md) distinguishes the
+narrow `agent.hook` contract from a consuming product's user-configurable Hook
+system and defines the admission rules for any future lifecycle seam.
 
 A runnable standard LLM agent requires exactly one AgentLoop, exactly one
 SessionStore, exactly one ModelExecutor, and at least one GatewayChannel. The
