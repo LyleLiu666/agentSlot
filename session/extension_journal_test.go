@@ -22,8 +22,18 @@ func TestExtensionJournalTransitionsKeepIdentityAndDispositionsIndependent(t *te
 	for name, invalidEntry := range map[string]session.ExtensionJournalEntry{
 		"skip pending before success": extensionSucceeded(prepared),
 		"change identity":             extensionPending(withExtensionKey(prepared, "changed-key")),
-		"skip sequence":               preparedExtensionEntry(t, created.Session.ID, 3, "invocation-3"),
-		"reuse sequence":              preparedExtensionEntry(t, created.Session.ID, 1, "invocation-2"),
+		"change lifecycle phase": func() session.ExtensionJournalEntry {
+			entry := extensionPending(prepared)
+			entry.LifecyclePhase, entry.LifecycleOpenKind = hook.LifecycleClose, ""
+			return entry
+		}(),
+		"change open kind": func() session.ExtensionJournalEntry {
+			entry := extensionPending(prepared)
+			entry.LifecycleOpenKind = hook.OpenFork
+			return entry
+		}(),
+		"skip sequence":  preparedExtensionEntry(t, created.Session.ID, 3, "invocation-3"),
+		"reuse sequence": preparedExtensionEntry(t, created.Session.ID, 1, "invocation-2"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := store.Commit(context.Background(), session.CommitRequest{
@@ -549,7 +559,10 @@ func preparedExtensionEntry(t *testing.T, sessionID agent.SessionID, sequence se
 		},
 		Boundary:           hook.BoundarySessionLifecycle,
 		SessionID:          sessionID,
+		LifecyclePhase:     hook.LifecycleOpen,
+		LifecycleOpenKind:  hook.OpenResume,
 		InputDigest:        fingerprint.Digest,
+		PreparedRevision:   agent.Revision(sequence + 1),
 		PreparedAt:         time.Date(2026, time.August, 30, 10, 0, int(sequence), 0, time.UTC),
 		Status:             hook.InvocationPrepared,
 		EffectDisposition:  hook.EffectNone,

@@ -572,7 +572,7 @@ func TestCloseSessionCancelsRunWithoutDeletingDurableSession(t *testing.T) {
 	if err := fake.WaitForRequests(ctx, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := access.CloseSession(ctx, interaction.CloseSessionRequest{SessionID: opened.SessionID, ExpectedRevision: receipt.Revision}); err != nil {
+	if _, err := access.CloseSession(ctx, interaction.CloseSessionRequest{SessionID: opened.SessionID, ExpectedRevision: receipt.Revision}); err != nil {
 		t.Fatalf("CloseSession: %v", err)
 	}
 	resumed, err := access.ResumeSession(ctx, interaction.ResumeSessionRequest{SessionID: opened.SessionID})

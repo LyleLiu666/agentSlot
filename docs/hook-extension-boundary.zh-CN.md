@@ -41,7 +41,7 @@ typed Slot；AgentSlot 不提供一个携带任意 map、允许任意修改的�
 | Tool 成功或失败后被动处理 | `session.commit.observer` / Observation | 已有 | 只看已提交结果；失败不能改变业务提交 |
 | Tool 结果后同步追加模型上下文 | `hook.ToolResultHook` | 框架已实现 | ToolResult、terminal Journal、next Step 与 Post reservation 原子提交；追加内容成为 ContextContribution，不能改写原结果 |
 | 用户输入提交前 | `hook.InputGate` | 框架已实现 | Gateway 先持久化调用 occurrence；只能拒绝或附加独立上下文，不能暗改用户原文；具名产品 adapter 仍属于组装仓库 |
-| Session 打开与关闭 | `hook.SessionLifecycle` | 已设计、待实现 | coordinator 明确 open kind；只读身份和状态，不能持有 Runtime 或改写旧 History |
+| Session 打开与关闭 | `hook.SessionLifecycle` | 框架已实现 | coordinator 明确 open kind；只读身份和状态，不能持有 Runtime 或改写旧 History |
 | PermissionRequest | `approval.service` | 已有 | 不再创建同义 Hook 权力面 |
 | sub-agent、Worktree、文件监视、Elicitation | 对应生态的 typed contract | 尚无准入证据 | 先有真实产品消费者，再决定是否进入 AgentSlot |
 

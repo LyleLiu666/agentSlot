@@ -213,10 +213,10 @@ func (b *gatewayBinding) InvokeCommand(ctx context.Context, invocation interacti
 	return target.InvokeCommand(ctx, invocation)
 }
 
-func (b *gatewayBinding) CloseSession(ctx context.Context, request interaction.CloseSessionRequest) error {
+func (b *gatewayBinding) CloseSession(ctx context.Context, request interaction.CloseSessionRequest) (interaction.CloseSessionReceipt, error) {
 	target, err := b.access()
 	if err != nil {
-		return err
+		return interaction.CloseSessionReceipt{}, err
 	}
 	return target.CloseSession(ctx, request)
 }

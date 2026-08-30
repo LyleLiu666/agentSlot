@@ -9,12 +9,11 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	agent "github.com/LyleLiu666/agentSlot/agent"
+	"github.com/LyleLiu666/agentSlot/hook"
 	"github.com/LyleLiu666/agentSlot/interaction"
 	"github.com/LyleLiu666/agentSlot/model"
-	"github.com/LyleLiu666/agentSlot/observe"
 	"github.com/LyleLiu666/agentSlot/session"
 	"github.com/LyleLiu666/agentSlot/workspace"
 )
@@ -222,6 +221,14 @@ func (r *runtimeRegistry) get(id agent.SessionID) (runtimeAccess, bool) {
 	return runtime, ok
 }
 
+func (r *runtimeRegistry) discard(id agent.SessionID, runtime runtimeAccess) {
+	r.mu.Lock()
+	if r.entries[id] == runtime {
+		delete(r.entries, id)
+	}
+	r.mu.Unlock()
+}
+
 func (r *runtimeRegistry) wait(ctx context.Context, id agent.SessionID) (runtimeAccess, bool, error) {
 	for {
 		r.mu.Lock()
@@ -318,7 +325,13 @@ func (c *runtimeCoordinator) create(ctx context.Context, request interaction.Cre
 		return interaction.SessionOpened{}, err
 	}
 	if err := c.registerNew(ctx, candidate); err != nil {
-		return interaction.SessionOpened{}, err
+		candidate.abortOpen(err)
+		return interaction.SessionOpened{}, errors.Join(err, candidate.close(context.WithoutCancel(ctx)))
+	}
+	if err := candidate.open(ctx, hook.OpenCreate); err != nil {
+		closeErr := candidate.close(context.WithoutCancel(ctx))
+		c.registry.discard(candidate.id(), candidate)
+		return interaction.SessionOpened{}, errors.Join(err, closeErr)
 	}
 	return opened(candidate), nil
 }
@@ -348,15 +361,23 @@ func (c *runtimeCoordinator) resume(ctx context.Context, request interaction.Res
 			return nil, err
 		}
 		if err := ctx.Err(); err != nil {
+			runtime.abortOpen(err)
 			return nil, errors.Join(err, runtime.close(context.WithoutCancel(ctx)))
 		}
 		if runtime.id() != request.SessionID {
-			return nil, agent.NewError(agent.ErrorInternal, "gateway.resume_session", "framework Manager returned a different SessionID", nil)
+			mismatch := agent.NewError(agent.ErrorInternal, "gateway.resume_session", "framework Manager returned a different SessionID", nil)
+			runtime.abortOpen(mismatch)
+			return nil, errors.Join(mismatch, runtime.close(context.WithoutCancel(ctx)))
 		}
 		return runtime, nil
 	})
 	if err != nil {
 		return interaction.SessionOpened{}, err
+	}
+	if err := runtime.open(ctx, hook.OpenResume); err != nil {
+		closeErr := runtime.close(context.WithoutCancel(ctx))
+		c.registry.discard(runtime.id(), runtime)
+		return interaction.SessionOpened{}, errors.Join(err, closeErr)
 	}
 	return opened(runtime), nil
 }
@@ -395,7 +416,13 @@ func (c *runtimeCoordinator) fork(ctx context.Context, request interaction.ForkS
 		return interaction.SessionOpened{}, err
 	}
 	if err := c.registerNew(ctx, candidate); err != nil {
-		return interaction.SessionOpened{}, err
+		candidate.abortOpen(err)
+		return interaction.SessionOpened{}, errors.Join(err, candidate.close(context.WithoutCancel(ctx)))
+	}
+	if err := candidate.open(ctx, hook.OpenFork); err != nil {
+		closeErr := candidate.close(context.WithoutCancel(ctx))
+		c.registry.discard(candidate.id(), candidate)
+		return interaction.SessionOpened{}, errors.Join(err, closeErr)
 	}
 	return opened(candidate), nil
 }
@@ -426,7 +453,13 @@ func (c *runtimeCoordinator) summary(ctx context.Context, request interaction.Su
 		return interaction.SessionOpened{}, err
 	}
 	if err := c.registerNew(ctx, candidate); err != nil {
-		return interaction.SessionOpened{}, err
+		candidate.abortOpen(err)
+		return interaction.SessionOpened{}, errors.Join(err, candidate.close(context.WithoutCancel(ctx)))
+	}
+	if err := candidate.open(ctx, hook.OpenSummary); err != nil {
+		closeErr := candidate.close(context.WithoutCancel(ctx))
+		c.registry.discard(candidate.id(), candidate)
+		return interaction.SessionOpened{}, errors.Join(err, closeErr)
 	}
 	return opened(candidate), nil
 }
@@ -448,37 +481,40 @@ func (c *runtimeCoordinator) resolveWorkspace(ctx context.Context, scope workspa
 
 func (c *runtimeCoordinator) registerNew(ctx context.Context, runtime runtimeAccess) error {
 	if err := ctx.Err(); err != nil {
-		return errors.Join(err, runtime.close(context.WithoutCancel(ctx)))
+		return err
 	}
 	if err := c.registry.add(runtime); err != nil {
-		return errors.Join(err, runtime.close(context.WithoutCancel(ctx)))
+		return err
 	}
 	return nil
 }
 
-func (c *runtimeCoordinator) close(ctx context.Context, request interaction.CloseSessionRequest) error {
+func (c *runtimeCoordinator) close(ctx context.Context, request interaction.CloseSessionRequest) (interaction.CloseSessionReceipt, error) {
 	if !request.SessionID.Valid() {
-		return invalidInput("gateway.close_session", "SessionID is required")
+		return interaction.CloseSessionReceipt{}, invalidInput("gateway.close_session", "SessionID is required")
 	}
 	runtime, ok, err := c.registry.wait(ctx, request.SessionID)
 	if err != nil {
-		return err
+		return interaction.CloseSessionReceipt{}, err
 	}
 	if !ok {
-		return agent.NewCodedError(agent.ErrorNotFound, agent.CodeSessionNotOpen, "gateway.close", "session is not open", nil)
+		return interaction.CloseSessionReceipt{}, agent.NewCodedError(agent.ErrorNotFound, agent.CodeSessionNotOpen, "gateway.close", "session is not open", nil)
+	}
+	if err := runtime.awaitOpen(ctx); err != nil {
+		return interaction.CloseSessionReceipt{}, err
 	}
 	done, err := runtime.beginClose(ctx, request)
 	if err != nil {
-		return err
+		return interaction.CloseSessionReceipt{}, err
 	}
 	if err := c.registry.markClosing(request.SessionID, runtime, done); err != nil {
-		return err
+		return interaction.CloseSessionReceipt{}, err
 	}
 	select {
 	case <-done:
-		return nil
+		return runtime.closeResult()
 	case <-ctx.Done():
-		return ctx.Err()
+		return interaction.CloseSessionReceipt{}, ctx.Err()
 	}
 }
 
@@ -526,7 +562,7 @@ func cloneModelDescriptor(source model.Descriptor) model.Descriptor {
 }
 
 func opened(runtime runtimeAccess) interaction.SessionOpened {
-	return interaction.SessionOpened{SessionID: runtime.id(), Revision: runtime.revision()}
+	return interaction.SessionOpened{SessionID: runtime.id(), Revision: runtime.revision(), Diagnostics: runtime.openDiagnostics()}
 }
 
 // runtimeAccess is the private Gateway-to-Runtime contract. Its unexported
@@ -535,6 +571,8 @@ func opened(runtime runtimeAccess) interaction.SessionOpened {
 type runtimeAccess interface {
 	id() agent.SessionID
 	revision() agent.Revision
+	open(context.Context, hook.OpenKind) error
+	openDiagnostics() []session.ExtensionDiagnostic
 	view(context.Context, interaction.SessionViewRequest) (interaction.SessionView, error)
 	history(context.Context, interaction.HistoryRequest) (interaction.HistoryPage, error)
 	extensionDiagnostics(context.Context, interaction.ExtensionDiagnosticsRequest) (interaction.ExtensionDiagnosticsPage, error)
@@ -549,7 +587,9 @@ type runtimeAccess interface {
 	deleteQueued(context.Context, interaction.DeleteQueuedRequest) (interaction.CommitReceipt, error)
 	reclassifyQueued(context.Context, interaction.ReclassifyQueuedRequest) (interaction.CommitReceipt, error)
 	subscribe(context.Context, interaction.SubscribeRequest) (interaction.EventStream, error)
+	awaitOpen(context.Context) error
 	beginClose(context.Context, interaction.CloseSessionRequest) (<-chan struct{}, error)
+	closeResult() (interaction.CloseSessionReceipt, error)
 	close(context.Context) error
 }
 
@@ -568,6 +608,16 @@ type runtimeInstance struct {
 	idleSignal          chan struct{}
 	closing             bool
 	closeDone           chan struct{}
+	closeReceipt        interaction.CloseSessionReceipt
+	closeErr            error
+	extensionCtx        context.Context
+	extensionCancel     context.CancelFunc
+	extensionWG         sync.WaitGroup
+	openOnce            sync.Once
+	openDone            chan struct{}
+	openErr             error
+	openOccurrence      *sessionLifecycleOccurrence
+	openDiagnosticView  []session.ExtensionDiagnostic
 	prefix              string
 	sequence            atomic.Uint64
 	revisionValue       atomic.Uint64
@@ -605,9 +655,11 @@ func newRuntimeInstance(ctx context.Context, s session.Session, components *runt
 	}
 	idleSignal := make(chan struct{})
 	close(idleSignal)
+	extensionCtx, extensionCancel := context.WithCancel(context.Background())
 	runtime := &runtimeInstance{
-		session: s, components: components, agentID: scope.AgentID, workspaceID: scope.WorkspaceID, workspaceBoundary: boundary, state: runtimeIdle,
-		hasInputGateJournal: hasInputGateJournal(snapshot.ExtensionJournal), idleSignal: idleSignal, closeDone: make(chan struct{}),
+		session: s, components: components, agentID: scope.AgentID, workspaceID: scope.WorkspaceID, workspaceBoundary: boundary, state: runtimeOpening,
+		hasInputGateJournal: hasInputGateJournal(snapshot.ExtensionJournal), idleSignal: idleSignal, closeDone: make(chan struct{}), openDone: make(chan struct{}),
+		extensionCtx: extensionCtx, extensionCancel: extensionCancel,
 		prefix: hex.EncodeToString(prefixBytes), events: newEventHub(),
 	}
 	runtime.revisionValue.Store(uint64(s.Revision()))
@@ -615,27 +667,6 @@ func newRuntimeInstance(ctx context.Context, s session.Session, components *runt
 		return nil, agent.NewError(agent.ErrorInternal, "standardagent.runtime", "framework Manager returned an invalid SessionID", nil)
 	}
 	runtime.commitObserver = newSessionCommitObserver(components.commitObservers)
-	components.observations.publishTrace(observe.TraceRecord{
-		Kind: observe.TraceRuntimeOpened, At: time.Now().UTC(),
-		Identity: observe.Identity{SessionID: runtime.id(), Actor: serviceObservationActor("agent-runtime")},
-	})
-	snapshot, err = runtime.recoverInputGateEntries(ctx, snapshot)
-	if err != nil {
-		runtime.commitObserver.stop()
-		runtime.events.close()
-		return nil, err
-	}
-	snapshot, err = runtime.recoverToolResultHookEntries(ctx, snapshot)
-	if err != nil {
-		runtime.commitObserver.stop()
-		runtime.events.close()
-		return nil, err
-	}
-	if err := runtime.restorePreparedRun(snapshot); err != nil {
-		runtime.commitObserver.stop()
-		runtime.events.close()
-		return nil, err
-	}
 	return runtime, nil
 }
 
@@ -679,8 +710,18 @@ func (r *runtimeInstance) beginClose(ctx context.Context, request interaction.Cl
 	if r.active != nil && request.Actor.Valid() {
 		r.active.controlActor = request.Actor
 	}
-	r.startCloseLocked()
+	occurrence, err := r.prepareSessionLifecycle(snapshot, hook.LifecycleClose, "", request.Actor)
+	if err != nil {
+		return nil, err
+	}
+	r.startCloseLocked(occurrence, ctx)
 	return r.closeDone, nil
+}
+
+func (r *runtimeInstance) closeResult() (interaction.CloseSessionReceipt, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.closeReceipt, r.closeErr
 }
 
 func (r *runtimeInstance) view(ctx context.Context, request interaction.SessionViewRequest) (interaction.SessionView, error) {

@@ -89,7 +89,7 @@ func (c *Channel) call(ctx context.Context, value *wrapperspb.BytesValue) (*wrap
 			return RequestScope{Operation: request.Operation, AgentID: value.Scope.AgentID, WorkspaceID: value.Scope.WorkspaceID, SessionID: value.Scope.SessionID}
 		}, func(value *interaction.CommandInvocation, actor agent.ActorIdentity) { value.Actor = actor }, c.access.InvokeCommand)
 	case OperationCloseSession:
-		response, err = dispatchEmpty(c, ctx, request, sessionScope[interaction.CloseSessionRequest](request.Operation, func(value interaction.CloseSessionRequest) agent.SessionID { return value.SessionID }), func(value *interaction.CloseSessionRequest, actor agent.ActorIdentity) { value.Actor = actor }, c.access.CloseSession)
+		response, err = dispatch(c, ctx, request, sessionScope[interaction.CloseSessionRequest](request.Operation, func(value interaction.CloseSessionRequest) agent.SessionID { return value.SessionID }), func(value *interaction.CloseSessionRequest, actor agent.ActorIdentity) { value.Actor = actor }, c.access.CloseSession)
 	default:
 		err = agent.NewCodedError(agent.ErrorInvalidInput, "", "grpcchannel.call", "unknown Gateway operation", nil)
 	}

@@ -23,6 +23,7 @@ import (
 type runtimeLifecycle string
 
 const (
+	runtimeOpening runtimeLifecycle = "opening"
 	runtimeIdle    runtimeLifecycle = "idle"
 	runtimeRunning runtimeLifecycle = "running"
 	runtimeClosed  runtimeLifecycle = "closed"
@@ -1324,6 +1325,7 @@ func (r *runtimeInstance) startChangesLocked(snapshot session.Snapshot, item ses
 		session.Change{Kind: session.SetRunState, RunState: &running},
 		session.Change{Kind: session.AppendRunFact, RunFact: &started},
 	)
+	changes = append(changes, consumePendingLifecycleContexts(snapshot, runID, stepID)...)
 	changes = r.appendInputConsumption(changes, snapshot, item, runID, stepID)
 	return run, stepID, changes
 }
@@ -1428,6 +1430,9 @@ func (r *runtimeInstance) publishCommitEvent(revision agent.Revision) {
 func (r *runtimeInstance) ensureOpenLocked(operation string) error {
 	if r.state == runtimeClosed || r.closing {
 		return runtimeClosedError(operation)
+	}
+	if r.state == runtimeOpening {
+		return agent.NewCodedError(agent.ErrorUnavailable, agent.CodeRuntimeUnavailable, operation, "Session Runtime is still opening", nil)
 	}
 	return nil
 }

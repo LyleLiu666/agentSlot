@@ -27,14 +27,16 @@ type ExtensionJournalEntry struct {
 	Descriptor   hook.ExtensionDescriptor
 	Boundary     hook.BoundaryKind
 
-	SessionID    agent.SessionID
-	RunID        agent.RunID
-	StepID       agent.StepID
-	TargetStepID agent.StepID `json:",omitempty"`
-	MessageID    agent.MessageID
-	ToolCallID   agent.ToolCallID
-	GoalID       string `json:",omitempty"`
-	GoalVersion  uint64 `json:",omitempty"`
+	SessionID         agent.SessionID
+	RunID             agent.RunID
+	StepID            agent.StepID
+	TargetStepID      agent.StepID `json:",omitempty"`
+	MessageID         agent.MessageID
+	ToolCallID        agent.ToolCallID
+	GoalID            string              `json:",omitempty"`
+	GoalVersion       uint64              `json:",omitempty"`
+	LifecyclePhase    hook.LifecyclePhase `json:",omitempty"`
+	LifecycleOpenKind hook.OpenKind       `json:",omitempty"`
 
 	InputDigest      string
 	PreparedRevision agent.Revision `json:",omitempty"`
@@ -66,7 +68,7 @@ func (e ExtensionJournalEntry) Validate(sessionID agent.SessionID) error {
 	if err := e.validateSubject(); err != nil {
 		return err
 	}
-	if (e.Boundary == hook.BoundaryToolPreflight || e.Boundary == hook.BoundaryToolResult || e.Boundary == hook.BoundaryCompletion) && e.PreparedRevision == 0 {
+	if (e.Boundary == hook.BoundaryToolPreflight || e.Boundary == hook.BoundaryToolResult || e.Boundary == hook.BoundaryCompletion || e.Boundary == hook.BoundarySessionLifecycle) && e.PreparedRevision == 0 {
 		return fmt.Errorf("session: execution-boundary extension requires its prepared revision")
 	}
 	if e.PreparedAt.IsZero() {
@@ -116,8 +118,15 @@ func (e ExtensionJournalEntry) validateSubject() error {
 			return fmt.Errorf("session: completion subject is invalid")
 		}
 	case hook.BoundarySessionLifecycle:
-		if e.RunID != "" || e.StepID != "" || e.TargetStepID != "" || e.MessageID != "" || e.ToolCallID != "" || e.GoalID != "" || e.GoalVersion != 0 {
+		if e.RunID != "" || e.StepID != "" || e.TargetStepID != "" || e.MessageID != "" || e.ToolCallID != "" || e.GoalID != "" || e.GoalVersion != 0 ||
+			!e.LifecyclePhase.Valid() ||
+			(e.LifecyclePhase == hook.LifecycleOpen && !e.LifecycleOpenKind.Valid()) ||
+			(e.LifecyclePhase == hook.LifecycleClose && e.LifecycleOpenKind != "") {
 			return fmt.Errorf("session: lifecycle subject must be Session-scoped")
+		}
+	default:
+		if e.LifecyclePhase != "" || e.LifecycleOpenKind != "" {
+			return fmt.Errorf("session: non-lifecycle extension carries lifecycle identity")
 		}
 	}
 	return nil
@@ -356,6 +365,7 @@ func sameExtensionIdentity(left, right ExtensionJournalEntry) bool {
 		left.Descriptor == right.Descriptor && left.Boundary == right.Boundary &&
 		left.SessionID == right.SessionID && left.RunID == right.RunID && left.StepID == right.StepID && left.TargetStepID == right.TargetStepID &&
 		left.MessageID == right.MessageID && left.ToolCallID == right.ToolCallID && left.GoalID == right.GoalID && left.GoalVersion == right.GoalVersion &&
+		left.LifecyclePhase == right.LifecyclePhase && left.LifecycleOpenKind == right.LifecycleOpenKind &&
 		left.InputDigest == right.InputDigest && left.PreparedRevision == right.PreparedRevision && left.PreparedAt.Equal(right.PreparedAt)
 }
 
@@ -391,30 +401,32 @@ type ExtensionPage struct {
 // ExtensionDiagnostic is the safe detached projection shared by Store and
 // Gateway. It intentionally omits ContextInputs and all process protocol data.
 type ExtensionDiagnostic struct {
-	InvocationID     hook.InvocationID
-	Sequence         ExtensionSequence
-	Descriptor       hook.ExtensionDescriptor
-	Boundary         hook.BoundaryKind
-	SessionID        agent.SessionID
-	RunID            agent.RunID
-	StepID           agent.StepID
-	TargetStepID     agent.StepID
-	MessageID        agent.MessageID
-	ToolCallID       agent.ToolCallID
-	InputDigest      string
-	PreparedRevision agent.Revision
-	PreparedAt       time.Time
-	PendingAt        time.Time
-	FinishedAt       time.Time
-	Status           hook.InvocationStatus
-	Decision         hook.Decision
-	Reason           string
-	ErrorCode        agent.ErrorCode
-	ErrorReason      string
-	Effect           hook.EffectDisposition
-	Context          hook.ContextDisposition
-	ContextDigest    string
-	ContextBytes     int
+	InvocationID      hook.InvocationID
+	Sequence          ExtensionSequence
+	Descriptor        hook.ExtensionDescriptor
+	Boundary          hook.BoundaryKind
+	SessionID         agent.SessionID
+	RunID             agent.RunID
+	StepID            agent.StepID
+	TargetStepID      agent.StepID
+	MessageID         agent.MessageID
+	ToolCallID        agent.ToolCallID
+	LifecyclePhase    hook.LifecyclePhase
+	LifecycleOpenKind hook.OpenKind
+	InputDigest       string
+	PreparedRevision  agent.Revision
+	PreparedAt        time.Time
+	PendingAt         time.Time
+	FinishedAt        time.Time
+	Status            hook.InvocationStatus
+	Decision          hook.Decision
+	Reason            string
+	ErrorCode         agent.ErrorCode
+	ErrorReason       string
+	Effect            hook.EffectDisposition
+	Context           hook.ContextDisposition
+	ContextDigest     string
+	ContextBytes      int
 }
 
 func extensionPage(entries []ExtensionJournalEntry, request ExtensionPageRequest) (ExtensionPage, error) {
@@ -446,6 +458,7 @@ func extensionDiagnostic(entry ExtensionJournalEntry) ExtensionDiagnostic {
 	view := ExtensionDiagnostic{
 		InvocationID: entry.InvocationID, Sequence: entry.Sequence, Descriptor: entry.Descriptor, Boundary: entry.Boundary,
 		SessionID: entry.SessionID, RunID: entry.RunID, StepID: entry.StepID, TargetStepID: entry.TargetStepID, MessageID: entry.MessageID, ToolCallID: entry.ToolCallID,
+		LifecyclePhase: entry.LifecyclePhase, LifecycleOpenKind: entry.LifecycleOpenKind,
 		InputDigest: entry.InputDigest, PreparedRevision: entry.PreparedRevision,
 		PreparedAt: entry.PreparedAt, PendingAt: entry.PendingAt, FinishedAt: entry.FinishedAt,
 		Status: entry.Status, ErrorCode: entry.ErrorCode, ErrorReason: entry.ErrorReason,

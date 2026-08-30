@@ -3,6 +3,7 @@ package grpcchannel
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -158,7 +159,10 @@ func TestChannelRequiresAuthenticationAndAuthorization(t *testing.T) {
 }
 
 func TestRemoteProfileDispatchesEveryGatewayOperation(t *testing.T) {
-	backend := &completeGatewayStub{events: &eventStream{events: []interaction.Event{{Kind: interaction.EventRevision, SessionID: "session-1", Revision: 2}}}}
+	backend := &completeGatewayStub{
+		events:       &eventStream{events: []interaction.Event{{Kind: interaction.EventRevision, SessionID: "session-1", Revision: 2}}},
+		closeReceipt: interaction.CloseSessionReceipt{SessionID: "session-1", Revision: 9, Diagnostics: []session.ExtensionDiagnostic{{InvocationID: "end-1", Status: hook.InvocationFailed}}},
+	}
 	client, stop := startTestChannel(t, backend, agent.ActorIdentity{Kind: agent.ActorAgent, ID: "agent-caller"})
 	defer stop()
 	ctx := context.Background()
@@ -200,7 +204,13 @@ func TestRemoteProfileDispatchesEveryGatewayOperation(t *testing.T) {
 		},
 		func() error { _, err := client.Commands(ctx, interaction.CommandScope{}); return err },
 		func() error { _, err := client.InvokeCommand(ctx, interaction.CommandInvocation{}); return err },
-		func() error { return client.CloseSession(ctx, interaction.CloseSessionRequest{}) },
+		func() error {
+			receipt, err := client.CloseSession(ctx, interaction.CloseSessionRequest{})
+			if err == nil && (receipt.SessionID != "session-1" || receipt.Revision != 9 || len(receipt.Diagnostics) != 1) {
+				return fmt.Errorf("close receipt lost across transport: %#v", receipt)
+			}
+			return err
+		},
 	}
 	for index, call := range calls {
 		if err := call(); err != nil {
@@ -286,9 +296,10 @@ func (overflowStream) Recv(context.Context) (interaction.Event, error) {
 func (overflowStream) Close() error { return nil }
 
 type completeGatewayStub struct {
-	mu     sync.Mutex
-	calls  int
-	events interaction.EventStream
+	mu           sync.Mutex
+	calls        int
+	events       interaction.EventStream
+	closeReceipt interaction.CloseSessionReceipt
 }
 
 func (g *completeGatewayStub) record()    { g.mu.Lock(); g.calls++; g.mu.Unlock() }
@@ -381,9 +392,9 @@ func (g *completeGatewayStub) InvokeCommand(context.Context, interaction.Command
 	g.record()
 	return interaction.CommandResult{}, nil
 }
-func (g *completeGatewayStub) CloseSession(context.Context, interaction.CloseSessionRequest) error {
+func (g *completeGatewayStub) CloseSession(context.Context, interaction.CloseSessionRequest) (interaction.CloseSessionReceipt, error) {
 	g.record()
-	return nil
+	return g.closeReceipt, nil
 }
 
 func (s *eventStream) Recv(context.Context) (interaction.Event, error) {

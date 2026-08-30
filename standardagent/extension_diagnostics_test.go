@@ -25,7 +25,8 @@ func TestGatewayProjectsBoundedExtensionDiagnosticsWithoutPayload(t *testing.T) 
 	entry := session.ExtensionJournalEntry{
 		InvocationID: "gateway-diagnostic", Sequence: 1,
 		Descriptor: hook.ExtensionDescriptor{Key: "diagnostic.fixture", DefinitionDigest: "sha256:" + strings.Repeat("a", 64)},
-		Boundary:   hook.BoundarySessionLifecycle, SessionID: opened.SessionID, InputDigest: fingerprint.Digest,
+		Boundary:   hook.BoundarySessionLifecycle, SessionID: opened.SessionID, LifecyclePhase: hook.LifecycleOpen,
+		LifecycleOpenKind: hook.OpenResume, InputDigest: fingerprint.Digest, PreparedRevision: opened.Revision.Next(),
 		PreparedAt: time.Date(2026, time.August, 30, 12, 0, 0, 0, time.UTC), Status: hook.InvocationPrepared,
 		EffectDisposition: hook.EffectNone, ContextDisposition: hook.ContextNone,
 	}

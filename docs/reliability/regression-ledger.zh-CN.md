@@ -19,6 +19,7 @@
 | ASR-REG-007 | ASR-002、ASR-008 | InputGate accept/reject、慢 Hook、Queue edit/delete/claim 竞态或重启 | 输入可能在 CAS 推进后半可见；旧 context 可能串到新内容；一次性 context 可能在每个后续模型请求中重复投影并放大 token | Hook 自动化第 3 轮 | 已修复，普通门禁已覆盖 |
 | ASR-REG-008 | ASR-002、ASR-008 | ToolPreflight deny/approval、并行 Tool batch、schema 失败或 pending 后重启 | Tool 可能绕过 Preflight；allow 可能覆盖 Policy；pending 外部命令可能重放；全批工具可能被无谓串行化 | Hook 自动化第 4 轮 | 已修复，普通门禁已覆盖 |
 | ASR-REG-009 | ASR-002、ASR-008 | ToolResult 已提交、Post pending/terminal/context consume 任一切点失败或重启 | ToolResult 可能被回滚/改写；Post command 可能重放；半套 context 可能进入下一模型请求；idle Session 可能残留未决 entry | Hook 自动化第 5 轮 | 已修复，普通门禁已覆盖 |
+| ASR-REG-010 | ASR-002、ASR-008 | Session create/resume/fork/summary/close、opening 并发、Prompt/Run 未结算、生命周期链中途崩溃 | SessionStart 可能晚于模型或命令；SessionEnd 可能越过未结算 Hook；旧 context 可能重复进入后续 Step；断连或停机可能伪造 End | Hook 自动化第 7 轮 | 已修复，普通门禁已覆盖 |
 
 ## 确定性复现
 
@@ -126,6 +127,21 @@ Step 与完整 reservation 集合原子提交；Post context 按 ToolCall/Chain 
 pending/commit outcome unknown 不重放 command；中途
 失败和 Cancel 丢弃半套 context；History 前缀不改写；零 contribution 保持原结果提交快路径。
 
+### ASR-REG-010
+
+```bash
+go test -race ./hook ./session ./standardagent ./interaction/grpcchannel ./interaction/acpchannel \
+  -run 'TestSessionLifecycle|TestRemoteProfileDispatchesEveryGatewayOperation|TestACPWire' \
+  -count=1
+```
+
+预期：通过。唯一 opening Runtime 在注册后、任何 Gateway/structured command 执行前完成 SessionStart；
+create/resume/fork/summary 的 open kind 可审计，fork/summary 不复制父 Session 的 ExtensionJournal。Start
+context 只追加到首个精确 Run/Step，同 component 的新未消费 context 替代旧值，后续 Step 不重复投影。
+明确 CloseSession 在 caller CAS 上一次性预约完整 End chain，取消并结算 Run/Prompt 后才执行 End；组件失败进入
+open/close receipt 的安全诊断但不阻断安全开关，持久化失败仍返回错误。prepared/pending/部分 terminal 链恢复
+后不重放、不泄漏半套 context；应用停机、断连和崩溃不伪造 End。零 contribution 不增加 Session commit。
+
 ## 转绿要求
 
 | 编号 | 普通门禁中的最终测试 |
@@ -139,6 +155,7 @@ pending/commit outcome unknown 不重放 command；中途
 | ASR-REG-007 | InputGate CAS、append-only message、一次 context、并发竞态、取消/panic、恢复和 typed transport 全部通过 |
 | ASR-REG-008 | ToolPreflight 原子预约、静态 scope、Policy/Approval 合并、批次失败、append-only、恢复和零开销快路径全部通过 |
 | ASR-REG-009 | ToolResult/Post 原子预约、status scope、一次 context、四切点故障、Cancel、append-only、恢复和零开销快路径全部通过 |
+| ASR-REG-010 | opening barrier、四种 open、明确 close、receipt、Run/Prompt 排空、一次 context、部分链恢复、transport 和零开销快路径全部通过 |
 
 ## 账本纪律
 

@@ -42,7 +42,7 @@ func TestRuntimePublishesPassiveTraceMetricAuditAndUsageFacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := access.CloseSession(context.Background(), interaction.CloseSessionRequest{SessionID: opened.SessionID, ExpectedRevision: updated.Revision, Actor: user}); err != nil {
+	if _, err := access.CloseSession(context.Background(), interaction.CloseSessionRequest{SessionID: opened.SessionID, ExpectedRevision: updated.Revision, Actor: user}); err != nil {
 		t.Fatal(err)
 	}
 	stop()

@@ -41,6 +41,10 @@ func withRuntime[T any](ctx context.Context, g *gateway, id agent.SessionID, ope
 			var zero T
 			return zero, err
 		}
+		if err := runtime.awaitOpen(operationCtx); err != nil {
+			var zero T
+			return zero, err
+		}
 		return operation(operationCtx, runtime)
 	})
 }
@@ -301,11 +305,10 @@ func cloneCommandDescriptor(descriptor interaction.CommandDescriptor) interactio
 	return cloned
 }
 
-func (g *gateway) CloseSession(ctx context.Context, request interaction.CloseSessionRequest) error {
-	_, err := withCoordinator(ctx, g, func(operationCtx context.Context, coordinator *runtimeCoordinator) (struct{}, error) {
-		return struct{}{}, coordinator.close(operationCtx, request)
+func (g *gateway) CloseSession(ctx context.Context, request interaction.CloseSessionRequest) (interaction.CloseSessionReceipt, error) {
+	return withCoordinator(ctx, g, func(operationCtx context.Context, coordinator *runtimeCoordinator) (interaction.CloseSessionReceipt, error) {
+		return coordinator.close(operationCtx, request)
 	})
-	return err
 }
 
 type commandActions struct {
@@ -336,6 +339,9 @@ func (a *commandActions) Apply(ctx context.Context, request interaction.ActionRe
 	}
 	runtime, err := a.coordinator.runtime(a.scope.SessionID)
 	if err != nil {
+		return interaction.ActionResult{}, err
+	}
+	if err := runtime.awaitOpen(ctx); err != nil {
 		return interaction.ActionResult{}, err
 	}
 	switch request.Kind {
@@ -384,6 +390,9 @@ func (a *commandActions) CurrentModelConfig(ctx context.Context) (interaction.Mo
 	}
 	runtime, err := a.coordinator.runtime(a.scope.SessionID)
 	if err != nil {
+		return interaction.ModelConfigView{}, err
+	}
+	if err := runtime.awaitOpen(ctx); err != nil {
 		return interaction.ModelConfigView{}, err
 	}
 	return runtime.modelConfig(ctx, interaction.ModelConfigRequest{SessionID: a.scope.SessionID})

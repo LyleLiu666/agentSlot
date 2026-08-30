@@ -2,6 +2,7 @@ package standardagent
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	agent "github.com/LyleLiu666/agentSlot/agent"
@@ -185,6 +186,11 @@ func (r *runtimeInstance) idle(ctx context.Context, request interaction.WhenIdle
 }
 
 func (r *runtimeInstance) close(ctx context.Context) error {
+	select {
+	case <-r.openDone:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	r.mu.Lock()
 	if r.state == runtimeClosed {
 		done := r.closeDone
@@ -197,7 +203,7 @@ func (r *runtimeInstance) close(ctx context.Context) error {
 		}
 	}
 	if !r.closing {
-		r.startCloseLocked()
+		r.startCloseLocked(nil, context.Background())
 	}
 	done := r.closeDone
 	r.mu.Unlock()
@@ -209,20 +215,37 @@ func (r *runtimeInstance) close(ctx context.Context) error {
 	}
 }
 
-func (r *runtimeInstance) startCloseLocked() {
+func (r *runtimeInstance) startCloseLocked(occurrence *sessionLifecycleOccurrence, lifecycleCtx context.Context) {
 	r.closing = true
+	r.extensionCancel()
 	var runDone <-chan struct{}
 	if r.active != nil {
 		r.active.cancelRequested = true
 		r.active.cancel()
 		runDone = r.active.done
 	}
-	go r.finishClose(runDone)
+	go r.finishClose(runDone, occurrence, lifecycleCtx)
 }
 
-func (r *runtimeInstance) finishClose(runDone <-chan struct{}) {
+func (r *runtimeInstance) finishClose(runDone <-chan struct{}, occurrence *sessionLifecycleOccurrence, lifecycleCtx context.Context) {
 	if runDone != nil {
 		<-runDone
+	}
+	r.extensionWG.Wait()
+	var closeErr error
+	if occurrence != nil {
+		if err := r.executeSessionLifecycle(lifecycleCtx, occurrence); err != nil {
+			var componentFailure lifecycleFailure
+			if !errors.As(err, &componentFailure) {
+				closeErr = err
+			}
+		}
+	}
+	receipt := interaction.CloseSessionReceipt{SessionID: r.id(), Revision: r.revision()}
+	if occurrence != nil {
+		diagnostics, err := r.lifecycleDiagnostics(occurrence.entries)
+		receipt.Diagnostics = diagnostics
+		closeErr = errors.Join(closeErr, err)
 	}
 	r.commitObserver.stop()
 	r.events.close()
@@ -234,6 +257,8 @@ func (r *runtimeInstance) finishClose(runDone <-chan struct{}) {
 	if r.state != runtimeClosed {
 		r.state = runtimeClosed
 		r.active = nil
+		r.closeReceipt = receipt
+		r.closeErr = closeErr
 		close(r.closeDone)
 	}
 	r.mu.Unlock()

@@ -92,10 +92,9 @@ func (c *Client) InvokeCommand(ctx context.Context, request interaction.CommandI
 	request.Actor = agent.ActorIdentity{}
 	return call[interaction.CommandInvocation, interaction.CommandResult](c, ctx, OperationInvokeCommand, request)
 }
-func (c *Client) CloseSession(ctx context.Context, request interaction.CloseSessionRequest) error {
+func (c *Client) CloseSession(ctx context.Context, request interaction.CloseSessionRequest) (interaction.CloseSessionReceipt, error) {
 	request.Actor = agent.ActorIdentity{}
-	_, err := call[interaction.CloseSessionRequest, struct{}](c, ctx, OperationCloseSession, request)
-	return err
+	return call[interaction.CloseSessionRequest, interaction.CloseSessionReceipt](c, ctx, OperationCloseSession, request)
 }
 
 func (c *Client) Subscribe(ctx context.Context, request interaction.SubscribeRequest) (interaction.EventStream, error) {

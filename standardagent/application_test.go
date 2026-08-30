@@ -460,7 +460,7 @@ func TestCloseRemovesRuntimeWithoutDeletingSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resume: %v", err)
 	}
-	if err := access.CloseSession(context.Background(), interaction.CloseSessionRequest{SessionID: "session-1", ExpectedRevision: opened.Revision}); err != nil {
+	if _, err := access.CloseSession(context.Background(), interaction.CloseSessionRequest{SessionID: "session-1", ExpectedRevision: opened.Revision}); err != nil {
 		t.Fatalf("close: %v", err)
 	}
 	if _, err := access.ResumeSession(context.Background(), interaction.ResumeSessionRequest{SessionID: "session-1"}); err != nil {
@@ -506,7 +506,8 @@ func TestCloseWaitsForConcurrentResumeAndLeavesNoRuntimeBehind(t *testing.T) {
 	<-store.entered
 	closeDone := make(chan error, 1)
 	go func() {
-		closeDone <- entry.Access().CloseSession(context.Background(), interaction.CloseSessionRequest{SessionID: "session-1", ExpectedRevision: 1})
+		_, err := entry.Access().CloseSession(context.Background(), interaction.CloseSessionRequest{SessionID: "session-1", ExpectedRevision: 1})
+		closeDone <- err
 	}()
 	close(store.release)
 	if err := <-resumeDone; err != nil {

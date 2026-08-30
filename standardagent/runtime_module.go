@@ -67,6 +67,7 @@ func (m *runtimeModule) RequiredSlots() []agentslot.Requirement {
 		agentslot.OptionalChain(hook.ToolPreflightSlot),
 		agentslot.OptionalChain(hook.ToolResultHookSlot),
 		agentslot.OptionalChain(hook.CompletionGateSlot),
+		agentslot.OptionalChain(hook.SessionLifecycleSlot),
 		agentslot.OptionalOne(goal.StoreSlot),
 		agentslot.OptionalOne(goal.EvaluatorSlot),
 		agentslot.OptionalChain(session.CommitObserverSlot),
@@ -271,6 +272,32 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 				completionGateKeys[descriptor.Key] = struct{}{}
 				frozenCompletionGates = append(frozenCompletionGates, completionGateBinding{gate: gate, descriptor: descriptor})
 			}
+			sessionLifecycles, err := agentslot.ResolveChain(resolver, hook.SessionLifecycleSlot)
+			if err != nil {
+				return nil, err
+			}
+			frozenSessionLifecycles := make([]sessionLifecycleBinding, 0, len(sessionLifecycles))
+			sessionLifecycleKeys := make(map[string]struct{}, len(sessionLifecycles))
+			for _, lifecycle := range sessionLifecycles {
+				if isNilSessionLifecycle(lifecycle) {
+					return nil, fmt.Errorf("standardagent: SessionLifecycle contribution is nil")
+				}
+				descriptor := lifecycle.Descriptor()
+				if err := descriptor.Validate(); err != nil {
+					return nil, err
+				}
+				if _, duplicate := sessionLifecycleKeys[descriptor.Key]; duplicate {
+					return nil, fmt.Errorf("standardagent: SessionLifecycle descriptor key %q is duplicated", descriptor.Key)
+				}
+				scope := lifecycle.Scope()
+				if err := scope.Validate(); err != nil {
+					return nil, err
+				}
+				sessionLifecycleKeys[descriptor.Key] = struct{}{}
+				frozenSessionLifecycles = append(frozenSessionLifecycles, sessionLifecycleBinding{
+					lifecycle: lifecycle, descriptor: descriptor, scope: cloneLifecycleScope(scope),
+				})
+			}
 			goalStore, hasGoalStore, err := agentslot.ResolveOptionalOne(resolver, goal.StoreSlot)
 			if err != nil {
 				return nil, err
@@ -312,8 +339,8 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 				commands: commands, commandDescriptors: commandDescriptors,
 				tools: selectedTools, dispatcher: dispatcher, catalogs: catalogs, config: cloneAgentRuntimeConfig(m.config), sources: sources,
 				compactor: compactor, hooks: hooks, inputGates: frozenInputGates, toolPreflights: frozenToolPreflights, toolResultHooks: frozenToolResultHooks,
-				completionGates: frozenCompletionGates,
-				goalStore:       goalStore, goalEvaluator: goalEvaluator, commitObservers: commitObservers,
+				completionGates: frozenCompletionGates, sessionLifecycles: frozenSessionLifecycles,
+				goalStore: goalStore, goalEvaluator: goalEvaluator, commitObservers: commitObservers,
 				traces: traces, metrics: metrics, audits: audits, usages: usages, workspaceManager: workspaceManager,
 			})
 			m.state = state
@@ -327,6 +354,19 @@ func isNilInputGate(gate hook.InputGate) bool {
 		return true
 	}
 	value := reflect.ValueOf(gate)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
+func isNilSessionLifecycle(lifecycle hook.SessionLifecycle) bool {
+	if lifecycle == nil {
+		return true
+	}
+	value := reflect.ValueOf(lifecycle)
 	switch value.Kind() {
 	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
 		return value.IsNil()
@@ -413,6 +453,7 @@ type runtimeDependencies struct {
 	toolPreflights     []toolPreflightBinding
 	toolResultHooks    []toolResultHookBinding
 	completionGates    []completionGateBinding
+	sessionLifecycles  []sessionLifecycleBinding
 	goalStore          goal.Store
 	goalEvaluator      goal.Evaluator
 	commitObservers    []session.SessionCommitObserver
@@ -427,53 +468,55 @@ type runtimeDependencies struct {
 // by every Session Runtime. Runtime instances retain component references;
 // they do not copy tools, stores, executors, or clients per Session.
 type runtimeComponents struct {
-	agentLoop        agentloop.AgentLoop
-	store            session.SessionStore
-	executor         model.ModelExecutor
-	counter          model.TokenCounter
-	attemptObservers []model.AttemptObserver
-	tools            []agentslot.Named[tool.Tool]
-	sources          []agentcontext.ContextSource
-	compactor        agentcontext.ContextCompactor
-	hooks            []hook.AgentHook
-	inputGates       []inputGateBinding
-	toolPreflights   []toolPreflightBinding
-	toolResultHooks  []toolResultHookBinding
-	completionGates  []completionGateBinding
-	goalStore        goal.Store
-	goalEvaluator    goal.Evaluator
-	commitObservers  []session.SessionCommitObserver
-	dispatcher       *toolDispatcher
-	catalogs         []agentslot.Named[model.ModelCatalog]
-	config           AgentRuntimeConfig
-	observations     *observationHub
-	workspaceManager workspace.Manager
+	agentLoop         agentloop.AgentLoop
+	store             session.SessionStore
+	executor          model.ModelExecutor
+	counter           model.TokenCounter
+	attemptObservers  []model.AttemptObserver
+	tools             []agentslot.Named[tool.Tool]
+	sources           []agentcontext.ContextSource
+	compactor         agentcontext.ContextCompactor
+	hooks             []hook.AgentHook
+	inputGates        []inputGateBinding
+	toolPreflights    []toolPreflightBinding
+	toolResultHooks   []toolResultHookBinding
+	completionGates   []completionGateBinding
+	sessionLifecycles []sessionLifecycleBinding
+	goalStore         goal.Store
+	goalEvaluator     goal.Evaluator
+	commitObservers   []session.SessionCommitObserver
+	dispatcher        *toolDispatcher
+	catalogs          []agentslot.Named[model.ModelCatalog]
+	config            AgentRuntimeConfig
+	observations      *observationHub
+	workspaceManager  workspace.Manager
 }
 
 func (d runtimeDependencies) runtimeComponents(observations *observationHub) *runtimeComponents {
 	dispatcher := d.dispatcher.withObservations(observations)
 	return &runtimeComponents{
-		agentLoop:        d.agentLoop,
-		store:            d.store,
-		executor:         d.executor,
-		counter:          d.counter,
-		attemptObservers: append([]model.AttemptObserver(nil), d.attemptObservers...),
-		tools:            append([]agentslot.Named[tool.Tool](nil), d.tools...),
-		sources:          append([]agentcontext.ContextSource(nil), d.sources...),
-		compactor:        d.compactor,
-		hooks:            append([]hook.AgentHook(nil), d.hooks...),
-		inputGates:       append([]inputGateBinding(nil), d.inputGates...),
-		toolPreflights:   append([]toolPreflightBinding(nil), d.toolPreflights...),
-		toolResultHooks:  append([]toolResultHookBinding(nil), d.toolResultHooks...),
-		completionGates:  append([]completionGateBinding(nil), d.completionGates...),
-		goalStore:        d.goalStore,
-		goalEvaluator:    d.goalEvaluator,
-		commitObservers:  append([]session.SessionCommitObserver(nil), d.commitObservers...),
-		dispatcher:       dispatcher,
-		catalogs:         append([]agentslot.Named[model.ModelCatalog](nil), d.catalogs...),
-		config:           cloneAgentRuntimeConfig(d.config),
-		observations:     observations,
-		workspaceManager: d.workspaceManager,
+		agentLoop:         d.agentLoop,
+		store:             d.store,
+		executor:          d.executor,
+		counter:           d.counter,
+		attemptObservers:  append([]model.AttemptObserver(nil), d.attemptObservers...),
+		tools:             append([]agentslot.Named[tool.Tool](nil), d.tools...),
+		sources:           append([]agentcontext.ContextSource(nil), d.sources...),
+		compactor:         d.compactor,
+		hooks:             append([]hook.AgentHook(nil), d.hooks...),
+		inputGates:        append([]inputGateBinding(nil), d.inputGates...),
+		toolPreflights:    append([]toolPreflightBinding(nil), d.toolPreflights...),
+		toolResultHooks:   append([]toolResultHookBinding(nil), d.toolResultHooks...),
+		completionGates:   append([]completionGateBinding(nil), d.completionGates...),
+		sessionLifecycles: append([]sessionLifecycleBinding(nil), d.sessionLifecycles...),
+		goalStore:         d.goalStore,
+		goalEvaluator:     d.goalEvaluator,
+		commitObservers:   append([]session.SessionCommitObserver(nil), d.commitObservers...),
+		dispatcher:        dispatcher,
+		catalogs:          append([]agentslot.Named[model.ModelCatalog](nil), d.catalogs...),
+		config:            cloneAgentRuntimeConfig(d.config),
+		observations:      observations,
+		workspaceManager:  d.workspaceManager,
 	}
 }
 

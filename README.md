@@ -566,7 +566,22 @@ work; Goal continue/blocked decisions skip gates, while Goal done remains an
 uncommitted candidate until every gate completes. Applied continuation cycles
 are recovered from the journal without resetting Run token/attempt budgets.
 Prepared gates may resume only from matching durable input, pending gates are
-never replayed, and no-gate applications retain the legacy fast path. Trace,
+never replayed, and no-gate applications retain the legacy fast path.
+`hook.SessionLifecycle` is the ordered Runtime-instance boundary for create,
+resume, fork, summary, and explicit close. The coordinator registers one
+opening Runtime before evaluating SessionStart; every Gateway operation and
+structured command action waits for that same opening barrier. Open context is
+appended once to the first Run/Step, never rewrites a Message, and is not
+projected into later Steps. A newer unconsumed result from the same lifecycle
+component supersedes its older pending open context, preventing restart-only
+Sessions from accumulating duplicate model input. `CloseSession` prepares the
+complete SessionEnd chain under the caller's revision CAS, cancels and settles
+active Run/Prompt work, then returns a final revision plus payload-free
+diagnostics. Component failure is diagnostic and does not turn an otherwise
+safe open/close into failure; persistence convergence failure still does.
+Disconnect, application shutdown, and process crash never forge SessionEnd.
+With no matching lifecycle contribution, open and close add no journal commit.
+Trace,
 Metric, Audit, and Usage chains are passive, and
 [`observe/jsonlines`](observe/jsonlines) is an explicit
 default sink. [`session.FileStore`](session/file_store.go) is a crash-safe

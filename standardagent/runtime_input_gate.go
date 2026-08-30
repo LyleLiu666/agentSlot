@@ -52,10 +52,15 @@ func (r *runtimeInstance) sendThroughInputGates(ctx context.Context, request int
 		Parts: cloneRuntimeParts(request.Input.Parts), CreatedAt: time.Now().UTC(),
 	}
 	occurrence, err := r.prepareInputGateLocked(ctx, snapshot, request.ExpectedRevision, request.Actor, hook.InputSend, message, "", "")
+	var finishExtension func()
+	if err == nil {
+		ctx, finishExtension = r.beginSynchronousExtensionLocked(ctx)
+	}
 	r.mu.Unlock()
 	if err != nil {
 		return interaction.EnqueueReceipt{}, err
 	}
+	defer finishExtension()
 	if err := r.executeInputGateOccurrence(ctx, occurrence); err != nil {
 		return interaction.EnqueueReceipt{}, r.finalizeRejectedInput(occurrence, err)
 	}
@@ -97,10 +102,15 @@ func (r *runtimeInstance) steerThroughInputGates(ctx context.Context, request in
 		Parts: cloneRuntimeParts(request.Input.Parts), CreatedAt: time.Now().UTC(),
 	}
 	occurrence, err := r.prepareInputGateLocked(ctx, snapshot, request.ExpectedRevision, request.Actor, hook.InputSteer, message, r.active.id, "")
+	var finishExtension func()
+	if err == nil {
+		ctx, finishExtension = r.beginSynchronousExtensionLocked(ctx)
+	}
 	r.mu.Unlock()
 	if err != nil {
 		return interaction.EnqueueReceipt{}, err
 	}
+	defer finishExtension()
 	if err := r.executeInputGateOccurrence(ctx, occurrence); err != nil {
 		return interaction.EnqueueReceipt{}, r.finalizeRejectedInput(occurrence, err)
 	}
@@ -137,10 +147,15 @@ func (r *runtimeInstance) editThroughInputGates(ctx context.Context, request int
 	if occurrence != nil {
 		occurrence.originalDelivery = item.Delivery
 	}
+	var finishExtension func()
+	if err == nil {
+		ctx, finishExtension = r.beginSynchronousExtensionLocked(ctx)
+	}
 	r.mu.Unlock()
 	if err != nil {
 		return interaction.CommitReceipt{}, err
 	}
+	defer finishExtension()
 	if err := r.executeInputGateOccurrence(ctx, occurrence); err != nil {
 		return interaction.CommitReceipt{}, r.finalizeRejectedInput(occurrence, err)
 	}
@@ -214,7 +229,11 @@ func (r *runtimeInstance) executeInputGateOccurrence(ctx context.Context, occurr
 			pending.PendingAt = pending.PreparedAt
 		}
 		if err := r.commitInputGateEntry(context.WithoutCancel(ctx), occurrence.actor, &pending, "input-gate-pending"); err != nil {
-			r.cancelPreparedInputGates(occurrence, index+1)
+			cancelFrom := index + 1
+			if agent.IsCode(err, agent.CodeRuntimeClosed) {
+				cancelFrom = index
+			}
+			r.cancelPreparedInputGates(occurrence, cancelFrom)
 			return err
 		}
 		occurrence.entries[index] = pending
@@ -343,7 +362,7 @@ func (r *runtimeInstance) cancelPreparedInputGates(occurrence *inputGateOccurren
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if err := r.ensureOpenLocked("input-gate-cancel"); err != nil {
+	if r.state == runtimeClosed {
 		return
 	}
 	snapshot, err := r.viewLocked(context.Background())
@@ -361,8 +380,11 @@ func (r *runtimeInstance) cancelPreparedInputGates(occurrence *inputGateOccurren
 func (r *runtimeInstance) commitInputGateEntry(ctx context.Context, actor agent.ActorIdentity, entry *session.ExtensionJournalEntry, operation string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if err := r.ensureOpenLocked(operation); err != nil {
-		return err
+	if r.state == runtimeClosed {
+		return runtimeClosedError(operation)
+	}
+	if r.closing && entry.Status == hook.InvocationPending {
+		return runtimeClosedError(operation)
 	}
 	snapshot, err := r.viewLocked(ctx)
 	if err != nil {

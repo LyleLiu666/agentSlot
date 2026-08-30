@@ -56,7 +56,7 @@ type GatewayAccess interface {
 	Subscribe(context.Context, SubscribeRequest) (EventStream, error)
 	Commands(context.Context, CommandScope) ([]CommandDescriptor, error)
 	InvokeCommand(context.Context, CommandInvocation) (CommandResult, error)
-	CloseSession(context.Context, CloseSessionRequest) error
+	CloseSession(context.Context, CloseSessionRequest) (CloseSessionReceipt, error)
 }
 
 // ListSessionsRequest carries the Session Store's bounded opaque-cursor query
@@ -112,8 +112,9 @@ type SummarySessionRequest struct {
 }
 
 type SessionOpened struct {
-	SessionID agent.SessionID
-	Revision  agent.Revision
+	SessionID   agent.SessionID
+	Revision    agent.Revision
+	Diagnostics []session.ExtensionDiagnostic
 }
 
 type SendRequest struct {
@@ -363,6 +364,12 @@ type CloseSessionRequest struct {
 	SessionID        agent.SessionID
 	ExpectedRevision agent.Revision
 	Actor            agent.ActorIdentity
+}
+
+type CloseSessionReceipt struct {
+	SessionID   agent.SessionID
+	Revision    agent.Revision
+	Diagnostics []session.ExtensionDiagnostic
 }
 
 type CommandScope struct {

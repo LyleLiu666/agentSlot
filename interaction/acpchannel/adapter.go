@@ -270,6 +270,6 @@ func (a *adapter) CloseSession(ctx context.Context, params acp.CloseSessionReque
 	if err != nil {
 		return acp.CloseSessionResponse{}, err
 	}
-	err = a.access.CloseSession(ctx, interaction.CloseSessionRequest{SessionID: sessionID, ExpectedRevision: view.Revision, Actor: a.config.Actor})
+	_, err = a.access.CloseSession(ctx, interaction.CloseSessionRequest{SessionID: sessionID, ExpectedRevision: view.Revision, Actor: a.config.Actor})
 	return acp.CloseSessionResponse{}, err
 }

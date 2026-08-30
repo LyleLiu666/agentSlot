@@ -28,9 +28,10 @@ func TestFileStoreFaultInjectionDoesNotHalfPublishV2Upgrade(t *testing.T) {
 	entry := ExtensionJournalEntry{
 		InvocationID: "fault-upgrade-invocation", Sequence: 1,
 		Descriptor: extensionDescriptorFixture(), Boundary: hook.BoundarySessionLifecycle,
-		SessionID: created.Session.ID, InputDigest: fingerprint.Digest,
-		PreparedAt: time.Date(2026, time.August, 30, 10, 0, 0, 0, time.UTC),
-		Status:     hook.InvocationPrepared, EffectDisposition: hook.EffectNone, ContextDisposition: hook.ContextNone,
+		SessionID: created.Session.ID, LifecyclePhase: hook.LifecycleOpen, LifecycleOpenKind: hook.OpenCreate, InputDigest: fingerprint.Digest,
+		PreparedRevision: created.Revision.Next(),
+		PreparedAt:       time.Date(2026, time.August, 30, 10, 0, 0, 0, time.UTC),
+		Status:           hook.InvocationPrepared, EffectDisposition: hook.EffectNone, ContextDisposition: hook.ContextNone,
 	}
 	_, err = store.Commit(context.Background(), CommitRequest{
 		SessionID: created.Session.ID, ExpectedRevision: created.Revision, IdempotencyKey: "upgrade-v2",
