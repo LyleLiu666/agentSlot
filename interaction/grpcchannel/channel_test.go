@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/LyleLiu666/agentSlot/agent"
+	"github.com/LyleLiu666/agentSlot/hook"
 	"github.com/LyleLiu666/agentSlot/interaction"
+	"github.com/LyleLiu666/agentSlot/session"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
@@ -45,6 +48,33 @@ func TestRemoteChannelUsesAuthenticatedActorAndPreservesRevisionConflict(t *test
 	}
 	if captured.Actor != authenticated {
 		t.Fatalf("Gateway received wire Actor %#v instead of authenticated Actor %#v", captured.Actor, authenticated)
+	}
+}
+
+func TestRemoteChannelPreservesInputGateErrorRevisionAndDiagnostics(t *testing.T) {
+	diagnostic := session.ExtensionDiagnostic{
+		InvocationID: "invocation-1", Sequence: 1,
+		Descriptor: hook.ExtensionDescriptor{Key: "input-check", DefinitionDigest: "sha256:" + strings.Repeat("a", 64)},
+		Boundary:   hook.BoundaryInputGate, SessionID: "session-1", MessageID: "message-1",
+		Status: hook.InvocationSucceeded, Decision: hook.DecisionReject, Reason: "rejected",
+		Effect: hook.EffectApplied, Context: hook.ContextNone,
+	}
+	backend := &gatewayStub{send: func(context.Context, interaction.SendRequest) (interaction.EnqueueReceipt, error) {
+		return interaction.EnqueueReceipt{}, &interaction.InputGateError{
+			SessionID: "session-1", CurrentRevision: 12, Diagnostics: []session.ExtensionDiagnostic{diagnostic},
+			Cause: agent.NewCodedError(agent.ErrorForbidden, agent.CodeInputRejected, "send", "rejected", nil),
+		}
+	}}
+	client, stop := startTestChannel(t, backend, agent.ActorIdentity{Kind: agent.ActorRemoteUser, ID: "user-1"})
+	defer stop()
+	_, err := client.Send(context.Background(), interaction.SendRequest{
+		SessionID: "session-1", ExpectedRevision: 7,
+		Input: agent.MessageInput{Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "hello"}}},
+	})
+	var gateErr *interaction.InputGateError
+	if !errors.As(err, &gateErr) || gateErr.SessionID != "session-1" || gateErr.CurrentRevision != 12 || len(gateErr.Diagnostics) != 1 ||
+		gateErr.Diagnostics[0].InvocationID != diagnostic.InvocationID || agent.CodeOf(err) != agent.CodeInputRejected {
+		t.Fatalf("remote InputGate error = %#v / %v", gateErr, err)
 	}
 }
 

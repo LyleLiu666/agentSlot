@@ -827,7 +827,7 @@ func (r *runtimeInstance) continueAfterCompletion(run *activeRun) (agent.StepID,
 	nextStep := agent.StepID(r.nextID("step"))
 	changes := make([]session.Change, 0, len(steers)*3+len(proposals)*4)
 	for _, item := range steers {
-		changes = appendInputConsumption(changes, item, run.id, nextStep)
+		changes = r.appendInputConsumption(changes, snapshot, item, run.id, nextStep)
 	}
 	for _, proposal := range proposals {
 		message := agent.Message{
@@ -836,7 +836,7 @@ func (r *runtimeInstance) continueAfterCompletion(run *activeRun) (agent.StepID,
 		}
 		item := session.QueueItem{Message: message, Delivery: session.DeliverySteer}
 		changes = append(changes, session.Change{Kind: session.EnqueueMessage, QueueItem: &item})
-		changes = appendInputConsumption(changes, item, run.id, nextStep)
+		changes = r.appendInputConsumption(changes, snapshot, item, run.id, nextStep)
 	}
 	_, err = r.commitLocked(context.Background(), snapshot.Revision, "follow-on", changes)
 	return nextStep, err == nil, false, err
@@ -903,17 +903,18 @@ func goalEvaluationStep(snapshot session.Snapshot, runID agent.RunID) agent.Step
 	return agent.StepID("goal-evaluation")
 }
 
-func appendInputConsumption(changes []session.Change, item session.QueueItem, runID agent.RunID, stepID agent.StepID) []session.Change {
+func (r *runtimeInstance) appendInputConsumption(changes []session.Change, snapshot session.Snapshot, item session.QueueItem, runID agent.RunID, stepID agent.StepID) []session.Change {
 	claim := session.QueueClaim{MessageID: item.Message.ID, RunID: runID}
 	consume := session.QueueConsume{MessageID: item.Message.ID, RunID: runID}
 	message := item.Message
 	message.RunID = runID
 	message.StepID = stepID
-	return append(changes,
+	changes = append(changes,
 		session.Change{Kind: session.ClaimQueue, QueueClaim: &claim},
 		session.Change{Kind: session.ConsumeQueue, QueueConsume: &consume},
 		session.Change{Kind: session.AppendMessage, Message: &message},
 	)
+	return append(changes, consumePendingInputContexts(snapshot, item.Message.ID, runID, stepID)...)
 }
 
 func (r *runtimeInstance) commitToolResults(run *activeRun, calls []agent.ToolCall, results []tool.ToolResult) (agent.StepID, bool, error) {
@@ -945,16 +946,7 @@ func (r *runtimeInstance) commitToolResults(run *activeRun, calls []agent.ToolCa
 	}
 	nextStep := agent.StepID(r.nextID("step"))
 	for _, item := range pendingByDelivery(snapshot.Queue, session.DeliverySteer) {
-		claim := session.QueueClaim{MessageID: item.Message.ID, RunID: run.id}
-		consume := session.QueueConsume{MessageID: item.Message.ID, RunID: run.id}
-		message := item.Message
-		message.RunID = run.id
-		message.StepID = nextStep
-		changes = append(changes,
-			session.Change{Kind: session.ClaimQueue, QueueClaim: &claim},
-			session.Change{Kind: session.ConsumeQueue, QueueConsume: &consume},
-			session.Change{Kind: session.AppendMessage, Message: &message},
-		)
+		changes = r.appendInputConsumption(changes, snapshot, item, run.id, nextStep)
 	}
 	_, err = r.commitLocked(context.Background(), snapshot.Revision, "tool-results", changes)
 	return nextStep, run.cancelRequested || r.closing, err
@@ -1178,11 +1170,6 @@ func (r *runtimeInstance) startChangesLocked(snapshot session.Snapshot, item ses
 		SessionID: r.id(), RunID: runID, Kind: session.RunStarted,
 		ModelConfig: cloneRuntimeConfig(snapshot.ModelConfig), ConfigRevision: snapshot.Revision,
 	}
-	claim := session.QueueClaim{MessageID: item.Message.ID, RunID: runID}
-	consume := session.QueueConsume{MessageID: item.Message.ID, RunID: runID}
-	message := item.Message
-	message.RunID = runID
-	message.StepID = stepID
 	changes := make([]session.Change, 0, 5)
 	if enqueue {
 		changes = append(changes, session.Change{Kind: session.EnqueueMessage, QueueItem: &item})
@@ -1190,10 +1177,8 @@ func (r *runtimeInstance) startChangesLocked(snapshot session.Snapshot, item ses
 	changes = append(changes,
 		session.Change{Kind: session.SetRunState, RunState: &running},
 		session.Change{Kind: session.AppendRunFact, RunFact: &started},
-		session.Change{Kind: session.ClaimQueue, QueueClaim: &claim},
-		session.Change{Kind: session.ConsumeQueue, QueueConsume: &consume},
-		session.Change{Kind: session.AppendMessage, Message: &message},
 	)
+	changes = r.appendInputConsumption(changes, snapshot, item, runID, stepID)
 	return run, stepID, changes
 }
 
@@ -1333,9 +1318,15 @@ func queueByID(queue []session.QueueItem, id agent.MessageID) (session.QueueItem
 	return session.QueueItem{}, false
 }
 
-func historyInputs(history []session.HistoryFact) []model.Input {
+func historyInputs(history []session.HistoryFact, runID agent.RunID, stepID agent.StepID) []model.Input {
 	inputs := make([]model.Input, 0, len(history))
 	for _, fact := range history {
+		if fact.ContextContribution != nil {
+			if fact.ContextContribution.RunID == runID && fact.ContextContribution.StepID == stepID {
+				inputs = append(inputs, cloneRuntimeInputs(fact.ContextContribution.Inputs)...)
+			}
+			continue
+		}
 		input := model.Input{}
 		switch {
 		case fact.Message != nil:

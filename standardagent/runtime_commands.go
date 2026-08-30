@@ -16,6 +16,9 @@ func (r *runtimeInstance) send(ctx context.Context, request interaction.SendRequ
 		(request.ClientMessageID != "" && !request.ClientMessageID.Valid()) {
 		return interaction.EnqueueReceipt{}, invalidInput("gateway.send", "SessionID, valid optional ClientMessageID, and message input are required")
 	}
+	if len(r.components.inputGates) > 0 {
+		return r.sendThroughInputGates(ctx, request)
+	}
 	r.mu.Lock()
 	if err := r.ensureOpenLocked("gateway.send"); err != nil {
 		r.mu.Unlock()
@@ -61,6 +64,9 @@ func (r *runtimeInstance) steer(ctx context.Context, request interaction.SteerRe
 	if request.SessionID != r.id() || !request.Input.Valid() ||
 		(request.ClientMessageID != "" && !request.ClientMessageID.Valid()) {
 		return interaction.EnqueueReceipt{}, invalidInput("gateway.steer", "SessionID, valid optional ClientMessageID, and message input are required")
+	}
+	if len(r.components.inputGates) > 0 {
+		return r.steerThroughInputGates(ctx, request)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -331,6 +337,9 @@ func (r *runtimeInstance) editQueued(ctx context.Context, request interaction.Ed
 	if request.SessionID != r.id() || !request.MessageID.Valid() || !request.Input.Valid() {
 		return interaction.CommitReceipt{}, invalidInput("gateway.edit_queued", "SessionID, MessageID, and input are required")
 	}
+	if len(r.components.inputGates) > 0 {
+		return r.editThroughInputGates(ctx, request)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := r.ensureOpenLocked("gateway.edit_queued"); err != nil {
@@ -345,7 +354,9 @@ func (r *runtimeInstance) editQueued(ctx context.Context, request interaction.Ed
 		return interaction.CommitReceipt{}, agent.NewCodedError(agent.ErrorNotFound, agent.CodeQueueItemNotFound, "gateway.edit_queued", "queue item was not found", nil)
 	}
 	edit := session.QueueEdit{MessageID: request.MessageID, Input: request.Input, Delivery: item.Delivery}
-	commit, err := r.commitExternalLocked(ctx, request.ExpectedRevision, "queue-edit", request.Actor, []session.Change{{Kind: session.EditQueue, QueueEdit: &edit}})
+	changes := []session.Change{{Kind: session.EditQueue, QueueEdit: &edit}}
+	changes = append(changes, discardPendingInputContexts(snapshot, request.MessageID)...)
+	commit, err := r.commitExternalLocked(ctx, request.ExpectedRevision, "queue-edit", request.Actor, changes)
 	if err != nil {
 		return interaction.CommitReceipt{}, err
 	}
@@ -362,7 +373,15 @@ func (r *runtimeInstance) deleteQueued(ctx context.Context, request interaction.
 		return interaction.CommitReceipt{}, err
 	}
 	change := session.QueueDelete{MessageID: request.MessageID}
-	commit, err := r.commitExternalLocked(ctx, request.ExpectedRevision, "queue-delete", request.Actor, []session.Change{{Kind: session.DeleteQueue, QueueDelete: &change}})
+	changes := []session.Change{{Kind: session.DeleteQueue, QueueDelete: &change}}
+	if r.hasInputGateJournal {
+		snapshot, err := r.viewLocked(ctx)
+		if err != nil {
+			return interaction.CommitReceipt{}, err
+		}
+		changes = append(changes, discardPendingInputContexts(snapshot, request.MessageID)...)
+	}
+	commit, err := r.commitExternalLocked(ctx, request.ExpectedRevision, "queue-delete", request.Actor, changes)
 	if err != nil {
 		return interaction.CommitReceipt{}, err
 	}

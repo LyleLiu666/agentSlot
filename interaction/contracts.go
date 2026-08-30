@@ -242,6 +242,32 @@ func (e *RevisionConflictError) Unwrap() error {
 	return e.Cause
 }
 
+// InputGateError reports a durable pre-submission rejection or extension
+// failure. CurrentRevision is authoritative because preparing and finalizing
+// the invocation advances Session CAS even though the user input was not
+// mutated. Diagnostics are safe, bounded projections rather than raw input or
+// component output.
+type InputGateError struct {
+	SessionID       agent.SessionID
+	CurrentRevision agent.Revision
+	Diagnostics     []session.ExtensionDiagnostic
+	Cause           error
+}
+
+func (e *InputGateError) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
+	return "interaction: input gate did not accept the proposed input"
+}
+
+func (e *InputGateError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
 type SessionViewRequest struct {
 	SessionID agent.SessionID
 }

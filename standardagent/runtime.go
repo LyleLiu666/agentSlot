@@ -560,17 +560,19 @@ type runtimeInstance struct {
 	workspaceID       agent.WorkspaceID
 	workspaceBoundary workspace.Boundary
 
-	mu             sync.Mutex
-	state          runtimeLifecycle
-	active         *activeRun
-	idleSignal     chan struct{}
-	closing        bool
-	closeDone      chan struct{}
-	prefix         string
-	sequence       atomic.Uint64
-	revisionValue  atomic.Uint64
-	commitObserver *sessionCommitObserver
-	events         *eventHub
+	mu                  sync.Mutex
+	submissionMu        sync.Mutex
+	hasInputGateJournal bool
+	state               runtimeLifecycle
+	active              *activeRun
+	idleSignal          chan struct{}
+	closing             bool
+	closeDone           chan struct{}
+	prefix              string
+	sequence            atomic.Uint64
+	revisionValue       atomic.Uint64
+	commitObserver      *sessionCommitObserver
+	events              *eventHub
 }
 
 func newRuntimeInstance(ctx context.Context, s session.Session, components *runtimeComponents, boundary workspace.Boundary) (*runtimeInstance, error) {
@@ -605,7 +607,8 @@ func newRuntimeInstance(ctx context.Context, s session.Session, components *runt
 	close(idleSignal)
 	runtime := &runtimeInstance{
 		session: s, components: components, agentID: scope.AgentID, workspaceID: scope.WorkspaceID, workspaceBoundary: boundary, state: runtimeIdle,
-		idleSignal: idleSignal, closeDone: make(chan struct{}), prefix: hex.EncodeToString(prefixBytes), events: newEventHub(),
+		hasInputGateJournal: hasInputGateJournal(snapshot.ExtensionJournal), idleSignal: idleSignal, closeDone: make(chan struct{}),
+		prefix: hex.EncodeToString(prefixBytes), events: newEventHub(),
 	}
 	runtime.revisionValue.Store(uint64(s.Revision()))
 	if !runtime.id().Valid() {
@@ -616,6 +619,12 @@ func newRuntimeInstance(ctx context.Context, s session.Session, components *runt
 		Kind: observe.TraceRuntimeOpened, At: time.Now().UTC(),
 		Identity: observe.Identity{SessionID: runtime.id(), Actor: serviceObservationActor("agent-runtime")},
 	})
+	snapshot, err = runtime.recoverInputGateEntries(ctx, snapshot)
+	if err != nil {
+		runtime.commitObserver.stop()
+		runtime.events.close()
+		return nil, err
+	}
 	if err := runtime.restorePreparedRun(snapshot); err != nil {
 		runtime.commitObserver.stop()
 		runtime.events.close()

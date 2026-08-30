@@ -40,7 +40,7 @@ typed Slot；AgentSlot 不提供一个携带任意 map、允许任意修改的�
 | Tool 执行前 | `hook.ToolPreflight` → `policy.guard` / `approval.service` | 已设计、待实现 | Runtime 先持久化外部 preflight；结果再进入既有 Policy/Approval，allow 不能绕过 Guard |
 | Tool 成功或失败后被动处理 | `session.commit.observer` / Observation | 已有 | 只看已提交结果；失败不能改变业务提交 |
 | Tool 结果后同步追加模型上下文 | `hook.ToolResultHook` | 已设计、待实现 | ToolResult 与调用意图先提交；追加内容成为 ContextContribution，不能改写原结果 |
-| 用户输入提交前 | `hook.InputGate` | 已设计、待实现 | Gateway 先保留调用 occurrence；只能拒绝或附加独立上下文，不能暗改用户原文 |
+| 用户输入提交前 | `hook.InputGate` | 框架已实现 | Gateway 先持久化调用 occurrence；只能拒绝或附加独立上下文，不能暗改用户原文；具名产品 adapter 仍属于组装仓库 |
 | Session 打开与关闭 | `hook.SessionLifecycle` | 已设计、待实现 | coordinator 明确 open kind；只读身份和状态，不能持有 Runtime 或改写旧 History |
 | PermissionRequest | `approval.service` | 已有 | 不再创建同义 Hook 权力面 |
 | sub-agent、Worktree、文件监视、Elicitation | 对应生态的 typed contract | 尚无准入证据 | 先有真实产品消费者，再决定是否进入 AgentSlot |
@@ -176,6 +176,28 @@ legacy AgentHook 的相对顺序由 conformance 固定，但 fail-stop 产品不
 输入 gate 的 prepared commit 是调用者 ExpectedRevision 的 linearization point；之后业务 mutation 使用
 当前内部 revision，并重新校验 subject。框架不能在 journal 推进 revision 后继续冒充原 CAS 仍有效。
 ClientMessageID 仍是 correlation，不因引入 gate 变成幂等键。
+
+当前 `hook.InputGate` 的已实现边界如下：
+
+- 只有 Send、Steer、EditQueued 触发；RunPending、ReclassifyQueued、DeleteQueued 不重新审批已经接受的输入。
+- 同一 Session 的三类提交共用 submission mutex；该锁不包围模型执行，也不跨 Session，因此慢 component
+  只阻塞所属 Session 的输入 occurrence，不阻塞 active Run 或其他 Session。
+- accept 不得返回 replacement input。用户消息只有在 QueueItem 被 claim 时才通过 `AppendMessage` 进入
+  History；EditQueued 只修改尚未认领的 QueueItem。进入 History 后，InputGate 的任何状态推进都不能改写、
+  删除或重排原消息。
+- additional context 先保存在 ExtensionJournal 的 pending payload 中；Queue claim、`AppendMessage`、
+  `AppendContextContribution` 与 context consumed 在同一个 Session commit 中完成。模型投影只选择与当前
+  `RunID + StepID` 精确匹配的 ContextContribution，因此一次性 Hook context 不会因为 History append-only
+  而在后续每轮重复发送并放大 token。
+- Edit 完成前若 Delete 或 claim 已获胜，Runtime 复验 MessageID、旧内容 digest 与 delivery，拒绝过期编辑并
+  discard 新旧不再可用的 context；不会把旧 context 串到新内容，也不会把已认领消息复活回 Queue。
+- prepared 状态不保存完整拟提交输入，重启后以 `extension_input_unavailable` 失败并 discard，不能猜测重放；
+  pending 由 Store 先收敛为 outcome_unknown，再由 Runtime discard。已经原子入队且 context pending 的成功
+  occurrence 则保留到该 QueueItem 真正被 RunPending 或下一 Run claim。
+- 无 InputGate contribution 时 Send、Steer、EditQueued 继续走原快路径，不创建 journal、额外 goroutine 或
+  v2 文件；只在 Session 历史上确有 InputGate journal 时，Delete 才额外检查待丢弃 context。
+- `interaction.InputGateError` 返回 SessionID、journal 推进后的 CurrentRevision 和有界安全 diagnostics；
+  gRPC adapter 保留同一 typed 语义，调用方不需要解析错误字符串。
 
 Runtime coordinator 必须显式区分 create、resume、fork、summary；重复返回已打开 Runtime 不算再次 open。
 close 只来自明确 Gateway CloseSession，不由 View/Subscribe 断开或进程崩溃伪造。

@@ -24,17 +24,17 @@
 
 | 资产 | 数量 |
 | --- | ---: |
-| 已映射的标准组件生态位 | 41 |
+| 已映射的标准组件生态位 | 42 |
 | 已标准化的领域词汇 | 9 |
-| 已定义契约的 AgentSlot 自有领域接口 | 32 |
+| 已定义契约的 AgentSlot 自有领域接口 | 33 |
 | 通过一致性验证的组件生态位 | 1 |
 | 已由独立实现证明的组件生态位 | 0 |
 | 已进入标准装配的组件生态位 | 0 |
 
 独立的组装协议目前导出了五个 Go 接口：`Module`、`SlotRequirer`、
 `Registrar`、`Contribution` 和 `Lifecycle`。它们是框架机制，不能代替
-地图中 41 个 Agent 领域组件生态位；其中 32 个已经具备公开合同，1 个已通过一致性验证，
-其余 31 个保持已定义契约，另外 9 个保持已映射，尚无生态位达到 Proven。
+地图中 42 个 Agent 领域组件生态位；其中 33 个已经具备公开合同，1 个已通过一致性验证，
+其余 32 个保持已定义契约，另外 9 个保持已映射，尚无生态位达到 Proven。
 
 表中 9 组有限领域词汇分别是：Agent Loop 结果、模型能力、工具调用、策略/审批、观察、
 Goal、Memory、Workflow 和 Billing。这个数字只统计为了互操作而固定的有限词汇和事实，不统计普通常量。
@@ -135,7 +135,7 @@ flowchart LR
 | **已证明（Proven）** | 至少两个语义上独立的实现通过同版一致性套件；同一实现的不同包装只能算一个。 |
 | **已装配（Assembled）** | LAS 或后续获准的真实消费者能够通过 Slot 替换已证明的实现，不包含具体类型分支。 |
 
-当前已有 32 个领域生态位至少进入**已定义契约（Contracted）**：它们拥有公开
+当前已有 33 个领域生态位至少进入**已定义契约（Contracted）**：它们拥有公开
 领域接口、typed Slot 和合同测试。仓库已经包含内存/崩溃安全文件
 SessionStore、确定性 Fake/OpenAI Chat Compatible Executor、Bash/文件/HTTP 工具、
 进程内/CLI GatewayChannel、确定性的工具策略与审批组件，以及 JSON Lines 观察模块；固定
@@ -165,6 +165,7 @@ Runtime 与选中的 AgentLoop 不按具体类型分支即可消费它们。
 | `gateway.channel` | `GatewayChannel` | `Many` | 全局至少 1 个 | 把调用方协议、函数 API 或 UI 绑定到固定 Gateway，并且只能取得 `GatewayAccess`；gRPC、WebSocket、SSH 和入站 ACP 都是该 Slot 的不同实现。 | 已定义契约 |
 | `interaction.command` | `InteractionCommand` | `Many` | 可选 | 向固定 Gateway 注册具名、UI-neutral 的结构化命令；Channel 把共享描述渲染为 Slash、菜单、按钮、表单或命令面板。 | 已定义契约 |
 | `agent.hook` | `AgentHook` | `Chain` | 可选 | 在 Run 完成前提出受控的后续输入；不能修改 Session 状态，也不能成为第二个 Runtime 控制者。 | 已定义契约 |
+| `hook.input_gate` | `InputGate` | `Chain` | 可选 | 在 Send、Steer 或排队输入编辑生效前接受或拒绝，并可为之后认领未改写输入的精确 Run/Step 提供有界上下文。 | 已定义契约 |
 | `goal.store` | `goal.Store` | `One` | 可选；与 `goal.evaluator` 同时安装 | 为每个 Session 保存一份受 CAS 保护的目标生命周期，与仅追加的会话 History 分离。 | 已定义契约 |
 | `goal.evaluator` | `goal.Evaluator` | `One` | 可选；与 `goal.store` 同时安装 | 在本来准备结束的 Run 关闭前，给出结构化的继续、阻塞或完成判断。 | 已定义契约 |
 | `session.commit.observer` | `SessionCommitObserver` | `Chain` | 可选 | 异步观察已经生效的 Session revision 及其新增 History sequence 范围；错误和 panic 不能回滚提交。 | 已定义契约 |

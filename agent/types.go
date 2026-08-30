@@ -321,6 +321,8 @@ const (
 	CodeRunTokenBudgetExceeded            ErrorCode = "run_token_budget_exceeded"
 	CodeRunWaiting                        ErrorCode = "run_waiting"
 	CodeSessionOperationFailed            ErrorCode = "session_operation_failed"
+	CodeInputRejected                     ErrorCode = "input_rejected"
+	CodeExtensionFailed                   ErrorCode = "extension_failed"
 	CodeRuntimeFailed                     ErrorCode = "runtime_failed"
 	CodeRuntimeInterrupted                ErrorCode = "runtime_interrupted"
 )

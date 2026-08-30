@@ -3,6 +3,7 @@ package standardagent
 import (
 	stdcontext "context"
 	"fmt"
+	"reflect"
 
 	agentslot "github.com/LyleLiu666/agentSlot"
 	agentcontext "github.com/LyleLiu666/agentSlot/context"
@@ -62,6 +63,7 @@ func (m *runtimeModule) RequiredSlots() []agentslot.Requirement {
 		agentslot.OptionalChain(agentcontext.SourceSlot),
 		agentslot.OptionalOne(agentcontext.CompactorSlot),
 		agentslot.OptionalChain(hook.HookSlot),
+		agentslot.OptionalChain(hook.InputGateSlot),
 		agentslot.OptionalOne(goal.StoreSlot),
 		agentslot.OptionalOne(goal.EvaluatorSlot),
 		agentslot.OptionalChain(session.CommitObserverSlot),
@@ -174,6 +176,26 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 			if err != nil {
 				return nil, err
 			}
+			inputGates, err := agentslot.ResolveChain(resolver, hook.InputGateSlot)
+			if err != nil {
+				return nil, err
+			}
+			frozenInputGates := make([]inputGateBinding, 0, len(inputGates))
+			inputGateKeys := make(map[string]struct{}, len(inputGates))
+			for _, gate := range inputGates {
+				if isNilInputGate(gate) {
+					return nil, fmt.Errorf("standardagent: InputGate contribution is nil")
+				}
+				descriptor := gate.Descriptor()
+				if err := descriptor.Validate(); err != nil {
+					return nil, err
+				}
+				if _, duplicate := inputGateKeys[descriptor.Key]; duplicate {
+					return nil, fmt.Errorf("standardagent: InputGate descriptor key %q is duplicated", descriptor.Key)
+				}
+				inputGateKeys[descriptor.Key] = struct{}{}
+				frozenInputGates = append(frozenInputGates, inputGateBinding{gate: gate, descriptor: descriptor})
+			}
 			goalStore, hasGoalStore, err := agentslot.ResolveOptionalOne(resolver, goal.StoreSlot)
 			if err != nil {
 				return nil, err
@@ -214,13 +236,27 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 				manager:   manager, store: store, executor: executor, counter: counter, attemptObservers: attemptObservers,
 				commands: commands, commandDescriptors: commandDescriptors,
 				tools: selectedTools, dispatcher: dispatcher, catalogs: catalogs, config: cloneAgentRuntimeConfig(m.config), sources: sources,
-				compactor: compactor, hooks: hooks, goalStore: goalStore, goalEvaluator: goalEvaluator, commitObservers: commitObservers,
+				compactor: compactor, hooks: hooks, inputGates: frozenInputGates,
+				goalStore: goalStore, goalEvaluator: goalEvaluator, commitObservers: commitObservers,
 				traces: traces, metrics: metrics, audits: audits, usages: usages, workspaceManager: workspaceManager,
 			})
 			m.state = state
 			return state, nil
 		}),
 	)
+}
+
+func isNilInputGate(gate hook.InputGate) bool {
+	if gate == nil {
+		return true
+	}
+	value := reflect.ValueOf(gate)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 func (m *runtimeModule) Start(ctx stdcontext.Context) error {
@@ -258,6 +294,7 @@ type runtimeDependencies struct {
 	sources            []agentcontext.ContextSource
 	compactor          agentcontext.ContextCompactor
 	hooks              []hook.AgentHook
+	inputGates         []inputGateBinding
 	goalStore          goal.Store
 	goalEvaluator      goal.Evaluator
 	commitObservers    []session.SessionCommitObserver
@@ -281,6 +318,7 @@ type runtimeComponents struct {
 	sources          []agentcontext.ContextSource
 	compactor        agentcontext.ContextCompactor
 	hooks            []hook.AgentHook
+	inputGates       []inputGateBinding
 	goalStore        goal.Store
 	goalEvaluator    goal.Evaluator
 	commitObservers  []session.SessionCommitObserver
@@ -303,6 +341,7 @@ func (d runtimeDependencies) runtimeComponents(observations *observationHub) *ru
 		sources:          append([]agentcontext.ContextSource(nil), d.sources...),
 		compactor:        d.compactor,
 		hooks:            append([]hook.AgentHook(nil), d.hooks...),
+		inputGates:       append([]inputGateBinding(nil), d.inputGates...),
 		goalStore:        d.goalStore,
 		goalEvaluator:    d.goalEvaluator,
 		commitObservers:  append([]session.SessionCommitObserver(nil), d.commitObservers...),
