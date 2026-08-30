@@ -225,15 +225,14 @@ func TestToolPreflightNeverRewritesPreparedSessionHistory(t *testing.T) {
 }
 
 func TestNoToolPreflightKeepsParallelToolsAndCreatesNoExtensionState(t *testing.T) {
-	schema := dispatcherSchema(t)
 	release := make(chan struct{})
 	firstStarted := make(chan struct{})
 	secondStarted := make(chan struct{})
-	first := &dispatcherTool{name: "first", safety: tool.ParallelSafe, started: firstStarted, release: release, schema: schema}
-	second := &dispatcherTool{name: "second", safety: tool.ParallelSafe, started: secondStarted, release: release, schema: schema}
+	first := &preflightParallelTool{definition: testToolDefinition(t, "first"), started: firstStarted, release: release}
+	second := &preflightParallelTool{definition: testToolDefinition(t, "second"), started: secondStarted, release: release}
 	access, store, stop := startRound7Application(t, preflightBatchExecutor(
-		model.ToolCallRequest{Name: "first", Arguments: []byte(`{}`)},
-		model.ToolCallRequest{Name: "second", Arguments: []byte(`{}`)},
+		model.ToolCallRequest{Name: "first", Arguments: []byte(`{"value":"one"}`)},
+		model.ToolCallRequest{Name: "second", Arguments: []byte(`{"value":"two"}`)},
 	), AgentRuntimeConfig{ToolKeys: []string{"first", "second"}, MaxInlineToolResultBytes: 1024},
 		toolModule{key: "first", value: first}, toolModule{key: "second", value: second})
 	defer stop()
@@ -510,6 +509,20 @@ type blockingToolPreflight struct {
 	entered    chan struct{}
 	release    chan struct{}
 	once       sync.Once
+}
+
+type preflightParallelTool struct {
+	definition tool.Definition
+	started    chan struct{}
+	release    <-chan struct{}
+}
+
+func (t *preflightParallelTool) Definition() tool.Definition       { return t.definition }
+func (*preflightParallelTool) ParallelSafety() tool.ParallelSafety { return tool.ParallelSafe }
+func (t *preflightParallelTool) Invoke(_ context.Context, invocation tool.ToolInvocation) tool.ToolResult {
+	close(t.started)
+	<-t.release
+	return tool.ToolResult{CallID: invocation.Call.ID, Status: tool.ResultSucceeded}
 }
 
 func (g *blockingToolPreflight) Descriptor() hook.ExtensionDescriptor { return g.descriptor }
