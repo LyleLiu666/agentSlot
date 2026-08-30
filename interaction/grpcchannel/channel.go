@@ -39,6 +39,7 @@ const (
 	OperationUpdateModelConfig       Operation = "update_model_config"
 	OperationView                    Operation = "view"
 	OperationHistory                 Operation = "history"
+	OperationExtensionDiagnostics    Operation = "extension_diagnostics"
 	OperationSubscribe               Operation = "subscribe"
 	OperationCommands                Operation = "commands"
 	OperationInvokeCommand           Operation = "invoke_command"

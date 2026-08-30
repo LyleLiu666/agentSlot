@@ -52,6 +52,7 @@ type GatewayAccess interface {
 	UpdateModelConfig(context.Context, UpdateModelConfigRequest) (CommitReceipt, error)
 	View(context.Context, SessionViewRequest) (SessionView, error)
 	History(context.Context, HistoryRequest) (HistoryPage, error)
+	ExtensionDiagnostics(context.Context, ExtensionDiagnosticsRequest) (ExtensionDiagnosticsPage, error)
 	Subscribe(context.Context, SubscribeRequest) (EventStream, error)
 	Commands(context.Context, CommandScope) ([]CommandDescriptor, error)
 	InvokeCommand(context.Context, CommandInvocation) (CommandResult, error)
@@ -256,6 +257,19 @@ type HistoryPage struct {
 	Revision  agent.Revision
 	Facts     []session.HistoryFact
 	HasMore   bool
+}
+
+type ExtensionDiagnosticsRequest struct {
+	SessionID               agent.SessionID
+	BeforeExtensionSequence session.ExtensionSequence
+	Limit                   int
+}
+
+type ExtensionDiagnosticsPage struct {
+	SessionID   agent.SessionID
+	Revision    agent.Revision
+	Diagnostics []session.ExtensionDiagnostic
+	HasMore     bool
 }
 
 type SubscribeRequest struct {

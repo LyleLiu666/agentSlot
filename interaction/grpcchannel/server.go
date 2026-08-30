@@ -78,6 +78,8 @@ func (c *Channel) call(ctx context.Context, value *wrapperspb.BytesValue) (*wrap
 		response, err = dispatch(c, ctx, request, sessionScope[interaction.SessionViewRequest](request.Operation, func(value interaction.SessionViewRequest) agent.SessionID { return value.SessionID }), nil, c.access.View)
 	case OperationHistory:
 		response, err = dispatch(c, ctx, request, sessionScope[interaction.HistoryRequest](request.Operation, func(value interaction.HistoryRequest) agent.SessionID { return value.SessionID }), nil, c.access.History)
+	case OperationExtensionDiagnostics:
+		response, err = dispatch(c, ctx, request, sessionScope[interaction.ExtensionDiagnosticsRequest](request.Operation, func(value interaction.ExtensionDiagnosticsRequest) agent.SessionID { return value.SessionID }), nil, c.access.ExtensionDiagnostics)
 	case OperationCommands:
 		response, err = dispatch(c, ctx, request, func(value interaction.CommandScope) RequestScope {
 			return RequestScope{Operation: request.Operation, AgentID: value.AgentID, WorkspaceID: value.WorkspaceID, SessionID: value.SessionID}

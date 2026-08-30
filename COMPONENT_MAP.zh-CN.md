@@ -27,7 +27,7 @@
 | 已映射的标准组件生态位 | 41 |
 | 已标准化的领域词汇 | 9 |
 | 已定义契约的 AgentSlot 自有领域接口 | 32 |
-| 通过一致性验证的组件生态位 | 2 |
+| 通过一致性验证的组件生态位 | 1 |
 | 已由独立实现证明的组件生态位 | 0 |
 | 已进入标准装配的组件生态位 | 0 |
 
@@ -55,7 +55,7 @@ Go Profile 要求下表五个已经实现的生态位。Token 计数与模型执
 | Slot ID | 标准契约 | 类型 | 必需数量 | 职责 |
 | --- | --- | --- | --- | --- |
 | `agent.loop` | `AgentLoop` | `One` | 恰好 1 个 | 通过有序、Run-scoped 的受限 Runtime actions 承载可替换执行策略；框架继续独占 Session 真相、预算、取消、恢复和终态提交。 |
-| `session.store` | `SessionStore` | `One` | 恰好 1 个 | 持久化完整 Session 聚合及其 revision/CAS 原子事务；跨编码与重开按 JSON 值语义保持工具参数；按 Agent/Workspace 提供有界、确定性排序且绑定 Store 生命周期的游标分页；History 是唯一、append-only 的事实视图。 |
+| `session.store` | `SessionStore` | `One` | 恰好 1 个 | 持久化完整 Session 聚合及其 revision/CAS 原子事务，包括类型化扩展恢复记录和有界 sequence 诊断；跨编码与重开按 JSON 值语义保持工具参数；History 仍是唯一、append-only 的事实视图。 |
 | `model.executor` | `ModelExecutor` | `One` | 恰好 1 个 | 校验所选模型能力，以受校验的临时输出/reset/终态流执行一次逻辑模型调用，封装重试和续传、报告调用后 Usage，并通过受限 AttemptRecorder 持久记录每次真实请求及可选、受限且由适配器清洗后允许展示的失败消息。 |
 | `model.token-counter` | `TokenCounter` | `One` | 恰好 1 个 | 为调用前规划计量完整 Provider 可见请求；使用精确 tokenizer 或经过验证的保守上界，两者都不可信时 fail closed。 |
 | `gateway.channel` | `GatewayChannel` | `Many` | 至少 1 个 | 把调用方协议、函数 API 或 UI 绑定到固定 Gateway，并且只能取得 `GatewayAccess`；gRPC、WebSocket、SSH 和入站 ACP 都是该 Slot 的不同实现。 |
@@ -141,14 +141,15 @@ SessionStore、确定性 Fake/OpenAI Chat Compatible Executor、Bash/文件/HTTP
 进程内/CLI GatewayChannel、确定性的工具策略与审批组件，以及 JSON Lines 观察模块；固定
 Runtime 与选中的 AgentLoop 不按具体类型分支即可消费它们。
 
-`session.store` 已达到**已通过一致性验证（Conformant）**：可复用的 `session.store/v1`
-黑盒套件针对 AgentSlot `v0.0.10` 的精确提交
-`c6b42a767d5422464ebc2978bf408b7d15eb5125`，完整通过公共行为和持久重开场景，0 失败、
-0 跳过。MemoryStore 只作进程生命周期内参考自检；MemoryStore/FileStore 又共享同一实现
-代码库，因此这里只算一个实现结果，不能作为 Proven 证据。其余 31 个领域生态位保持
-**已定义契约**，其他生态位仍处于**已映射**阶段。
+可复用 `session.store/v1` 黑盒套件仍是 AgentSlot `v0.0.10` 精确提交
+`c6b42a767d5422464ebc2978bf408b7d15eb5125` 在扩展前合同的有效证据。当前 `SessionStore`
+又增加了 ExtensionJournal 持久化和有界诊断；MemoryStore/FileStore 的语义一致、重开、损坏和
+故障注入测试已经成立，但完整且独立维护的 `session.store/v2` 黑盒套件尚未发布和通过。因此当前
+生态位先回到**已定义契约（Contracted）**，等完整套件通过后再恢复 Conformant。该持久化前置能力
+不等于任何新增 typed Hook Slot 已接入 Runtime 或组装产品。
 
-当前成绩为 1 个 Conformant、0 个 Proven、0 个 Assembled。
+其余 30 个领域生态位保持**已定义契约**，`model.executor` 仍为**已通过一致性验证**，其他生态位
+保持**已映射**；当前成绩为 1 个 Conformant、0 个 Proven、0 个 Assembled。
 
 成绩以已经证明的组件生态位计算，不按 Module、包或接口方法的数量计算。
 一个 Module 可以向多个 Slot 提供组件，多个 Module 也可以共同向一个
@@ -242,7 +243,7 @@ Tool 正常处理预算，固定 Runtime 在写入 History 前再次校验；不
 
 | Slot ID | 契约 | 类型 | Profile 规则 | 职责 | 成熟度 |
 | --- | --- | --- | --- | --- | --- |
-| `session.store` | `SessionStore` | `One` | 全局必需 | 持久化完整 Session 聚合及其 revision/CAS 原子事务；跨编码与重开按 JSON 值语义保持工具参数；按 Agent/Workspace 提供有界、确定性排序且绑定 Store 生命周期的游标分页；History 是唯一、append-only 的事实视图。 | 已通过一致性验证 |
+| `session.store` | `SessionStore` | `One` | 全局必需 | 持久化完整 Session 聚合及其 revision/CAS 原子事务，包括类型化扩展恢复记录和有界 sequence 诊断；跨编码与重开按 JSON 值语义保持工具参数；History 仍是唯一、append-only 的事实视图。 | 已定义契约 |
 | `context.source` | `ContextSource` | `Chain` | 可选 | 为一次模型调用按顺序提供上下文。 | 已定义契约 |
 | `context.compactor` | `ContextCompactor` | `One` | 可选 | 把当前完整 Context 转为更小的会话消息投影且不改写 History；AgentRuntime 重新装配固定 Prompt/Tool，并校验协议和硬 Token 上限。 | 已定义契约 |
 | `memory.store` | `MemoryStore` | `Many` | 可选 | 在权威会话 History 之外召回、记住和遗忘受治理的长期记忆。 | 已定义契约 |
@@ -255,12 +256,13 @@ Tool 正常处理预算，固定 Runtime 在写入 History 前再次校验；不
 - **Context** 是为下一次模型调用组装出的版本化、满足模型协议的投影；未配对 tool call 不进入投影。
 - **Queue** 是尚未进入 Context 的持久化 normal、steer 和 held 消息集合。
 - **RunJournal** 记录进行中的执行和工具恢复证据，不进入模型 Context，也不是第二份对话账本。
+- **ExtensionJournal** 记录类型化扩展调用的恢复状态；同一调用可以推进状态和 disposition，但不得修改 History，也不是第二份对话账本。
 - **Memory** 是可能在未来被选中使用的持久化召回信息。
 - **Checkpoint** 是可以恢复的运行时状态。
 
 每个 `SessionStore` 都必须保证已提交 History 事实严格仅追加。实现不得修改、
 删除、换位，也不得向已经提交的尾部之前插入事实；还必须原子协调 History、
-Context、Queue、RunJournal 和 revision/CAS 边界。上下文压缩只能产生派生
+Context、Queue、RunJournal、ExtensionJournal 和 revision/CAS 边界。上下文压缩只能产生派生
 Context，绝不能改写 History。工具参数跨 Store 编码与重开后按精确 JSON 值语义
 保持身份，重复对象成员必须在 admission 前拒绝。Runtime 恢复后只有在持久 Run
 具有唯一终态时才能公开 idle；running 或不一致快照必须 fail closed，等待显式恢复。
@@ -345,6 +347,8 @@ Runtime 预留、并由最终持久 assistant Message 复用的 `MessageID`，�
 临时正文变成持久事实。临时事件可以丢失，断线不会取消 Run；如果订阅缓存无法接收持久 revision 通知，则明确关闭订阅，
 客户端通过 View 恢复，不能无界占用内存。具体 Channel 或外部消息系统可以私有保存
 可靠投递状态，但它不是标准 Slot 或 Session 事实，也不能改变 Run 完成状态。
+扩展诊断使用独立、排他的 `BeforeExtensionSequence` 游标，默认返回 50 条、最多 100 条；安全投影
+不包含 context payload、进程输出、命令或环境。分页不会把 ExtensionJournal 变成用户或模型 History。
 
 ### 9. 用量与计费
 

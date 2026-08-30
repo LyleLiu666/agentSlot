@@ -181,6 +181,14 @@ func (b *gatewayBinding) History(ctx context.Context, request interaction.Histor
 	return target.History(ctx, request)
 }
 
+func (b *gatewayBinding) ExtensionDiagnostics(ctx context.Context, request interaction.ExtensionDiagnosticsRequest) (interaction.ExtensionDiagnosticsPage, error) {
+	target, err := b.access()
+	if err != nil {
+		return interaction.ExtensionDiagnosticsPage{}, err
+	}
+	return target.ExtensionDiagnostics(ctx, request)
+}
+
 func (b *gatewayBinding) Subscribe(ctx context.Context, request interaction.SubscribeRequest) (interaction.EventStream, error) {
 	target, err := b.access()
 	if err != nil {

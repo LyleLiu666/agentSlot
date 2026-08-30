@@ -27,6 +27,10 @@ func cloneSnapshot(source Snapshot) Snapshot {
 	for index, entry := range source.RunJournal {
 		copy.RunJournal[index] = cloneJournalEntry(entry)
 	}
+	copy.ExtensionJournal = make([]ExtensionJournalEntry, len(source.ExtensionJournal))
+	for index, entry := range source.ExtensionJournal {
+		copy.ExtensionJournal[index] = cloneExtensionJournalEntry(entry)
+	}
 	copy.Events = make([]SessionEvent, len(source.Events))
 	for index, event := range source.Events {
 		copy.Events[index] = cloneSessionEvent(event)
@@ -35,6 +39,19 @@ func cloneSnapshot(source Snapshot) Snapshot {
 	if source.Fork != nil {
 		fork := *source.Fork
 		copy.Fork = &fork
+	}
+	return copy
+}
+
+func cloneExtensionJournalEntry(source ExtensionJournalEntry) ExtensionJournalEntry {
+	copy := source
+	if source.Result != nil {
+		result := *source.Result
+		copy.Result = &result
+	}
+	copy.ContextInputs = make([]model.Input, len(source.ContextInputs))
+	for index, input := range source.ContextInputs {
+		copy.ContextInputs[index] = cloneModelInput(input)
 	}
 	return copy
 }

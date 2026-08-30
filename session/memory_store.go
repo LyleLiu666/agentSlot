@@ -17,6 +17,7 @@ import (
 	"time"
 
 	agent "github.com/LyleLiu666/agentSlot/agent"
+	"github.com/LyleLiu666/agentSlot/hook"
 	"github.com/LyleLiu666/agentSlot/internal/jsonvalue"
 	"github.com/LyleLiu666/agentSlot/model"
 	"github.com/LyleLiu666/agentSlot/tool"
@@ -138,6 +139,29 @@ func (s *MemoryStore) HistoryPage(ctx context.Context, request HistoryPageReques
 	page, err := historyPage(aggregate.snapshot.History, request)
 	if err != nil {
 		return HistoryPage{}, err
+	}
+	page.AgentID = aggregate.snapshot.Session.AgentID
+	page.WorkspaceID = aggregate.snapshot.Session.WorkspaceID
+	page.Revision = aggregate.snapshot.Revision
+	return page, nil
+}
+
+func (s *MemoryStore) ExtensionDiagnostics(ctx context.Context, request ExtensionPageRequest) (ExtensionPage, error) {
+	if err := contextErr(ctx, "session.extension_diagnostics"); err != nil {
+		return ExtensionPage{}, err
+	}
+	if !request.SessionID.Valid() {
+		return ExtensionPage{}, invalid("session.extension_diagnostics", "session ID is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	aggregate, ok := s.sessions[request.SessionID]
+	if !ok {
+		return ExtensionPage{}, agent.NewCodedError(agent.ErrorNotFound, agent.CodeSessionNotFound, "session.extension_diagnostics", "session not found", nil)
+	}
+	page, err := extensionPage(aggregate.snapshot.ExtensionJournal, request)
+	if err != nil {
+		return ExtensionPage{}, err
 	}
 	page.AgentID = aggregate.snapshot.Session.AgentID
 	page.WorkspaceID = aggregate.snapshot.Session.WorkspaceID
@@ -525,6 +549,10 @@ func applyChanges(snapshot *Snapshot, request CommitRequest) error {
 			if err := applyJournal(snapshot, *change.Journal, request.SessionID); err != nil {
 				return err
 			}
+		case UpdateExtensionJournal:
+			if err := applyExtensionJournal(snapshot, *change.Extension); err != nil {
+				return err
+			}
 		}
 	}
 	if snapshot.RunState == RunIdle && hasUnfinishedJournal(snapshot.RunJournal) {
@@ -768,6 +796,21 @@ func applyJournal(snapshot *Snapshot, entry JournalEntry, sessionID agent.Sessio
 
 func recoverAggregate(snapshot *Snapshot) (bool, error) {
 	changed := false
+	for index := range snapshot.ExtensionJournal {
+		entry := &snapshot.ExtensionJournal[index]
+		if entry.Status != hook.InvocationPending {
+			continue
+		}
+		entry.Status = hook.InvocationOutcomeUnknown
+		entry.FinishedAt = time.Now().UTC()
+		if entry.FinishedAt.Before(entry.PendingAt) {
+			entry.FinishedAt = entry.PendingAt
+		}
+		entry.ErrorCode = "hook_outcome_unknown"
+		entry.ErrorReason = "extension outcome is unknown after process recovery"
+		entry.EffectDisposition = hook.EffectPending
+		changed = true
+	}
 	interruptedRunID := snapshot.ActiveRunID
 	startedAttempts := make(map[agent.AttemptID]ModelAttemptFact)
 	terminalAttempts := make(map[agent.AttemptID]bool)

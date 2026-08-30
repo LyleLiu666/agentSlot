@@ -82,6 +82,9 @@ func (c *Client) View(ctx context.Context, request interaction.SessionViewReques
 func (c *Client) History(ctx context.Context, request interaction.HistoryRequest) (interaction.HistoryPage, error) {
 	return call[interaction.HistoryRequest, interaction.HistoryPage](c, ctx, OperationHistory, request)
 }
+func (c *Client) ExtensionDiagnostics(ctx context.Context, request interaction.ExtensionDiagnosticsRequest) (interaction.ExtensionDiagnosticsPage, error) {
+	return call[interaction.ExtensionDiagnosticsRequest, interaction.ExtensionDiagnosticsPage](c, ctx, OperationExtensionDiagnostics, request)
+}
 func (c *Client) Commands(ctx context.Context, request interaction.CommandScope) ([]interaction.CommandDescriptor, error) {
 	return call[interaction.CommandScope, []interaction.CommandDescriptor](c, ctx, OperationCommands, request)
 }

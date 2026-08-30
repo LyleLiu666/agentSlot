@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"math/big"
+	"sort"
 )
 
 type kind uint8
@@ -58,6 +59,86 @@ func Equal(left, right []byte) bool {
 		return false
 	}
 	return equal(leftValue, rightValue)
+}
+
+// Canonical returns one deterministic JSON encoding of an unambiguous value.
+// It preserves JSON data-model semantics rather than the caller's whitespace,
+// object-member order, string escapes, or mathematically equivalent number
+// spelling. The result is intended for private identity and digest inputs.
+func Canonical(raw []byte) ([]byte, error) {
+	parsed, err := parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	var result bytes.Buffer
+	if err := writeCanonical(&result, parsed); err != nil {
+		return nil, err
+	}
+	return result.Bytes(), nil
+}
+
+func writeCanonical(destination *bytes.Buffer, current value) error {
+	switch current.kind {
+	case kindNull:
+		destination.WriteString("null")
+	case kindBoolean:
+		if current.boolean {
+			destination.WriteString("true")
+		} else {
+			destination.WriteString("false")
+		}
+	case kindNumber:
+		if current.number.negative {
+			destination.WriteByte('-')
+		}
+		destination.WriteString(current.number.digits)
+		if current.number.exponent.Sign() != 0 {
+			destination.WriteByte('e')
+			destination.WriteString(current.number.exponent.String())
+		}
+	case kindString:
+		encoded, err := json.Marshal(current.text)
+		if err != nil {
+			return err
+		}
+		destination.Write(encoded)
+	case kindArray:
+		destination.WriteByte('[')
+		for index, item := range current.array {
+			if index > 0 {
+				destination.WriteByte(',')
+			}
+			if err := writeCanonical(destination, item); err != nil {
+				return err
+			}
+		}
+		destination.WriteByte(']')
+	case kindObject:
+		names := make([]string, 0, len(current.object))
+		for name := range current.object {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		destination.WriteByte('{')
+		for index, name := range names {
+			if index > 0 {
+				destination.WriteByte(',')
+			}
+			encoded, err := json.Marshal(name)
+			if err != nil {
+				return err
+			}
+			destination.Write(encoded)
+			destination.WriteByte(':')
+			if err := writeCanonical(destination, current.object[name]); err != nil {
+				return err
+			}
+		}
+		destination.WriteByte('}')
+	default:
+		return errors.New("jsonvalue: unsupported canonical value")
+	}
+	return nil
 }
 
 func parse(raw []byte) (value, error) {

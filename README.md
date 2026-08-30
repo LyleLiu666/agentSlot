@@ -534,12 +534,27 @@ before invocation. Recovery can resume only the original prepared call;
 pending calls become `outcome_unknown` and are never replayed. Trace, Metric, Audit, and Usage
 chains are passive, and [`observe/jsonlines`](observe/jsonlines) is an explicit
 default sink. [`session.FileStore`](session/file_store.go) is a crash-safe
-single-process persistent implementation. FileStore passes the separately
-maintained `session.store/v1` public black-box suite, making that ecosystem
-Conformant. MemoryStore and FileStore share one implementation codebase, so
+single-process persistent implementation. Sessions without extension
+invocations remain byte-schema-compatible `agentslot.session-file/v1` files.
+The first real ExtensionJournal entry atomically upgrades only that Session to
+`agentslot.session-file/v2`; new code reads both versions and never downgrades a
+v2 Session. Older binaries cannot read an upgraded v2 file, and no sidecar
+Store disguises that local downgrade boundary. The previous
+`session.store/v1` conformance result remains evidence for the pre-extension
+contract; the expanded contract is Contracted until a complete
+`session.store/v2` black-box suite passes. MemoryStore and FileStore share one implementation codebase, so
 they do not establish Proven maturity; no Web/RPC transport, distributed
 Session lease, or reliable-delivery ACK is implied. Importing any package still
 has no registration or startup side effect.
+
+`GatewayAccess.ExtensionDiagnostics` returns a payload-free, newest-first page
+using an immutable extension-sequence cursor (default 50, maximum 100). It does
+not expose commands, environment, process streams, or pending context content.
+ExtensionJournal state is recovery metadata; Session History remains strictly
+append-only and is never rewritten by an extension transition.
+Runtime consumers can atomically batch a terminal transition, its business
+mutation, and effect finalization in one Store commit, avoiding an unnecessary
+extra FileStore rewrite without weakening the recovery boundary.
 
 ## Reference agent
 

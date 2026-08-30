@@ -31,7 +31,7 @@ Current repository reality:
 | Mapped standard component ecosystems | 41 |
 | Standardized domain vocabularies | 9 |
 | Contracted AgentSlot-owned domain interfaces | 32 |
-| Conformant component ecosystems | 2 |
+| Conformant component ecosystems | 1 |
 | Proven component ecosystems | 0 |
 | Assembled standard component ecosystems | 0 |
 
@@ -64,7 +64,7 @@ Its description uses `AssemblyDescription` and the `agentslot.assembly/v0` schem
 | Slot ID | Standard contract | Kind | Required cardinality | Responsibility |
 | --- | --- | --- | --- | --- |
 | `agent.loop` | `AgentLoop` | `One` | exactly 1 | Owns replaceable Agent execution strategy through ordered, Run-scoped Runtime actions while the framework retains Session truth, budgets, cancellation, recovery, and terminal commits. |
-| `session.store` | `SessionStore` | `One` | exactly 1 | Persists the whole Session aggregate and atomic revision/CAS transactions; preserves tool arguments by JSON value semantics across encoding and reopen; lists resumable Sessions through bounded, deterministic, lifecycle-scoped cursor pages within an Agent/Workspace scope; History remains the unique append-only fact view. |
+| `session.store` | `SessionStore` | `One` | exactly 1 | Persists the whole Session aggregate and atomic revision/CAS transactions, including typed extension recovery records and bounded sequence diagnostics; preserves tool arguments by JSON value semantics across encoding and reopen; History remains the unique append-only fact view. |
 | `model.executor` | `ModelExecutor` | `One` | exactly 1 | Validates selected-model capabilities, executes one logical model call with a checked temporary/reset/terminal stream, contains retries and continuation, reports post-call usage, and durably records each physical attempt plus an optional bounded adapter-sanitized displayable failure message through the restricted AttemptRecorder. |
 | `model.token-counter` | `TokenCounter` | `One` | exactly 1 | Counts the complete provider-visible request for pre-call planning, using an exact tokenizer or a validated conservative bound and failing closed when neither is defensible. |
 | `gateway.channel` | `GatewayChannel` | `Many` | at least 1 | Binds one caller-facing protocol, function API, or UI to the fixed Gateway and receives only `GatewayAccess`; gRPC, WebSocket, SSH, and inbound ACP are alternative implementations of this Slot. |
@@ -167,16 +167,19 @@ Gateway channels, deterministic tool policy/approval components, and a JSON Line
 observation module. The fixed Runtime and selected AgentLoop consume these components without
 concrete-type branches.
 
-`session.store` is **Conformant**: the reusable `session.store/v1` black-box
-suite passed all required public behavior and durable-reopen scenarios against
-the exact AgentSlot `v0.0.10` commit
-`c6b42a767d5422464ebc2978bf408b7d15eb5125`, with no failures or skips.
-MemoryStore remains a process-lifetime reference check, and MemoryStore/FileStore
-share one implementation codebase, so this is one implementation result rather
-than Proven evidence. The other thirty-one domain rows remain **Contracted**;
-every other row remains **Mapped**.
+The reusable `session.store/v1` black-box suite remains valid evidence for the
+exact pre-extension contract at AgentSlot `v0.0.10` commit
+`c6b42a767d5422464ebc2978bf408b7d15eb5125`. The current `SessionStore` contract
+also contains ExtensionJournal persistence and bounded diagnostics, which have
+MemoryStore/FileStore parity, reopen, corruption, and fault-injection coverage
+but not yet a complete independently maintained `session.store/v2` black-box
+run. The current ecosystem therefore returns to **Contracted** until that full
+suite is published and passed. This persistence prerequisite does not claim
+that any new typed Hook Slot is Runtime-wired or product-assembled.
 
-The current score is 1 Conformant, 0 Proven, and 0 Assembled.
+The other thirty domain rows remain **Contracted**, `model.executor` remains
+**Conformant**, and every other row remains **Mapped**. The current score is
+1 Conformant, 0 Proven, and 0 Assembled.
 
 The score is measured by proven component ecosystems, not by the number of
 modules, packages, or interface methods. One module may contribute to several
@@ -283,7 +286,7 @@ do not form a second `tool.output-store` ecosystem.
 
 | Slot ID | Contract | Kind | Profile rule | Responsibility | Maturity |
 | --- | --- | --- | --- | --- | --- |
-| `session.store` | `SessionStore` | `One` | globally required | Persists the whole Session aggregate and atomic revision/CAS transactions; preserves tool arguments by JSON value semantics across encoding and reopen; lists resumable Sessions through bounded, deterministic, lifecycle-scoped cursor pages within an Agent/Workspace scope; History remains the unique append-only fact view. | Conformant |
+| `session.store` | `SessionStore` | `One` | globally required | Persists the whole Session aggregate and atomic revision/CAS transactions, including typed extension recovery records and bounded sequence diagnostics; preserves tool arguments by JSON value semantics across encoding and reopen; History remains the unique append-only fact view. | Contracted |
 | `context.source` | `ContextSource` | `Chain` | optional | Contributes ordered context for a model turn. | Contracted |
 | `context.compactor` | `ContextCompactor` | `One` | optional | Replaces the current full Context with a smaller conversation-message projection without rewriting History; AgentRuntime reattaches fixed prompts/tools and validates protocol and hard token limits. | Contracted |
 | `memory.store` | `MemoryStore` | `Many` | optional | Recalls, remembers, and forgets governed long-term memory outside authoritative conversation History. | Contracted |
@@ -296,13 +299,14 @@ Terminology is strict:
 - **Context** is the versioned, model-protocol-valid projection assembled for the next model call; an unpaired tool call is not projected.
 - **Queue** is the durable set of normal, steer, and held messages not yet in Context.
 - **RunJournal** records in-flight execution and tool recovery evidence, not model context or a second conversation ledger.
+- **ExtensionJournal** records typed extension invocation recovery state. It may update one invocation's status and dispositions, but it never edits History or becomes a second conversation ledger.
 - **Memory** is durable recall selected for possible future use.
 - A **checkpoint** is resumable runtime state.
 
 Every `SessionStore` must keep committed History facts strictly append-only. An
 implementation may not edit, delete, reorder, or insert facts before the
 committed tail. The Store must also atomically coordinate History, Context,
-Queue, RunJournal, and revision/CAS boundaries. Compaction creates derived
+Queue, RunJournal, ExtensionJournal, and revision/CAS boundaries. Compaction creates derived
 context; it never rewrites History. Tool arguments retain identity by exact
 JSON value semantics across Store encoding and reopen, while duplicate object
 members are rejected before admission. Runtime recovery may expose idle only
@@ -415,6 +419,10 @@ closed explicitly and reconnects through View rather than consuming unbounded
 memory. A concrete Channel or external messaging system may keep private
 reliable-delivery state, but that state is not a standard Slot or Session fact
 and cannot change Run completion.
+Extension diagnostics use a separate exclusive `BeforeExtensionSequence`
+cursor, default to 50 records, and are capped at 100. The safe projection omits
+context payloads, process streams, commands, and environment; paging does not
+turn ExtensionJournal into user or model History.
 
 ### 9. Usage and billing
 
