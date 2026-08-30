@@ -214,6 +214,46 @@ func TestExtensionJournalContextIsClearedAfterConsumptionButKeepsAuditDigest(t *
 	}
 }
 
+func TestExtensionJournalCanApplyAnEffectBeforeItsContextIsClaimed(t *testing.T) {
+	store, created := newExtensionSession(t, session.NewMemoryStore(), "extension-independent-context")
+	prepared := preparedExtensionEntry(t, created.Session.ID, 1, "invocation-independent-context")
+	commit := commitExtension(t, store, created, "prepare", prepared)
+	pending := extensionPending(prepared)
+	commit = commitExtension(t, store, committedSnapshot(t, store, created.Session.ID, commit.Revision), "pending", pending)
+
+	message := agent.Message{
+		ID: "independent-context-message", SessionID: created.Session.ID, Role: agent.RoleUser,
+		Parts: []agent.MessagePart{{Kind: agent.PartText, Text: "consume only after queue claim"}},
+	}
+	succeeded := extensionSucceeded(pending)
+	succeeded.ContextDisposition = hook.ContextPending
+	succeeded.ContextInputs = []model.Input{{Message: &message}}
+	fingerprint, err := hook.FingerprintTypedInput(succeeded.ContextInputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	succeeded.ContextDigest, succeeded.ContextBytes = fingerprint.Digest, fingerprint.Bytes
+	commit = commitExtension(t, store, committedSnapshot(t, store, created.Session.ID, commit.Revision), "succeeded", succeeded)
+
+	applied := succeeded
+	applied.EffectDisposition = hook.EffectApplied
+	commit = commitExtension(t, store, committedSnapshot(t, store, created.Session.ID, commit.Revision), "apply-input", applied)
+
+	consumed := applied
+	consumed.ContextDisposition = hook.ContextConsumed
+	consumed.ContextInputs = nil
+	commitExtension(t, store, committedSnapshot(t, store, created.Session.ID, commit.Revision), "consume-context", consumed)
+
+	final, err := store.Load(context.Background(), session.SessionRef{SessionID: created.Session.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := final.ExtensionJournal[0]
+	if entry.EffectDisposition != hook.EffectApplied || entry.ContextDisposition != hook.ContextConsumed || len(entry.ContextInputs) != 0 {
+		t.Fatalf("independently finalized entry = %#v", entry)
+	}
+}
+
 func TestExtensionJournalNeverRewritesHistoryOrTurnsContextIntoMessages(t *testing.T) {
 	store := session.NewMemoryStore()
 	message := agent.Message{

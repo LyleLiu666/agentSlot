@@ -68,7 +68,7 @@ func (r *runtimeInstance) prepareModelRequest(run *activeRun, step agent.StepID)
 }
 
 func (r *runtimeInstance) persistContextContributions(run *activeRun, step agent.StepID, snapshot session.Snapshot) (session.Snapshot, []model.Input, error) {
-	dynamic := historyInputs(snapshot.History)
+	dynamic := historyInputs(snapshot.History, run.id, step)
 	if err := validateDynamicInputs(r.id(), dynamic); err != nil {
 		return session.Snapshot{}, nil, err
 	}

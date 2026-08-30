@@ -28,17 +28,17 @@ Current repository reality:
 
 | Inventory | Count |
 | --- | ---: |
-| Mapped standard component ecosystems | 41 |
+| Mapped standard component ecosystems | 42 |
 | Standardized domain vocabularies | 9 |
-| Contracted AgentSlot-owned domain interfaces | 32 |
+| Contracted AgentSlot-owned domain interfaces | 33 |
 | Conformant component ecosystems | 1 |
 | Proven component ecosystems | 0 |
 | Assembled standard component ecosystems | 0 |
 
 The generic composition protocol exports five Go interfaces: `Module`,
-`SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. Thirty-two domain
+`SlotRequirer`, `Registrar`, `Contribution`, and `Lifecycle`. Thirty-three domain
 contracts are now defined across the standard leaf packages; one is
-Conformant, the other thirty-one remain Contracted, and none is Proven.
+Conformant, the other thirty-two remain Contracted, and none is Proven.
 The other nine ecosystems remain Mapped.
 
 The nine counted vocabulary families are Agent Loop outcomes, model capability,
@@ -159,7 +159,7 @@ method-level contract is an engineering result.
 | **Proven** | At least two semantically independent implementations pass the same suite version. Wrappers over the same implementation count once. |
 | **Assembled** | LAS or another approved real consumer exchanges proven implementations through the Slot without concrete-type branches. |
 
-Thirty-two domain rows are now at least **Contracted**: each has a public
+Thirty-three domain rows are now at least **Contracted**: each has a public
 domain interface, typed Slot, and contract tests. The repository now contains
 in-memory and crash-safe file Session stores, deterministic Fake and
 OpenAI Chat Compatible executors, Bash/file/HTTP tools, in-process and CLI
@@ -195,6 +195,7 @@ Slots, and several modules may contribute to one `Many` or `Chain` Slot.
 | `gateway.channel` | `GatewayChannel` | `Many` | globally requires at least 1 | Binds one caller-facing protocol, function API, or UI to the fixed Gateway and receives only `GatewayAccess`; gRPC, WebSocket, SSH, and inbound ACP are alternative implementations of this Slot. | Contracted |
 | `interaction.command` | `InteractionCommand` | `Many` | optional | Registers a keyed UI-neutral command with the fixed Gateway; Channels render the shared descriptor as slash commands, menus, buttons, forms, or command palettes. | Contracted |
 | `agent.hook` | `AgentHook` | `Chain` | optional | Proposes controlled follow-on input before run completion; it cannot mutate Session state or become a second Runtime controller. | Contracted |
+| `hook.input_gate` | `InputGate` | `Chain` | optional | Accepts or rejects a proposed Send, Steer, or queued edit before mutation and may contribute bounded context to the exact Run/Step that later claims the unchanged input. | Contracted |
 | `goal.store` | `goal.Store` | `One` | optional; installed with `goal.evaluator` | Owns one CAS-protected objective lifecycle per Session, separate from append-only conversation History. | Contracted |
 | `goal.evaluator` | `goal.Evaluator` | `One` | optional; installed with `goal.store` | Makes a structured continue/blocked/done decision before an otherwise finished Run closes. | Contracted |
 | `session.commit.observer` | `SessionCommitObserver` | `Chain` | optional | Asynchronously observes applied Session revisions and their appended History sequence ranges; failures and panics cannot roll back a commit. | Contracted |

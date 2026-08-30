@@ -178,8 +178,10 @@ func (e ExtensionJournalEntry) validateContext(sessionID agent.SessionID) error 
 			return fmt.Errorf("session: context-free extension carries context metadata")
 		}
 	case hook.ContextPending:
-		if e.Status != hook.InvocationSucceeded || e.EffectDisposition != hook.EffectPending || len(e.ContextInputs) == 0 || len(e.ContextInputs) > hook.MaxContextInputs {
-			return fmt.Errorf("session: pending extension context is not attached to an unapplied success")
+		if e.Status != hook.InvocationSucceeded ||
+			(e.EffectDisposition != hook.EffectPending && e.EffectDisposition != hook.EffectApplied) ||
+			len(e.ContextInputs) == 0 || len(e.ContextInputs) > hook.MaxContextInputs {
+			return fmt.Errorf("session: pending extension context is not attached to a successful effect")
 		}
 		if err := validateExtensionContextInputs(e.ContextInputs, sessionID); err != nil {
 			return err
@@ -195,8 +197,8 @@ func (e ExtensionJournalEntry) validateContext(sessionID agent.SessionID) error 
 		if e.ContextDisposition == hook.ContextConsumed && e.EffectDisposition != hook.EffectApplied {
 			return fmt.Errorf("session: consumed context requires applied effect")
 		}
-		if e.ContextDisposition == hook.ContextDiscarded && e.EffectDisposition != hook.EffectDiscarded {
-			return fmt.Errorf("session: discarded context requires discarded effect")
+		if e.ContextDisposition == hook.ContextDiscarded && e.EffectDisposition != hook.EffectApplied && e.EffectDisposition != hook.EffectDiscarded {
+			return fmt.Errorf("session: discarded context requires a finalized effect")
 		}
 	}
 	return nil
@@ -209,6 +211,9 @@ func validateExtensionContextInputs(inputs []model.Input, sessionID agent.Sessio
 		if !input.Valid() || input.SystemPrompt != nil || wrongMessageSession || wrongCallSession {
 			return fmt.Errorf("session: invalid extension context input")
 		}
+	}
+	if err := model.ValidateInputs(inputs); err != nil {
+		return fmt.Errorf("session: extension context violates the model protocol")
 	}
 	return nil
 }
@@ -283,20 +288,39 @@ func validateExtensionTransition(current, next ExtensionJournalEntry) error {
 		if next.Status != current.Status || !sameExtensionTerminalOutcome(current, next) {
 			return extensionConflict("terminal extension outcome is immutable")
 		}
-		if current.EffectDisposition != hook.EffectPending || (next.EffectDisposition != hook.EffectApplied && next.EffectDisposition != hook.EffectDiscarded) {
-			return extensionConflict("extension effect may be finalized exactly once")
+		effectProgressed := current.EffectDisposition != next.EffectDisposition
+		switch current.EffectDisposition {
+		case hook.EffectPending:
+			if next.EffectDisposition != hook.EffectPending && next.EffectDisposition != hook.EffectApplied && next.EffectDisposition != hook.EffectDiscarded {
+				return extensionConflict("pending extension effect has an invalid transition")
+			}
+		case hook.EffectApplied, hook.EffectDiscarded:
+			if next.EffectDisposition != current.EffectDisposition {
+				return extensionConflict("finalized extension effect is immutable")
+			}
+		default:
+			return extensionConflict("terminal extension effect is invalid")
 		}
+		contextProgressed := current.ContextDisposition != next.ContextDisposition
 		switch current.ContextDisposition {
 		case hook.ContextNone:
 			if next.ContextDisposition != hook.ContextNone {
 				return extensionConflict("context-free extension cannot acquire context")
 			}
 		case hook.ContextPending:
-			if next.ContextDisposition != hook.ContextConsumed && next.ContextDisposition != hook.ContextDiscarded {
-				return extensionConflict("pending extension context must be consumed or discarded exactly once")
+			if next.ContextDisposition != hook.ContextPending && next.ContextDisposition != hook.ContextConsumed && next.ContextDisposition != hook.ContextDiscarded {
+				return extensionConflict("pending extension context has an invalid transition")
 			}
-		default:
-			return extensionConflict("finalized extension context is immutable")
+			if next.ContextDisposition == hook.ContextPending && !reflect.DeepEqual(current.ContextInputs, next.ContextInputs) {
+				return extensionConflict("pending extension context inputs are immutable")
+			}
+		case hook.ContextConsumed, hook.ContextDiscarded:
+			if next.ContextDisposition != current.ContextDisposition {
+				return extensionConflict("finalized extension context is immutable")
+			}
+		}
+		if !effectProgressed && !contextProgressed {
+			return extensionConflict("terminal extension disposition did not advance")
 		}
 	}
 	return nil

@@ -461,7 +461,7 @@ model-facing tool inputs use self-contained JSON Schema Draft 2020-12.
 Caller and Hook input uses `agent.MessageInput`, which carries content only;
 the fixed Runtime allocates MessageID, Session/Run/Step containment, role, and
 timestamp atomically when it creates a durable `agent.Message` fact.
-Thirty-two standard component contracts are now available in the `loop`,
+Thirty-three standard component contracts are now available in the `loop`,
 `session`, `model`, `tool`, `context`, `hook`, `interaction`, `policy`, `observe`,
 `goal`, `memory`, `workflow`, `billing`, `artifact`, `workspace`, and `credential`
 packages. They are at least Contracted; `session.store` has a reusable
@@ -490,7 +490,16 @@ implicitly.
 `SendAndWait` wraps the same Run and returns only that Run's durable assistant
 text messages rather than executing a second model path. Run start/terminal
 facts retain the frozen model configuration. The
-`model` package includes an explicitly installed deterministic
+optional `hook.input_gate` Chain runs before Send, Steer, and queued-input edits.
+Its prepared journal commit is the caller's CAS linearization point; accepted
+context is stored separately from the unchanged user message and projected only
+for the exact Run/Step that claims it. Rejection, component failure, cancellation,
+panic, edit/delete/claim races, and restart recovery therefore cannot leave a
+half-visible input or replay an unknown external invocation. `ClientMessageID`
+remains correlation metadata rather than an exactly-once key, and input
+serialization is scoped per Session without blocking the active Run or other
+Sessions. gRPC preserves the typed failure's Session ID, current revision, and
+bounded safe diagnostics. The `model` package includes an explicitly installed deterministic
 `FakeModelExecutor` for development and contract tests, while
 [`model/openaicompat`](model/openaicompat) provides a real streaming Chat
 Completions-compatible Executor with physical Attempt IDs, bounded output,
@@ -522,7 +531,9 @@ complete versioned logical requests. `LatestOnly` keeps only the newest request;
 `RetainAll` also preserves every prior Step request, including its prompt, model
 configuration, tools, and attachment projection. It runs ordered ContextSource and Hook
 chains, enforces model protocol, hard context limits, and the optional per-Run
-token budget, projects unsupported
+token budget. ContextContribution facts are projected only into their exact
+Run/Step, so append-only audit history does not cause one-shot extension or
+ContextSource payloads to be resent on every later model request. The Runtime projects unsupported
 attachments without rewriting History, and validates idle-only model switches
 through ModelExecutor capabilities. `model.catalog` has a typed contract and
 an explicit StaticCatalog reference implementation. Applications can

@@ -172,7 +172,7 @@ func (c Catalog) LookupPreset(id string) (Preset, bool) {
 	return Preset{}, false
 }
 
-var componentIDPattern = regexp.MustCompile(`^[a-z][a-z0-9.-]*$`)
+var componentIDPattern = regexp.MustCompile(`^[a-z][a-z0-9._-]*$`)
 
 func (c Catalog) Validate() error {
 	if c.StandardVersion != StandardVersion {
@@ -428,6 +428,7 @@ var standardCatalog = Catalog{StandardVersion: StandardVersion, Components: []Co
 	entry("runtime", "gateway.channel", "GatewayChannel", KindMany, MaturityContracted, module+"/interaction", true, profile(1), "globally requires at least 1", "Binds one caller-facing protocol, function API, or UI to the fixed Gateway and receives only `GatewayAccess`; gRPC, WebSocket, SSH, and inbound ACP are alternative implementations of this Slot.", "全局至少 1 个", "把调用方协议、函数 API 或 UI 绑定到固定 Gateway，并且只能取得 `GatewayAccess`；gRPC、WebSocket、SSH 和入站 ACP 都是该 Slot 的不同实现。"),
 	entry("runtime", "interaction.command", "InteractionCommand", KindMany, MaturityContracted, module+"/interaction", true, nil, "optional", "Registers a keyed UI-neutral command with the fixed Gateway; Channels render the shared descriptor as slash commands, menus, buttons, forms, or command palettes.", "可选", "向固定 Gateway 注册具名、UI-neutral 的结构化命令；Channel 把共享描述渲染为 Slash、菜单、按钮、表单或命令面板。"),
 	entry("runtime", "agent.hook", "AgentHook", KindChain, MaturityContracted, module+"/hook", true, nil, "optional", "Proposes controlled follow-on input before run completion; it cannot mutate Session state or become a second Runtime controller.", "可选", "在 Run 完成前提出受控的后续输入；不能修改 Session 状态，也不能成为第二个 Runtime 控制者。"),
+	entry("runtime", "hook.input_gate", "InputGate", KindChain, MaturityContracted, module+"/hook", true, nil, "optional", "Accepts or rejects a proposed Send, Steer, or queued edit before mutation and may contribute bounded context to the exact Run/Step that later claims the unchanged input.", "可选", "在 Send、Steer 或排队输入编辑生效前接受或拒绝，并可为之后认领未改写输入的精确 Run/Step 提供有界上下文。"),
 	entry("runtime", "goal.store", "goal.Store", KindOne, MaturityContracted, module+"/goal", true, nil, "optional; installed with `goal.evaluator`", "Owns one CAS-protected objective lifecycle per Session, separate from append-only conversation History.", "可选；与 `goal.evaluator` 同时安装", "为每个 Session 保存一份受 CAS 保护的目标生命周期，与仅追加的会话 History 分离。"),
 	entry("runtime", "goal.evaluator", "goal.Evaluator", KindOne, MaturityContracted, module+"/goal", true, nil, "optional; installed with `goal.store`", "Makes a structured continue/blocked/done decision before an otherwise finished Run closes.", "可选；与 `goal.store` 同时安装", "在本来准备结束的 Run 关闭前，给出结构化的继续、阻塞或完成判断。"),
 	entry("runtime", "session.commit.observer", "SessionCommitObserver", KindChain, MaturityContracted, module+"/session", true, nil, "optional", "Asynchronously observes applied Session revisions and their appended History sequence ranges; failures and panics cannot roll back a commit.", "可选", "异步观察已经生效的 Session revision 及其新增 History sequence 范围；错误和 panic 不能回滚提交。"),

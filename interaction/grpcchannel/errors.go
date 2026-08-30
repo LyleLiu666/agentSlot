@@ -2,6 +2,7 @@ package grpcchannel
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strconv"
 
@@ -40,6 +41,15 @@ func encodeError(err error) error {
 			metadata["code"] = string(agent.CodeRevisionConflict)
 		}
 	}
+	var inputGate *interaction.InputGateError
+	if errors.As(err, &inputGate) {
+		metadata["error_type"] = "input_gate"
+		metadata["session_id"] = string(inputGate.SessionID)
+		metadata["current_revision"] = strconv.FormatUint(uint64(inputGate.CurrentRevision), 10)
+		if diagnostics, marshalErr := json.Marshal(inputGate.Diagnostics); marshalErr == nil {
+			metadata["extension_diagnostics"] = string(diagnostics)
+		}
+	}
 	if errors.Is(err, context.Canceled) && kind == agent.ErrorInternal {
 		grpcCode = codes.Canceled
 		metadata["kind"] = string(agent.ErrorCanceled)
@@ -74,12 +84,21 @@ func decodeError(err error) error {
 			return interaction.ErrEventStreamOverflow
 		}
 		cause := agent.NewCodedError(kind, code, "grpcchannel", parsed.Message(), nil)
+		var decoded error = cause
 		if code == agent.CodeRevisionConflict {
 			current, _ := strconv.ParseUint(info.Metadata["current_revision"], 10, 64)
 			snapshot, _ := strconv.ParseBool(info.Metadata["snapshot_required"])
-			return &interaction.RevisionConflictError{CurrentRevision: agent.Revision(current), SnapshotRequired: snapshot, Cause: cause}
+			decoded = &interaction.RevisionConflictError{CurrentRevision: agent.Revision(current), SnapshotRequired: snapshot, Cause: cause}
 		}
-		return cause
+		if info.Metadata["error_type"] == "input_gate" {
+			current, _ := strconv.ParseUint(info.Metadata["current_revision"], 10, 64)
+			inputGate := &interaction.InputGateError{
+				SessionID: agent.SessionID(info.Metadata["session_id"]), CurrentRevision: agent.Revision(current), Cause: decoded,
+			}
+			_ = json.Unmarshal([]byte(info.Metadata["extension_diagnostics"]), &inputGate.Diagnostics)
+			return inputGate
+		}
+		return decoded
 	}
 	if parsed.Code() == codes.Canceled {
 		return context.Canceled
