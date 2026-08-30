@@ -113,14 +113,14 @@ func (r *runtimeInstance) evaluateToolResultHooks(run *activeRun, occurrences []
 	for occurrenceIndex := range occurrences {
 		occurrence := &occurrences[occurrenceIndex]
 		for entryIndex := range occurrence.entries {
-			if run.ctx.Err() != nil {
+			entry := occurrence.entries[entryIndex]
+			if run.ctx.Err() != nil && entry.Status == hook.InvocationPrepared {
 				if err := r.settleToolResultHookAbort(run, succeeded, remainingToolResultEntries(occurrences, occurrenceIndex, entryIndex), "tool_result_hook_canceled"); err != nil {
 					settleErr := r.settleToolResultHooksAfterPersistenceError(run, allToolResultEntryIDs(occurrences), "tool_result_hook_canceled")
 					return nil, true, errors.Join(err, settleErr)
 				}
 				return nil, true, nil
 			}
-			entry := occurrence.entries[entryIndex]
 			binding := occurrence.bindings[entryIndex]
 			view := toolResultView(r, entry.InvocationID, entry.PreparedRevision, occurrence.call, occurrence.result, occurrence.nextStep)
 			fingerprint, err := hook.FingerprintTypedInput(view)
@@ -131,13 +131,22 @@ func (r *runtimeInstance) evaluateToolResultHooks(run *activeRun, occurrences []
 				return &toolResultHookFailure{code: "tool_result_hook_definition_mismatch", reason: "prepared tool result hooks do not match the current application"}, false, nil
 			}
 			pending := entry
-			pending.Status, pending.PendingAt = hook.InvocationPending, time.Now().UTC()
-			if pending.PendingAt.Before(pending.PreparedAt) {
-				pending.PendingAt = pending.PreparedAt
-			}
-			if err := r.commitToolResultHookEntries(run, "tool-result-hook-pending", pending); err != nil {
-				settleErr := r.settleToolResultHooksAfterPersistenceError(run, allToolResultEntryIDs(occurrences), "tool_result_hook_persistence_failed")
-				return nil, false, errors.Join(err, settleErr)
+			switch entry.Status {
+			case hook.InvocationPrepared:
+				pending.Status, pending.PendingAt = hook.InvocationPending, time.Now().UTC()
+				if pending.PendingAt.Before(pending.PreparedAt) {
+					pending.PendingAt = pending.PreparedAt
+				}
+				if err := r.commitToolResultHookEntries(run, "tool-result-hook-pending", pending); err != nil {
+					settleErr := r.settleToolResultHooksAfterPersistenceError(run, allToolResultEntryIDs(occurrences), "tool_result_hook_persistence_failed")
+					return nil, false, errors.Join(err, settleErr)
+				}
+				occurrence.entries[entryIndex] = pending
+			case hook.InvocationPending:
+				// The previous terminal transition atomically prepared this
+				// invocation. No second full Session commit is necessary.
+			default:
+				return nil, false, agent.NewError(agent.ErrorInternal, "standardagent.tool_result_hook", "tool result hook invocation is not executable", nil)
 			}
 			result, invocationErr := invokeToolResultHook(run.ctx, binding.hook, view)
 			failure := classifyToolResultHookFailure(invocationErr)
@@ -165,7 +174,18 @@ func (r *runtimeInstance) evaluateToolResultHooks(run *activeRun, occurrences []
 					terminal.ContextDisposition, terminal.ContextDigest, terminal.ContextBytes = hook.ContextPending, contextFingerprint.Digest, contextFingerprint.Bytes
 				}
 			}
-			if err := r.commitToolResultHookEntries(run, "tool-result-hook-terminal", terminal); err != nil {
+			terminalChanges := []session.ExtensionJournalEntry{terminal}
+			nextOccurrence, nextEntry, hasNext := nextToolResultEntryPosition(occurrences, occurrenceIndex, entryIndex)
+			if failure.code == "" && run.ctx.Err() == nil && hasNext {
+				next := occurrences[nextOccurrence].entries[nextEntry]
+				next.Status, next.PendingAt = hook.InvocationPending, time.Now().UTC()
+				if next.PendingAt.Before(next.PreparedAt) {
+					next.PendingAt = next.PreparedAt
+				}
+				terminalChanges = append(terminalChanges, next)
+				occurrences[nextOccurrence].entries[nextEntry] = next
+			}
+			if err := r.commitToolResultHookEntries(run, "tool-result-hook-terminal", terminalChanges...); err != nil {
 				settleErr := r.settleToolResultHooksAfterPersistenceError(run, allToolResultEntryIDs(occurrences), "tool_result_hook_persistence_unknown")
 				return nil, false, errors.Join(err, settleErr)
 			}
@@ -196,6 +216,18 @@ func (r *runtimeInstance) evaluateToolResultHooks(run *activeRun, occurrences []
 		return nil, false, errors.Join(err, settleErr)
 	}
 	return nil, false, nil
+}
+
+func nextToolResultEntryPosition(occurrences []toolResultHookOccurrence, occurrenceIndex, entryIndex int) (int, int, bool) {
+	if entryIndex+1 < len(occurrences[occurrenceIndex].entries) {
+		return occurrenceIndex, entryIndex + 1, true
+	}
+	for index := occurrenceIndex + 1; index < len(occurrences); index++ {
+		if len(occurrences[index].entries) > 0 {
+			return index, 0, true
+		}
+	}
+	return 0, 0, false
 }
 
 func validateToolResultContextTarget(inputs []model.Input, sessionID agent.SessionID, runID agent.RunID, stepID agent.StepID) error {

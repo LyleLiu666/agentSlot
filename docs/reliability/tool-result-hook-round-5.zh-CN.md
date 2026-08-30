@@ -32,6 +32,10 @@ ToolResult，也不能取得 Session/Runtime/Dispatcher 权力。
   外部等待；Tool 原 ParallelSafety 与结果顺序不变。
 - 有 contribution 时只串行 Post component；此前 Tool batch 仍按原并行规则执行。scope 在 build 时冻结，
   运行期只做有界线性匹配。
+- FileStore 的完整文档写入/fsync 是真实成本。对一批共 `N` 条成功 Post invocation，Runtime 将“上一条
+  terminal + 下一条 pending”合并为一个原子 commit，使 result commit 之后的 journal 状态推进由
+  `2N+1` 次降为 `N+2` 次（首次 pending、`N` 次 terminal、一次 aggregate context consume）；任何外部
+  command 前仍有 durable pending，合并不会缩短 outcome-unknown 恢复边界。
 
 ## 故障与恢复证据
 

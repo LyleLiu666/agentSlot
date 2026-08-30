@@ -77,6 +77,7 @@ func (r *runtimeInstance) evaluateToolPreflights(run *activeRun, calls []agent.T
 	}
 	authorizations := make([]toolPreflightAuthorization, len(calls))
 	succeeded := make([]session.ExtensionJournalEntry, 0)
+	pipelinedPending := make(map[hook.InvocationID]struct{})
 	for callIndex, call := range calls {
 		expected := matchingToolPreflights(r.components.toolPreflights, call.Name)
 		entries := entriesByCall[call.ID]
@@ -85,12 +86,13 @@ func (r *runtimeInstance) evaluateToolPreflights(run *activeRun, calls []agent.T
 			if err != nil {
 				return nil, nil, err
 			}
+			entriesByCall[call.ID] = entries
 		}
 		if err := validateToolPreflightReservations(r, call, expected, entries); err != nil {
 			unsettled := append([]session.ExtensionJournalEntry(nil), succeeded...)
 			unsettled = append(unsettled, remainingToolPreflightEntries(calls[callIndex:], entriesByCall)...)
 			if settleErr := r.settleToolPreflightDefinitionMismatch(run, unsettled); settleErr != nil {
-				return nil, nil, settleErr
+				return r.toolPreflightPersistenceFailure(run, settleErr)
 			}
 			return nil, &toolPreflightBatchFailure{
 				code: "tool_preflight_definition_mismatch", reason: "prepared tool preflight definitions do not match the current application",
@@ -98,7 +100,7 @@ func (r *runtimeInstance) evaluateToolPreflights(run *activeRun, calls []agent.T
 		}
 		if validation := r.components.dispatcher.validateCall(call); validation != nil {
 			if err := r.cancelToolPreflightEntries(run, entries, "tool_preflight_not_applicable"); err != nil {
-				return nil, nil, err
+				return r.toolPreflightPersistenceFailure(run, err)
 			}
 			continue
 		}
@@ -110,7 +112,7 @@ func (r *runtimeInstance) evaluateToolPreflights(run *activeRun, calls []agent.T
 				authorizations[callIndex].merge(entry.Result)
 				if entry.Result.Decision == hook.DecisionDeny {
 					if err := r.cancelToolPreflightEntries(run, entries[entryIndex+1:], "tool_preflight_short_circuited"); err != nil {
-						return nil, nil, err
+						return r.toolPreflightPersistenceFailure(run, err)
 					}
 					break
 				}
@@ -119,15 +121,18 @@ func (r *runtimeInstance) evaluateToolPreflights(run *activeRun, calls []agent.T
 				authorizations[callIndex].merge(entry.Result)
 				if entry.Result.Decision == hook.DecisionDeny {
 					if err := r.cancelToolPreflightEntries(run, entries[entryIndex+1:], "tool_preflight_short_circuited"); err != nil {
-						return nil, nil, err
+						return r.toolPreflightPersistenceFailure(run, err)
 					}
 				}
-			case entry.Status == hook.InvocationPrepared:
+			case entry.Status == hook.InvocationPrepared || pipelinedToolPreflightPending(entry, pipelinedPending):
 				pending := entry
-				pending.Status = hook.InvocationPending
-				pending.PendingAt = time.Now().UTC()
-				if err := r.commitToolPreflightEntries(run, "tool-preflight-pending", pending); err != nil {
-					return nil, nil, err
+				if entry.Status == hook.InvocationPrepared {
+					pending.Status = hook.InvocationPending
+					pending.PendingAt = time.Now().UTC()
+					if err := r.commitToolPreflightEntries(run, "tool-preflight-pending", pending); err != nil {
+						return r.toolPreflightPersistenceFailure(run, err)
+					}
+					entries[entryIndex] = pending
 				}
 				view := toolPreflightView(r, pending, call)
 				result, invokeErr := invokeToolPreflight(run.ctx, binding.preflight, view)
@@ -138,7 +143,7 @@ func (r *runtimeInstance) evaluateToolPreflights(run *activeRun, calls []agent.T
 					failed.ErrorCode, failed.ErrorReason = failure.code, failure.reason
 					failed.EffectDisposition = hook.EffectPending
 					if err := r.failToolPreflightBatch(run, failed, succeeded, entries[entryIndex+1:], calls[callIndex+1:], entriesByCall); err != nil {
-						return nil, nil, err
+						return r.toolPreflightPersistenceFailure(run, err)
 					}
 					return nil, &toolPreflightBatchFailure{code: failure.code, reason: failure.reason}, nil
 				}
@@ -146,14 +151,26 @@ func (r *runtimeInstance) evaluateToolPreflights(run *activeRun, calls []agent.T
 				finished.Status, finished.FinishedAt = hook.InvocationSucceeded, time.Now().UTC()
 				finished.Result = &hook.InvocationResult{Decision: result.Decision, Reason: result.Reason}
 				finished.EffectDisposition = hook.EffectPending
-				if err := r.commitToolPreflightEntries(run, "tool-preflight-finished", finished); err != nil {
-					return nil, nil, err
+				finishedTransitions := []session.ExtensionJournalEntry{finished}
+				if result.Decision != hook.DecisionDeny && entryIndex+1 < len(entries) {
+					next := entries[entryIndex+1]
+					next.Status, next.PendingAt = hook.InvocationPending, time.Now().UTC()
+					if next.PendingAt.Before(next.PreparedAt) {
+						next.PendingAt = next.PreparedAt
+					}
+					finishedTransitions = append(finishedTransitions, next)
+					entries[entryIndex+1] = next
+					pipelinedPending[next.InvocationID] = struct{}{}
 				}
+				if err := r.commitToolPreflightEntries(run, "tool-preflight-finished", finishedTransitions...); err != nil {
+					return r.toolPreflightPersistenceFailure(run, err)
+				}
+				entries[entryIndex] = finished
 				succeeded = append(succeeded, finished)
 				authorizations[callIndex].merge(finished.Result)
 				if result.Decision == hook.DecisionDeny {
 					if err := r.cancelToolPreflightEntries(run, entries[entryIndex+1:], "tool_preflight_short_circuited"); err != nil {
-						return nil, nil, err
+						return r.toolPreflightPersistenceFailure(run, err)
 					}
 					entryIndex = len(entries)
 				}
@@ -167,11 +184,11 @@ func (r *runtimeInstance) evaluateToolPreflights(run *activeRun, calls []agent.T
 				if entry.Status.Terminal() && entry.EffectDisposition == hook.EffectPending {
 					entry.EffectDisposition = hook.EffectApplied
 					if err := r.commitToolPreflightEntries(run, "tool-preflight-unknown-applied", entry); err != nil {
-						return nil, nil, err
+						return r.toolPreflightPersistenceFailure(run, err)
 					}
 				}
 				if err := r.failToolPreflightBatch(run, session.ExtensionJournalEntry{}, succeeded, entries[entryIndex+1:], calls[callIndex+1:], entriesByCall); err != nil {
-					return nil, nil, err
+					return r.toolPreflightPersistenceFailure(run, err)
 				}
 				return nil, &toolPreflightBatchFailure{code: failure.code, reason: failure.reason}, nil
 			}
@@ -181,9 +198,91 @@ func (r *runtimeInstance) evaluateToolPreflights(run *activeRun, calls []agent.T
 		}
 	}
 	if err := r.finalizeToolPreflightEffects(run, succeeded, hook.EffectApplied); err != nil {
-		return nil, nil, err
+		return r.toolPreflightPersistenceFailure(run, err)
 	}
 	return authorizations, nil, nil
+}
+
+func pipelinedToolPreflightPending(entry session.ExtensionJournalEntry, pending map[hook.InvocationID]struct{}) bool {
+	if entry.Status != hook.InvocationPending {
+		return false
+	}
+	_, ok := pending[entry.InvocationID]
+	return ok
+}
+
+func (r *runtimeInstance) toolPreflightPersistenceFailure(run *activeRun, cause error) ([]toolPreflightAuthorization, *toolPreflightBatchFailure, error) {
+	if settleErr := r.settleToolPreflightsAfterPersistenceError(run, "tool_preflight_persistence_unknown"); settleErr != nil {
+		return nil, nil, errors.Join(cause, settleErr)
+	}
+	return nil, &toolPreflightBatchFailure{code: "hook_outcome_unknown", reason: "tool preflight persistence outcome is unknown"}, nil
+}
+
+func (r *runtimeInstance) settleToolPreflightsAfterPersistenceError(run *activeRun, code agent.ErrorCode) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active != run {
+		return context.Canceled
+	}
+	snapshot, err := r.viewLocked(context.Background())
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	unknownChanges := make([]session.Change, 0)
+	for _, existing := range snapshot.ExtensionJournal {
+		if existing.Boundary != hook.BoundaryToolPreflight || existing.RunID != run.id || existing.Status != hook.InvocationPending {
+			continue
+		}
+		entry := existing
+		entry.Status, entry.FinishedAt = hook.InvocationOutcomeUnknown, now
+		if entry.FinishedAt.Before(entry.PendingAt) {
+			entry.FinishedAt = entry.PendingAt
+		}
+		entry.ErrorCode, entry.ErrorReason = code, "tool preflight persistence outcome is unknown"
+		entry.EffectDisposition = hook.EffectPending
+		entryCopy := entry
+		unknownChanges = append(unknownChanges, session.Change{Kind: session.UpdateExtensionJournal, Extension: &entryCopy})
+	}
+	if len(unknownChanges) > 0 {
+		if _, err := r.commitLocked(context.Background(), snapshot.Revision, "tool-preflight-persistence-unknown", unknownChanges); err != nil {
+			return err
+		}
+		snapshot, err = r.viewLocked(context.Background())
+		if err != nil {
+			return err
+		}
+	}
+	finalChanges := make([]session.Change, 0)
+	for _, existing := range snapshot.ExtensionJournal {
+		if existing.Boundary != hook.BoundaryToolPreflight || existing.RunID != run.id {
+			continue
+		}
+		entry := existing
+		switch {
+		case entry.Status == hook.InvocationPrepared:
+			entry.Status, entry.FinishedAt = hook.InvocationCanceled, now
+			if entry.FinishedAt.Before(entry.PreparedAt) {
+				entry.FinishedAt = entry.PreparedAt
+			}
+			entry.ErrorCode, entry.EffectDisposition = code, hook.EffectDiscarded
+		case entry.Status.Terminal() && entry.EffectDisposition == hook.EffectPending:
+			if entry.Status == hook.InvocationSucceeded {
+				entry.EffectDisposition = hook.EffectDiscarded
+			} else {
+				entry.EffectDisposition = hook.EffectApplied
+			}
+		default:
+			continue
+		}
+		entryCopy := entry
+		finalChanges = append(finalChanges, session.Change{Kind: session.UpdateExtensionJournal, Extension: &entryCopy})
+	}
+	if len(finalChanges) == 0 {
+		return nil
+	}
+	_, err = r.commitLocked(context.Background(), snapshot.Revision, "tool-preflight-persistence-settle", finalChanges)
+	return err
 }
 
 func remainingToolPreflightEntries(calls []agent.ToolCall, entriesByCall map[agent.ToolCallID][]session.ExtensionJournalEntry) []session.ExtensionJournalEntry {

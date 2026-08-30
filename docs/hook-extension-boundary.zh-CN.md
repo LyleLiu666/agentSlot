@@ -212,9 +212,13 @@ ClientMessageID 仍是 correlation，不因引入 gate 变成幂等键。
 - prepared 可在 descriptor 和规范化 typed input 完全一致时恢复；旧 prepared ToolCall 完全没有预约时可
   一次补齐完整集合；partial、digest 漂移或 pending/outcome unknown 一律 fail closed，外部 component 和 Tool
   都不重放。
+- Preflight pending/finished commit 返回失败时，Runtime 重读权威 journal 并统一结算 pending、prepared 与
+  terminal effect；Session 不得在 idle 状态保留未决 effect。
 - ToolPreflight 只推进 ExtensionJournal 和后续 ToolResult/Run facts，不改写已经发布的 Message、ToolCall
   或任何 History 前缀。无 contribution 时不创建 extension state、不增加 Store commit、不创建 goroutine，
   原 ParallelSafe Tool 仍并行执行。
+- 相邻 Preflight 使用“上一条 finished + 下一条 pending”的单次原子提交，降低 FileStore 完整快照写放大；
+  pending 仍先于对应外部调用发布，恢复不会重放已经进入 pending 的 component。
 
 当前 `hook.ToolResultHook` 的已实现边界如下：
 
@@ -232,8 +236,11 @@ ClientMessageID 仍是 correlation，不因引入 gate 变成幂等键。
 - result、pending、terminal、context consume 四个持久切点均有故障注入；terminal commit 结果不确定时
   重读权威 entry，pending 明确转 outcome_unknown，绝不重放 component。进程恢复只结算或丢弃持久后果，
   不调用 Post command。
-- Post 只追加 ToolResult、ContextContribution、RunFact 和 ExtensionJournal 事实，不回写任何已发布
-  Message/ToolCall/ToolResult History 前缀。无 contribution 时没有 extension change、额外 commit 或 goroutine。
+- Post 只追加 ToolResult、ContextContribution 和 RunFact；ExtensionJournal 只推进自身 invocation 状态，
+  不回写任何已发布 Message/ToolCall/ToolResult History 前缀。无 contribution 时没有 extension change、
+  额外 commit 或 goroutine。
+- 相邻 Post invocation 使用“上一条 terminal + 下一条 pending”的单次原子提交；正常 `N` 条同步链路的
+  journal 状态推进为 `N+2` 次而不是 `2N+1` 次，且 pending 仍先于外部调用发布。
 
 Runtime coordinator 必须显式区分 create、resume、fork、summary；重复返回已打开 Runtime 不算再次 open。
 close 只来自明确 Gateway CloseSession，不由 View/Subscribe 断开或进程崩溃伪造。

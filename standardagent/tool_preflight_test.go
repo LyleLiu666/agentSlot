@@ -40,6 +40,9 @@ func TestToolCallAndAllPreflightReservationsArePreparedInOneCommit(t *testing.T)
 	if len(preparedCommits) != 1 || preparedCommits[0].toolCalls != 1 || preparedCommits[0].runPrepared != 1 || preparedCommits[0].preflightPrepared != 2 {
 		t.Fatalf("Tool preparation commits = %#v", preparedCommits)
 	}
+	if pending, finished, applied := store.runtimeOperationCount("tool-preflight-pending"), store.runtimeOperationCount("tool-preflight-finished"), store.runtimeOperationCount("tool-preflight-effect"); pending != 1 || finished != 2 || applied != 1 {
+		t.Fatalf("preflight transition commits pending/finished/effect = %d/%d/%d, want 1/2/1", pending, finished, applied)
+	}
 	for _, view := range append(first.Views(), second.Views()...) {
 		if view.Revision != preparedCommits[0].revision || view.ToolKey != "echo" || view.ToolCallID == "" || view.RunID == "" || view.StepID == "" {
 			t.Fatalf("preflight view = %#v, prepared revision=%d", view, preparedCommits[0].revision)
@@ -151,6 +154,93 @@ func TestToolPreflightInfrastructureFailureInterruptsTheRunBeforeAnyTool(t *test
 	if !lastRunHasTermination(snapshot.History, session.TerminationExtension, "hook_pre_tool_failed") ||
 		countExtensionStatus(snapshot.ExtensionJournal, hook.InvocationCanceled) != 3 {
 		t.Fatalf("preflight failure state = %#v / %#v", snapshot.History, snapshot.ExtensionJournal)
+	}
+}
+
+func TestPipelinedToolPreflightCommitFailureNeverInvokesTheNextComponentOrTool(t *testing.T) {
+	for _, test := range []struct {
+		operation       string
+		wantFirstCalls  int
+		wantSecondCalls int
+	}{
+		{operation: "tool-preflight-pending", wantFirstCalls: 0, wantSecondCalls: 0},
+		{operation: "tool-preflight-finished", wantFirstCalls: 1, wantSecondCalls: 0},
+		{operation: "tool-preflight-effect", wantFirstCalls: 1, wantSecondCalls: 1},
+	} {
+		t.Run(test.operation, func(t *testing.T) {
+			store := newTransitionFaultStore(test.operation)
+			first := &recordingToolPreflight{
+				descriptor: preflightDescriptor("first-pipelined"), scope: hook.ToolScope{All: true},
+				result: hook.ToolPreflightResult{Decision: hook.DecisionAllow},
+			}
+			second := &recordingToolPreflight{
+				descriptor: preflightDescriptor("second-pipelined"), scope: hook.ToolScope{All: true},
+				result: hook.ToolPreflightResult{Decision: hook.DecisionAllow},
+			}
+			installed := &countingTool{definition: testToolDefinition(t, "effect")}
+			access, stop := startToolPreflightApplication(t, store, preflightExecutor("effect", `{"value":"one"}`),
+				AgentRuntimeConfig{ToolKeys: []string{"effect"}, MaxInlineToolResultBytes: 1024},
+				toolModule{key: "effect", value: installed}, toolPreflightModule{gates: []hook.ToolPreflight{first, second}})
+			defer stop()
+			opened := createRuntimeTestSession(t, access)
+			result, err := access.SendAndWait(t.Context(), interaction.SendRequest{SessionID: opened.SessionID, ExpectedRevision: opened.Revision, Input: textInput("pipeline failure")})
+			if err != nil && !agent.IsCode(err, agent.CodeRuntimeClosed) {
+				t.Fatalf("result=%#v err=%v", result, err)
+			}
+			if err == nil && result.Outcome != session.RunFailed && result.Outcome != session.RunInterrupted {
+				t.Fatalf("result=%#v err=%v", result, err)
+			}
+			if first.callCount() != test.wantFirstCalls || second.callCount() != test.wantSecondCalls || installed.calls.Load() != 0 {
+				t.Fatalf("pipelined failure calls first/second/tool = %d/%d/%d", first.callCount(), second.callCount(), installed.calls.Load())
+			}
+			snapshot, err := store.Load(t.Context(), session.SessionRef{SessionID: opened.SessionID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, entry := range snapshot.ExtensionJournal {
+				if !entry.Status.Terminal() || entry.EffectDisposition == hook.EffectPending || entry.ContextDisposition == hook.ContextPending {
+					t.Fatalf("pipelined failure left dangling entry: %#v", entry)
+				}
+			}
+		})
+	}
+}
+
+func TestToolPreflightFailureSettlementCommitErrorsStillLeaveNoPendingEffect(t *testing.T) {
+	for _, operation := range []string{"tool-preflight-failed", "tool-preflight-failure-applied", "tool-preflight-canceled"} {
+		t.Run(operation, func(t *testing.T) {
+			store := newTransitionFaultStore(operation)
+			failing := &recordingToolPreflight{
+				descriptor: preflightDescriptor("failing-settlement"), scope: hook.ToolScope{All: true},
+				err: &hook.InvocationFailure{Status: hook.InvocationFailed, Code: "hook_preflight_failed", Reason: "expected test failure"},
+			}
+			unstarted := &recordingToolPreflight{
+				descriptor: preflightDescriptor("unstarted-settlement"), scope: hook.ToolScope{All: true},
+				result: hook.ToolPreflightResult{Decision: hook.DecisionAllow},
+			}
+			installed := &countingTool{definition: testToolDefinition(t, "effect")}
+			access, stop := startToolPreflightApplication(t, store, preflightExecutor("effect", `{"value":"one"}`),
+				AgentRuntimeConfig{ToolKeys: []string{"effect"}, MaxInlineToolResultBytes: 1024},
+				toolModule{key: "effect", value: installed}, toolPreflightModule{gates: []hook.ToolPreflight{failing, unstarted}})
+			defer stop()
+			opened := createRuntimeTestSession(t, access)
+			result, err := access.SendAndWait(t.Context(), interaction.SendRequest{SessionID: opened.SessionID, ExpectedRevision: opened.Revision, Input: textInput("settlement failure")})
+			if err != nil || result.Outcome != session.RunInterrupted {
+				t.Fatalf("result=%#v err=%v", result, err)
+			}
+			if failing.callCount() != 1 || unstarted.callCount() != 0 || installed.calls.Load() != 0 {
+				t.Fatalf("settlement failure calls failing/unstarted/tool = %d/%d/%d", failing.callCount(), unstarted.callCount(), installed.calls.Load())
+			}
+			snapshot, err := store.Load(t.Context(), session.SessionRef{SessionID: opened.SessionID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, entry := range snapshot.ExtensionJournal {
+				if !entry.Status.Terminal() || entry.EffectDisposition == hook.EffectPending || entry.ContextDisposition == hook.ContextPending {
+					t.Fatalf("%s left dangling entry: %#v", operation, entry)
+				}
+			}
+		})
 	}
 }
 
@@ -586,8 +676,9 @@ type preflightCommitShape struct {
 
 type preflightRecordingStore struct {
 	*session.MemoryStore
-	mu      sync.Mutex
-	commits []preflightCommitShape
+	mu         sync.Mutex
+	commits    []preflightCommitShape
+	operations []string
 }
 
 func newPreflightRecordingStore() *preflightRecordingStore {
@@ -611,9 +702,12 @@ func (s *preflightRecordingStore) Commit(ctx context.Context, request session.Co
 		}
 	}
 	commit, err := s.MemoryStore.Commit(ctx, request)
-	if err == nil && shape.toolCalls > 0 {
+	if err == nil {
 		s.mu.Lock()
-		s.commits = append(s.commits, shape)
+		s.operations = append(s.operations, request.IdempotencyKey)
+		if shape.toolCalls > 0 {
+			s.commits = append(s.commits, shape)
+		}
 		s.mu.Unlock()
 	}
 	return commit, err
@@ -623,6 +717,18 @@ func (s *preflightRecordingStore) toolPreparedCommits() []preflightCommitShape {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]preflightCommitShape(nil), s.commits...)
+}
+
+func (s *preflightRecordingStore) runtimeOperationCount(operation string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := 0
+	for _, key := range s.operations {
+		if strings.Contains(key, "runtime-"+operation+"-") {
+			count++
+		}
+	}
+	return count
 }
 
 func startToolPreflightApplication(t *testing.T, store session.SessionStore, executor model.ModelExecutor, config AgentRuntimeConfig, extras ...agentslot.Module) (interaction.GatewayAccess, func()) {

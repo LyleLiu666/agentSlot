@@ -47,6 +47,9 @@ func TestToolResultsAndPostReservationsCommitAtomicallyAndContextReachesOnlyTheN
 	if len(commits) != 1 || commits[0].results != 2 || commits[0].terminalJournals != 2 || commits[0].postPrepared != 2 {
 		t.Fatalf("result commit shapes = %#v", commits)
 	}
+	if pending, terminal, consumed := store.runtimeOperationCount("tool-result-hook-pending"), store.runtimeOperationCount("tool-result-hook-terminal"), store.runtimeOperationCount("tool-result-hook-consume"); pending != 1 || terminal != 2 || consumed != 1 {
+		t.Fatalf("Post transition commits pending/terminal/consume = %d/%d/%d, want 1/2/1", pending, terminal, consumed)
+	}
 	views := append(succeeded.Views(), failed.Views()...)
 	for _, view := range views {
 		if view.Revision != commits[0].revision || !view.NextStepID.Valid() || view.StepID == view.NextStepID || view.Result.CallID != view.ToolCallID {
@@ -152,7 +155,7 @@ func TestToolResultHookPersistenceCutPointsFailClosedWithoutDanglingInvocations(
 		{name: "context consume commit", operation: "tool-result-hook-consume", wantCalls: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			store := newPostFaultStore(test.operation)
+			store := newTransitionFaultStore(test.operation)
 			post := newRecordingToolResultHook("fault", hook.ToolResultScope{All: true, Statuses: []tool.ResultStatus{tool.ResultSucceeded}}, "fault context")
 			executor := preflightBatchExecutor(model.ToolCallRequest{Name: "good", Arguments: []byte(`{"value":"one"}`)})
 			access, stop := startToolPreflightApplication(t, store, executor,
@@ -182,6 +185,39 @@ func TestToolResultHookPersistenceCutPointsFailClosedWithoutDanglingInvocations(
 				t.Fatalf("original ToolResult was rolled back: %#v", snapshot.History)
 			}
 		})
+	}
+}
+
+func TestPipelinedToolResultCommitFailureNeverInvokesTheNextPostHook(t *testing.T) {
+	store := newTransitionFaultStore("tool-result-hook-terminal")
+	first := newRecordingToolResultHook("first-pipelined", hook.ToolResultScope{All: true, Statuses: []tool.ResultStatus{tool.ResultSucceeded}}, "first context")
+	second := newRecordingToolResultHook("second-pipelined", hook.ToolResultScope{All: true, Statuses: []tool.ResultStatus{tool.ResultSucceeded}}, "second context")
+	executor := preflightBatchExecutor(model.ToolCallRequest{Name: "good", Arguments: []byte(`{"value":"one"}`)})
+	access, stop := startToolPreflightApplication(t, store, executor,
+		AgentRuntimeConfig{ToolKeys: []string{"good"}, MaxInlineToolResultBytes: 1024},
+		toolModule{key: "good", value: &fixedResultTool{definition: testToolDefinition(t, "good"), status: tool.ResultSucceeded}},
+		toolResultHookModule{hooks: []hook.ToolResultHook{first, second}},
+	)
+	defer stop()
+	opened := createRuntimeTestSession(t, access)
+	result, err := access.SendAndWait(t.Context(), interaction.SendRequest{SessionID: opened.SessionID, ExpectedRevision: opened.Revision, Input: textInput("pipeline failure")})
+	if err != nil || (result.Outcome != session.RunFailed && result.Outcome != session.RunInterrupted) {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if first.callCount() != 1 || second.callCount() != 0 || len(executor.Requests()) != 1 {
+		t.Fatalf("pipelined failure calls first/second/model = %d/%d/%d", first.callCount(), second.callCount(), len(executor.Requests()))
+	}
+	snapshot, err := store.Load(t.Context(), session.SessionRef{SessionID: opened.SessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasToolResultStatus(snapshot.History, tool.ResultSucceeded) {
+		t.Fatalf("pipelined failure lost ToolResult: %#v", snapshot.History)
+	}
+	for _, entry := range snapshot.ExtensionJournal {
+		if !entry.Status.Terminal() || entry.EffectDisposition == hook.EffectPending || entry.ContextDisposition == hook.ContextPending {
+			t.Fatalf("pipelined failure left dangling entry: %#v", entry)
+		}
 	}
 }
 
@@ -428,21 +464,22 @@ type postCommitShape struct {
 
 type postRecordingStore struct {
 	*session.MemoryStore
-	mu      sync.Mutex
-	commits []postCommitShape
+	mu         sync.Mutex
+	commits    []postCommitShape
+	operations []string
 }
 
-type postFaultStore struct {
+type transitionFaultStore struct {
 	*session.MemoryStore
 	operation string
 	fired     atomic.Bool
 }
 
-func newPostFaultStore(operation string) *postFaultStore {
-	return &postFaultStore{MemoryStore: session.NewMemoryStore(), operation: operation}
+func newTransitionFaultStore(operation string) *transitionFaultStore {
+	return &transitionFaultStore{MemoryStore: session.NewMemoryStore(), operation: operation}
 }
 
-func (s *postFaultStore) Commit(ctx context.Context, request session.CommitRequest) (session.Commit, error) {
+func (s *transitionFaultStore) Commit(ctx context.Context, request session.CommitRequest) (session.Commit, error) {
 	if strings.Contains(request.IdempotencyKey, "runtime-"+s.operation+"-") && s.fired.CompareAndSwap(false, true) {
 		return session.Commit{}, errors.New("injected post commit failure")
 	}
@@ -469,9 +506,12 @@ func (s *postRecordingStore) Commit(ctx context.Context, request session.CommitR
 		}
 	}
 	commit, err := s.MemoryStore.Commit(ctx, request)
-	if err == nil && shape.results > 0 {
+	if err == nil {
 		s.mu.Lock()
-		s.commits = append(s.commits, shape)
+		s.operations = append(s.operations, request.IdempotencyKey)
+		if shape.results > 0 {
+			s.commits = append(s.commits, shape)
+		}
 		s.mu.Unlock()
 	}
 	return commit, err
@@ -480,6 +520,18 @@ func (s *postRecordingStore) resultCommits() []postCommitShape {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]postCommitShape(nil), s.commits...)
+}
+
+func (s *postRecordingStore) runtimeOperationCount(operation string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := 0
+	for _, key := range s.operations {
+		if strings.Contains(key, "runtime-"+operation+"-") {
+			count++
+		}
+	}
+	return count
 }
 
 func countInputText(inputs []model.Input, text string) int {
@@ -593,7 +645,7 @@ func seedToolResultHookRecoverySession(t *testing.T, status hook.InvocationStatu
 }
 
 var _ session.SessionStore = (*postRecordingStore)(nil)
-var _ session.SessionStore = (*postFaultStore)(nil)
+var _ session.SessionStore = (*transitionFaultStore)(nil)
 var _ hook.ToolResultHook = (*recordingToolResultHook)(nil)
 var _ hook.ToolResultHook = (*blockingToolResultHook)(nil)
 var _ tool.Tool = (*fixedResultTool)(nil)

@@ -38,11 +38,17 @@ ParallelSafe Tool 变成串行 Tool。
   ParallelSafe Tool 在彼此阻塞时仍能共同进入 Invoke。
 - 有 contribution 时只串行授权建议；最终允许的 Tool batch 继续使用既有 ParallelSafety。预约 sequence 由
   一次游标递增分配，避免 ToolCall × Hook 数量增大时出现二次扫描。
+- FileStore 每次 durable transition 都会重写并 fsync Session，不能把这项成本说成零。对同一 ToolCall 的
+  `N` 条成功 Preflight，Runtime 把“上一条 terminal + 下一条 pending”合并为一个原子 commit，正常状态
+  推进从原先 `2N+1` 次降为 `N+2` 次（首次 pending、`N` 次 finished、一次 aggregate effect）；外部命令
+  启动前仍一定已有 durable pending，进程恢复也不会把 pipelined pending 当作可重放 prepared。
 
 ## 恢复与失败证据
 
 - prepared 重启后只调用一次 component 和一次原 Tool，原 ToolCall identity 不变；
 - pending 重启后成为 outcome_unknown/effect applied，component 与 Tool 调用数均为零；
+- pending 或 pipelined finished commit 返回失败时，Runtime 重读权威 journal：已 pending 的收敛为
+  outcome_unknown/applied，未开始的 prepared 变 canceled/discarded，整批不留下 idle + pending effect；
 - 普通 deny 生成安全失败 ToolResult，但同批其他 Tool 继续；
 - infrastructure failure 取消所有未开始 reservation，任何 Tool 都不进入 pending，Run 以
   `TerminationExtension` 中断；

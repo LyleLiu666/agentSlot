@@ -102,26 +102,28 @@ SessionID、当前 revision 和安全 diagnostics 可经 gRPC 往返。
 
 ```bash
 go test -race ./hook ./session ./standardagent \
-  -run 'TestToolPreflight|TestToolCallAndAllPreflight|TestInvalidToolArguments|TestPreparedToolPreflight|TestPendingToolPreflight|TestNoToolPreflight' \
+  -run 'TestToolPreflight|TestToolCallAndAllPreflight|TestInvalidToolArguments|TestPreparedToolPreflight|TestPendingToolPreflight|TestNoToolPreflight|TestPipelinedToolPreflight' \
   -count=1
 ```
 
 预期：通过。ToolCall 与完整 Preflight reservation 同 commit；schema 失败不调用 component；deny 不执行原
 Tool 且不终止同批其他合法 Tool；require approval 与 Guard reason 合并且仍经唯一 ApprovalService；基础设施
 失败在任何 Tool 执行前收口并以 extension 归因中断；prepared 精确恢复一次，pending 变 unknown 后不重放；
-History 前缀不改写；零 contribution 不产生 ExtensionJournal，ParallelSafe Tool 仍并行。
+History 前缀不改写；相邻 finished/pending 合并提交且提交失败后没有 idle + pending effect；零 contribution
+不产生 ExtensionJournal，ParallelSafe Tool 仍并行。
 
 ### ASR-REG-009
 
 ```bash
 go test -race ./hook ./session ./standardagent \
-  -run 'TestToolResult|TestPostHook|TestCancelWinsWhileToolResultHook' \
+  -run 'TestToolResult|TestPostHook|TestCancelWinsWhileToolResultHook|TestPipelinedToolResult' \
   -count=1
 ```
 
 预期：通过。只有真正执行并形成 succeeded/failed 的 Tool 触发匹配 Post；ToolResult、terminal Journal、next
 Step 与完整 reservation 集合原子提交；Post context 按 ToolCall/Chain 顺序一次性进入精确 next Step。四个
-持久切点失败均保留原 ToolResult并收口全部 entry；pending/commit outcome unknown 不重放 command；中途
+持久切点失败均保留原 ToolResult 并收口全部 entry；相邻 terminal/pending 合并后故障仍不调用下一 Hook；
+pending/commit outcome unknown 不重放 command；中途
 失败和 Cancel 丢弃半套 context；History 前缀不改写；零 contribution 保持原结果提交快路径。
 
 ## 转绿要求
