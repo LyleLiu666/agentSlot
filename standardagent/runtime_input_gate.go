@@ -271,6 +271,13 @@ func evaluateInputGate(ctx context.Context, gate hook.InputGate, view hook.Input
 		}
 	}()
 	result, err := gate.Evaluate(ctx, view)
+	if err != nil {
+		var declared *hook.InvocationFailure
+		if errors.As(err, &declared) && declared.Validate() == nil {
+			copy := *declared
+			return hook.InputGateResult{}, &copy
+		}
+	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		status, code, reason := hook.InvocationCanceled, agent.CodeCanceled, "input gate was canceled"
 		if errors.Is(ctxErr, context.DeadlineExceeded) {
@@ -279,11 +286,6 @@ func evaluateInputGate(ctx context.Context, gate hook.InputGate, view hook.Input
 		return hook.InputGateResult{}, &hook.InvocationFailure{Status: status, Code: code, Reason: reason, Cause: ctxErr}
 	}
 	if err != nil {
-		var declared *hook.InvocationFailure
-		if errors.As(err, &declared) && declared.Validate() == nil {
-			copy := *declared
-			return hook.InputGateResult{}, &copy
-		}
 		return hook.InputGateResult{}, &hook.InvocationFailure{
 			Status: hook.InvocationFailed, Code: agent.CodeExtensionFailed,
 			Reason: "input gate component failed", Cause: err,

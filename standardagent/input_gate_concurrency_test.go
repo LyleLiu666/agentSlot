@@ -516,6 +516,46 @@ func TestCanceledInputGatePreservesCancellationClassification(t *testing.T) {
 	}
 }
 
+func TestCanceledInputGatePreservesDeclaredOutcomeUnknown(t *testing.T) {
+	entered := make(chan struct{})
+	gate := &concurrentInputGate{descriptor: inputGateDescriptor("outcome-unknown"), evaluate: func(ctx context.Context, _ hook.InputGateView) (hook.InputGateResult, error) {
+		close(entered)
+		<-ctx.Done()
+		return hook.InputGateResult{}, &hook.InvocationFailure{
+			Status: hook.InvocationOutcomeUnknown, Code: agent.ErrorCode("hook_outcome_unknown"),
+			Reason: "command termination was not confirmed", Cause: ctx.Err(),
+		}
+	}}
+	access, store, stop := startRound7Application(t, model.NewFakeModelExecutor(), AgentRuntimeConfig{}, inputGateModule{gates: []hook.InputGate{gate}})
+	defer stop()
+	opened := createRuntimeTestSession(t, access)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := access.Send(ctx, interaction.SendRequest{
+			SessionID: opened.SessionID, ExpectedRevision: opened.Revision, Input: textInput("unknown side effect"),
+		})
+		done <- err
+	}()
+	waitForSignal(t, entered, "outcome-unknown InputGate")
+	cancel()
+	var gateErr *interaction.InputGateError
+	if err := waitForError(t, done, "outcome-unknown InputGate"); !errors.As(err, &gateErr) ||
+		agent.KindOf(err) != agent.ErrorUnavailable || agent.CodeOf(err) != agent.ErrorCode("hook_outcome_unknown") {
+		t.Fatalf("outcome-unknown InputGate error = %v / %#v", err, gateErr)
+	}
+	snapshot, err := store.Load(t.Context(), session.SessionRef{SessionID: opened.SessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.History) != 0 || len(snapshot.Queue) != 0 || len(snapshot.ExtensionJournal) != 1 ||
+		snapshot.ExtensionJournal[0].Status != hook.InvocationOutcomeUnknown ||
+		snapshot.ExtensionJournal[0].ErrorCode != agent.ErrorCode("hook_outcome_unknown") ||
+		snapshot.ExtensionJournal[0].EffectDisposition != hook.EffectApplied {
+		t.Fatalf("outcome-unknown InputGate state = %#v", snapshot)
+	}
+}
+
 func TestPanickingInputGateIsDurablyFailedWithoutAppendingInput(t *testing.T) {
 	gate := &concurrentInputGate{descriptor: inputGateDescriptor("panic"), evaluate: func(context.Context, hook.InputGateView) (hook.InputGateResult, error) {
 		panic("private panic payload")
