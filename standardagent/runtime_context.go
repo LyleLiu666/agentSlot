@@ -208,10 +208,15 @@ func (r *runtimeInstance) assembleModelRequest(run *activeRun, step agent.StepID
 		inputs = append(inputs, model.Input{SystemPrompt: &prompt})
 	}
 	inputs = append(inputs, cloneRuntimeInputs(dynamic)...)
+	tools := r.components.dispatcher.definitions()
+	if reserve := r.components.config.FinalResponseAttemptReserve; reserve > 0 &&
+		r.components.config.MaxModelAttemptsPerRun-run.modelAttempts <= reserve {
+		tools = nil
+	}
 	return model.ModelRequest{
 		SessionID: r.id(), RunID: run.id, StepID: step,
 		Config: cloneRuntimeConfig(run.config), ConfigRevision: run.configRevision,
-		Inputs: inputs, Tools: r.components.dispatcher.definitions(),
+		Inputs: inputs, Tools: tools,
 	}
 }
 

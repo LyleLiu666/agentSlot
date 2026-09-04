@@ -39,6 +39,12 @@ type AgentRuntimeConfig struct {
 	// limits. Zero disables the corresponding limit.
 	MaxModelAttemptsPerRun int64
 	MaxToolCallsPerRun     int64
+	// FinalResponseAttemptReserve removes Tools from model requests once only
+	// this many physical Attempts remain. It reserves capacity for a natural
+	// assistant response without weakening the hard Attempt limit. Zero
+	// disables the behavior. A positive value must be smaller than
+	// MaxModelAttemptsPerRun.
+	FinalResponseAttemptReserve int64
 	// MaxInlineToolResultBytes is required when ToolKeys is non-empty.
 	MaxInlineToolResultBytes int
 }

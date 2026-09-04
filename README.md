@@ -385,6 +385,12 @@ the physical-attempt limit before Provider dispatch and rejects a ToolCall batch
 before persistence or effects when the whole batch does not fit. The rejected
 operation is recorded as an append-only `RunLimitExceededFact`; no keyword,
 tool-name, or model-generated "progress" heuristic participates in enforcement.
+When a product needs an assistant response before that hard boundary, it may
+set `FinalResponseAttemptReserve` to a positive value smaller than
+`MaxModelAttemptsPerRun`. Requests made after the reserved boundary expose no
+Tools, while keeping the same Run, context, physical-Attempt accounting, and
+hard limit. The reserve is disabled by default and does not claim that the
+underlying task succeeded; product-level verification remains independent.
 `interaction.command` is an optional `Many` Slot for structured commands that
 register only with the Gateway. Channels render the Gateway's UI-neutral
 command directory as slash commands, menus, buttons, forms, or command palettes.
