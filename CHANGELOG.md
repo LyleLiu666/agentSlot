@@ -6,6 +6,14 @@ when real consumers expose a flawed boundary.
 
 ## Unreleased
 
+### Removed
+
+- Removed the experimental reserved final-response request and active
+  completion-mode API. A hard Run limit now has one meaning: append exact limit
+  evidence and interrupt the Run. Strict Session decoding retains one
+  deprecated read/write compatibility field for files produced by validation
+  builds, but Runtime never sets it for new Runs.
+
 ### Added
 
 - Added default-off per-Run limits for physical model attempts and admitted

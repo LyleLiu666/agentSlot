@@ -385,18 +385,10 @@ the physical-attempt limit before Provider dispatch and rejects a ToolCall batch
 before persistence or effects when the whole batch does not fit. The rejected
 operation is recorded as an append-only `RunLimitExceededFact`; no keyword,
 tool-name, or model-generated "progress" heuristic participates in enforcement.
-When a product needs an assistant response before that hard boundary, it may
-set `FinalResponseAttemptReserve` to a positive value smaller than
-`MaxModelAttemptsPerRun` and provide a non-blank `FinalResponseInstruction`.
-Requests made after the reserved boundary append that request-local instruction
-to the SystemPrompt and expose no Tools, while keeping the same Run, durable
-history, context, physical-Attempt accounting, and hard limit. A Provider that
-still returns structured ToolCalls violates the request and fails the Run
-without dispatching them. A successful reserved response records
-`CompletionMode=attempt_limit_finalization` on the terminal Run fact and
-`RunResult`; it therefore remains distinguishable from a natural completion.
-The reserve is disabled by default and does not claim that the underlying task
-succeeded; product-level verification remains independent.
+Reaching either hard limit interrupts the Run. It never manufactures a
+tool-disabled model request or changes a non-converged Run into a successful
+completion. Product-level verification and candidate collection remain
+independent from the Run terminal outcome.
 `interaction.command` is an optional `Many` Slot for structured commands that
 register only with the Gateway. Channels render the Gateway's UI-neutral
 command directory as slash commands, menus, buttons, forms, or command palettes.
@@ -526,9 +518,6 @@ bounded safe diagnostics. The `model` package includes an explicitly installed d
 Completions-compatible Executor with physical Attempt IDs, bounded output,
 retry/reset handling, durable started/terminal Attempt facts, Provider-reported
 token usage, and marked local estimates when a failed request has no usage. If a
-`ModelRequest` sets `DisableToolCalls`, adapters must use the Provider's native
-tool-choice control while retaining any definitions needed to replay prior tool
-history; dropping history or relying on prompt wording is not equivalent. If a
 Provider returns a recognized structured error message, the adapter may record
 only that bounded, single-line, sanitized message next to the stable safe error
 code. Arbitrary response bodies, credentials, headers, and request content are

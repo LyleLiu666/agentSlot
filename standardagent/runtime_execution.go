@@ -43,7 +43,6 @@ type activeRun struct {
 	usedTokens      int64
 	modelAttempts   int64
 	toolCalls       int64
-	completionMode  session.RunCompletionMode
 	controlActor    agent.ActorIdentity
 	// recoveredToolPreflights is non-nil only for the first prepared batch
 	// reconstructed during Runtime open. It reuses the unified journal plan;
@@ -584,9 +583,6 @@ func (r *runtimeInstance) requestModel(run *activeRun, step agent.StepID) (stepO
 			}
 			return stepFailed, "", nil, terminationFromError(session.TerminationModel, agent.CodeModelExecutionFailed, event.Err)
 		case model.EventComplete:
-			if request.DisableToolCalls && len(event.Output.ToolCalls) > 0 {
-				return stepFailed, "", nil, fixedRunTermination(session.TerminationModel, agent.ErrorInternal, agent.CodeModelStreamInvalid)
-			}
 			calls, canceled, err := r.commitCompletion(run, step, assistantMessageID, *event.Output)
 			if canceled {
 				return stepCanceled, "", nil, canceledRunTermination()
@@ -612,9 +608,6 @@ func (r *runtimeInstance) requestModel(run *activeRun, step agent.StepID) (stepO
 			}
 			if continued {
 				return stepContinue, next, nil, nil
-			}
-			if request.DisableToolCalls {
-				run.completionMode = session.RunCompletionAttemptLimitFinalization
 			}
 			return stepNatural, "", nil, nil
 		}
@@ -1271,9 +1264,6 @@ func (r *runtimeInstance) finishRun(run *activeRun, outcome stepOutcome, termina
 		ModelConfig: cloneRuntimeConfig(run.config), ConfigRevision: run.configRevision,
 		Termination: cloneRunTermination(termination),
 	}
-	if terminalKind == session.RunCompleted {
-		terminal.CompletionMode = run.completionMode
-	}
 	changes = append(changes, session.Change{Kind: session.AppendRunFact, RunFact: &terminal})
 	idle := session.RunStateChange{RunID: run.id, State: session.RunIdle}
 	changes = append(changes, session.Change{Kind: session.SetRunState, RunState: &idle})
@@ -1536,13 +1526,10 @@ func (r *runtimeInstance) publishCommitObservations(changes []session.Change, ac
 			identity := observe.Identity{SessionID: r.id(), RunID: change.RunFact.RunID, Actor: actor}
 			r.components.observations.publishTrace(observe.TraceRecord{Kind: kind, At: now, Identity: identity})
 			if change.RunFact.Kind != session.RunStarted {
-				attributes := map[string]string{"outcome": outcome}
-				if change.RunFact.CompletionMode != "" {
-					attributes["completion_mode"] = string(change.RunFact.CompletionMode)
-				}
 				r.components.observations.publishMetric(observe.MetricRecord{
 					Name: observe.MetricRunTotal, Kind: observe.MetricCounter, Value: 1, At: now,
-					Identity: identity, Attributes: attributes,
+					Identity:   identity,
+					Attributes: map[string]string{"outcome": outcome},
 				})
 			}
 		}

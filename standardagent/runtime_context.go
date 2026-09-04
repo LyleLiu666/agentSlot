@@ -202,33 +202,16 @@ func latestHistorySequence(history []session.HistoryFact) session.HistorySequenc
 }
 
 func (r *runtimeInstance) assembleModelRequest(run *activeRun, step agent.StepID, dynamic []model.Input) model.ModelRequest {
-	disableToolCalls := false
-	if reserve := r.components.config.FinalResponseAttemptReserve; reserve > 0 &&
-		r.components.config.MaxModelAttemptsPerRun-run.modelAttempts <= reserve {
-		disableToolCalls = true
-	}
 	inputs := make([]model.Input, 0, len(dynamic)+1)
-	prompt := r.components.config.SystemPrompt
-	if disableToolCalls {
-		instruction := strings.TrimSpace(r.components.config.FinalResponseInstruction)
-		if prompt == "" {
-			prompt = instruction
-		} else {
-			prompt += "\n\n" + instruction
-		}
-	}
-	if prompt != "" {
+	if r.components.config.SystemPrompt != "" {
+		prompt := r.components.config.SystemPrompt
 		inputs = append(inputs, model.Input{SystemPrompt: &prompt})
 	}
 	inputs = append(inputs, cloneRuntimeInputs(dynamic)...)
-	tools := r.components.dispatcher.definitions()
-	if disableToolCalls {
-		tools = nil
-	}
 	return model.ModelRequest{
 		SessionID: r.id(), RunID: run.id, StepID: step,
 		Config: cloneRuntimeConfig(run.config), ConfigRevision: run.configRevision,
-		Inputs: inputs, Tools: tools, DisableToolCalls: disableToolCalls,
+		Inputs: inputs, Tools: r.components.dispatcher.definitions(),
 	}
 }
 

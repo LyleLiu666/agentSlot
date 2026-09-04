@@ -136,7 +136,6 @@ func aggregateRunResult(snapshot interaction.SessionView, inputID agent.MessageI
 		}
 		if fact.Run != nil && fact.Run.RunID == result.RunID && fact.Run.Kind != session.RunStarted {
 			result.Outcome = fact.Run.Kind
-			result.CompletionMode = fact.Run.CompletionMode
 		}
 	}
 	if !result.Outcome.Valid() || result.Outcome == session.RunStarted {

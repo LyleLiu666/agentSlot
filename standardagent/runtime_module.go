@@ -4,7 +4,6 @@ import (
 	stdcontext "context"
 	"fmt"
 	"reflect"
-	"strings"
 
 	agentslot "github.com/LyleLiu666/agentSlot"
 	agentcontext "github.com/LyleLiu666/agentSlot/context"
@@ -98,16 +97,6 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 			}
 			if m.config.MaxToolCallsPerRun < 0 {
 				return nil, fmt.Errorf("standardagent: MaxToolCallsPerRun cannot be negative")
-			}
-			if m.config.FinalResponseAttemptReserve < 0 {
-				return nil, fmt.Errorf("standardagent: FinalResponseAttemptReserve cannot be negative")
-			}
-			if reserve := m.config.FinalResponseAttemptReserve; reserve > 0 &&
-				(m.config.MaxModelAttemptsPerRun <= 0 || reserve >= m.config.MaxModelAttemptsPerRun) {
-				return nil, fmt.Errorf("standardagent: FinalResponseAttemptReserve must be smaller than MaxModelAttemptsPerRun")
-			}
-			if m.config.FinalResponseAttemptReserve > 0 && strings.TrimSpace(m.config.FinalResponseInstruction) == "" {
-				return nil, fmt.Errorf("standardagent: FinalResponseInstruction is required when FinalResponseAttemptReserve is enabled")
 			}
 			if m.config.MaxInlineToolResultBytes < 0 {
 				return nil, fmt.Errorf("standardagent: MaxInlineToolResultBytes cannot be negative")

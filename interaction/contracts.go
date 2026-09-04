@@ -149,7 +149,6 @@ type RunResult struct {
 	InputMessageID    agent.MessageID
 	Revision          agent.Revision
 	Outcome           session.RunFactKind
-	CompletionMode    session.RunCompletionMode
 	AssistantMessages []agent.Message
 	// ExtensionDiagnostics contains at most MaxRunExtensionDiagnostics newest
 	// entries owned by this Run. It never includes lifecycle or another Run's
