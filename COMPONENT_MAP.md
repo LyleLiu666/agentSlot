@@ -89,7 +89,10 @@ been opened occupy no Runtime. This is the standard architecture boundary, not
 a first-version compromise.
 
 An immutable AgentRuntimeConfig snapshot supplies SystemPrompt, ToolKeys,
-MaxInlineToolResultBytes, and Context settings for one Runtime lifetime. An Agent-level default initializes
+MaxInlineToolResultBytes, Context settings, and default-off per-Run model-attempt
+and ToolCall limits for one Runtime lifetime. The fixed Runtime enforces those
+limits from append-only History before Provider dispatch or Tool effects; a
+ToolCall batch is admitted or rejected as a whole. An Agent-level default initializes
 new Sessions, while each Session durably owns its current provider, model,
 reasoning, and model parameters as SessionModelConfig. That model configuration
 may be changed explicitly while the Runtime is idle and is snapshotted for each

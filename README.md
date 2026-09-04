@@ -379,6 +379,12 @@ any Tool also requires a positive `MaxInlineToolResultBytes`; Runtime supplies
 that budget to every invocation and fails the Run on a violating result. AgentHook
 only proposes follow-on input before Run completion; applied Session commits are
 observed separately through the asynchronous `session.commit.observer` chain.
+Products may also set `MaxModelAttemptsPerRun` and `MaxToolCallsPerRun` as
+independent Run safety limits. Both default to zero (unlimited). Runtime checks
+the physical-attempt limit before Provider dispatch and rejects a ToolCall batch
+before persistence or effects when the whole batch does not fit. The rejected
+operation is recorded as an append-only `RunLimitExceededFact`; no keyword,
+tool-name, or model-generated "progress" heuristic participates in enforcement.
 `interaction.command` is an optional `Many` Slot for structured commands that
 register only with the Gateway. Channels render the Gateway's UI-neutral
 command directory as slash commands, menus, buttons, forms, or command palettes.
@@ -534,7 +540,7 @@ complete versioned logical requests. `LatestOnly` keeps only the newest request;
 `RetainAll` also preserves every prior Step request, including its prompt, model
 configuration, tools, and attachment projection. It runs ordered ContextSource and Hook
 chains, enforces model protocol, hard context limits, and the optional per-Run
-token budget. ContextContribution facts are projected only into their exact
+token, model-attempt, and ToolCall limits. ContextContribution facts are projected only into their exact
 Run/Step, so append-only audit history does not cause one-shot extension or
 ContextSource payloads to be resent on every later model request. The Runtime projects unsupported
 attachments without rewriting History, and validates idle-only model switches
@@ -623,7 +629,8 @@ file-backed Sessions, the OpenAI-compatible Executor, fixed Runtime/Gateway,
 CLI, model command, Policy/Approval, Bash, file and HTTP tools, and JSON Lines
 observations. It never obtains an AgentRuntime or branches on a concrete
 component type. Its Runtime explicitly selects `LatestOnly`, an unlimited
-per-Run token budget, a strict ToolKeys allowlist, and a local CLI ActorIdentity.
+per-Run token budget, default-off attempt/ToolCall limits, a strict ToolKeys
+allowlist, and a local CLI ActorIdentity.
 The end-to-end test also attaches an in-process Channel to the same Gateway and
 verifies persisted Context, paired physical Attempts, tool facts, resume, View,
 and cursor-based History pagination.

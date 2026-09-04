@@ -8,6 +8,11 @@ when real consumers expose a flawed boundary.
 
 ### Added
 
+- Added default-off per-Run limits for physical model attempts and admitted
+  ToolCalls. The fixed Runtime enforces them before Provider dispatch or Tool
+  effects, rejects an over-limit ToolCall batch atomically, rebuilds counts
+  from append-only History, and records an exact `RunLimitExceededFact` with a
+  distinct terminal code.
 - Added the provider-neutral ExtensionJournal persistence prerequisite with
   immutable invocation identity, semantic typed-input digests, separate
   command/effect/context state, pending-to-unknown recovery, bounded safe
@@ -19,6 +24,9 @@ when real consumers expose a flawed boundary.
 
 ### Compatibility and maturity
 
+- `HistoryFact`, `Change`, and `AgentRuntimeConfig` gain public fields and
+  values. Session files remain append-only and readable by this release, but an
+  older binary cannot read a file after it contains a `RunLimitExceededFact`.
 - FileStore continues writing `agentslot.session-file/v1` while a Session has
   no ExtensionJournal entries. Its first real entry atomically upgrades that
   Session to `agentslot.session-file/v2`; new code reads both and never

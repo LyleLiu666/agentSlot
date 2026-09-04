@@ -333,6 +333,18 @@ func rewriteForFork(source Snapshot, newSessionID agent.SessionID, agentID agent
 			budget.RunID = runID(budget.RunID)
 			fact.RunBudgetExceeded = &budget
 		}
+		if fact.RunLimitExceeded != nil {
+			limit := *fact.RunLimitExceeded
+			limit.RunID = runID(limit.RunID)
+			limit.StepID = stepID(limit.StepID)
+			if limit.TriggerAttemptID != "" {
+				limit.TriggerAttemptID = attemptID(limit.TriggerAttemptID)
+			}
+			if limit.TriggerToolCallID != "" {
+				limit.TriggerToolCallID = callID(limit.TriggerToolCallID)
+			}
+			fact.RunLimitExceeded = &limit
+		}
 	}
 	// A complete-history fork copies canonical conversation facts. Model-facing
 	// Context is re-derived for the child's selected model; pending delivery and

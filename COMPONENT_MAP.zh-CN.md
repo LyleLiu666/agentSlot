@@ -73,7 +73,9 @@ Session-to-Runtime 注册表和固定 Gateway。框架内部 Runtime 协调器�
 Runtime。这是标准架构边界，不是第一版的妥协。
 
 一个不可变 AgentRuntimeConfig 快照为 Runtime 生命周期提供 SystemPrompt、ToolKeys、
-MaxInlineToolResultBytes 和 Context 配置。Agent 级默认模型只初始化新 Session；每个 Session 通过
+MaxInlineToolResultBytes、Context 配置，以及默认关闭的每 Run 模型 Attempt/ToolCall 数量上限。
+固定 Runtime 根据 append-only History 重建计数，并在 Provider dispatch 或工具副作用之前执行上限；
+一个 ToolCall 批次只能整批接纳或整批拒绝。Agent 级默认模型只初始化新 Session；每个 Session 通过
 SessionModelConfig 持久保存当前 Provider、Model、Reasoning 和模型参数。该配置可以
 在 Runtime idle 时显式修改，并在每个 Run 开始时冻结快照。SystemPrompt 和工具
 Schema 在模型请求中装配，不能仅因为模型可见就反复写成 History 事实。

@@ -35,6 +35,10 @@ type AgentRuntimeConfig struct {
 	Context              ContextConfig
 	ContextRetentionMode ContextRetentionMode
 	MaxTokensPerRun      int64
+	// MaxModelAttemptsPerRun and MaxToolCallsPerRun are optional Run safety
+	// limits. Zero disables the corresponding limit.
+	MaxModelAttemptsPerRun int64
+	MaxToolCallsPerRun     int64
 	// MaxInlineToolResultBytes is required when ToolKeys is non-empty.
 	MaxInlineToolResultBytes int
 }

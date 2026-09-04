@@ -445,6 +445,10 @@ func applyChanges(snapshot *Snapshot, request CommitRequest) error {
 			if err := appendRunBudgetExceededFact(snapshot, *change.RunBudgetExceeded, request.Actor); err != nil {
 				return err
 			}
+		case AppendRunLimitExceeded:
+			if err := appendRunLimitExceededFact(snapshot, *change.RunLimitExceeded, request.Actor); err != nil {
+				return err
+			}
 		case AppendSessionEvent:
 			event := cloneSessionEvent(*change.SessionEvent)
 			event.Revision = snapshot.Revision.Next()
@@ -694,6 +698,9 @@ func appendRunBudgetExceededFact(snapshot *Snapshot, fact RunBudgetExceededFact,
 		if historyFact.RunBudgetExceeded != nil && historyFact.RunBudgetExceeded.RunID == fact.RunID {
 			return historyConflict("run budget was already exceeded")
 		}
+		if historyFact.RunLimitExceeded != nil && historyFact.RunLimitExceeded.RunID == fact.RunID {
+			return historyConflict("run limit was already exceeded")
+		}
 		attempt := historyFact.ModelAttempt
 		if attempt == nil || attempt.RunID != fact.RunID || attempt.Kind == AttemptStarted {
 			continue
@@ -709,6 +716,45 @@ func appendRunBudgetExceededFact(snapshot *Snapshot, fact RunBudgetExceededFact,
 	}
 	copy := fact
 	return appendHistoryFact(&snapshot.History, snapshot.Session.ID, HistoryFact{RunBudgetExceeded: &copy}, actor)
+}
+
+func appendRunLimitExceededFact(snapshot *Snapshot, fact RunLimitExceededFact, actor agent.ActorIdentity) error {
+	if err := fact.Validate(); err != nil {
+		return historyConflict(err.Error())
+	}
+	if snapshot.RunState != RunRunning || snapshot.ActiveRunID != fact.RunID {
+		return historyConflict("run limit fact requires the active run")
+	}
+	var attempts, calls int64
+	for _, historyFact := range snapshot.History {
+		if historyFact.RunLimitExceeded != nil && historyFact.RunLimitExceeded.RunID == fact.RunID {
+			return historyConflict("run limit was already exceeded")
+		}
+		if historyFact.RunBudgetExceeded != nil && historyFact.RunBudgetExceeded.RunID == fact.RunID {
+			return historyConflict("run budget was already exceeded")
+		}
+		if attempt := historyFact.ModelAttempt; attempt != nil && attempt.RunID == fact.RunID && attempt.Kind == AttemptStarted {
+			attempts++
+			if attempt.AttemptID == fact.TriggerAttemptID {
+				return historyConflict("rejected model attempt was already started")
+			}
+		}
+		if call := historyFact.ToolCall; call != nil && call.RunID == fact.RunID {
+			calls++
+			if call.ID == fact.TriggerToolCallID {
+				return historyConflict("rejected tool call was already admitted")
+			}
+		}
+	}
+	used := attempts
+	if fact.Kind == RunLimitToolCalls {
+		used = calls
+	}
+	if used != fact.Used {
+		return historyConflict("run limit usage differs from durable history")
+	}
+	copy := fact
+	return appendHistoryFact(&snapshot.History, snapshot.Session.ID, HistoryFact{RunLimitExceeded: &copy}, actor)
 }
 
 func appendContextContributionFact(snapshot *Snapshot, fact ContextContributionFact, actor agent.ActorIdentity) error {
@@ -873,9 +919,7 @@ func recoverAggregate(snapshot *Snapshot) (bool, error) {
 			interrupted := *started
 			interrupted.Kind = RunInterrupted
 			interrupted.ModelConfig = cloneModelConfig(started.ModelConfig)
-			interrupted.Termination = &RunTermination{
-				Source: TerminationRuntime, Kind: agent.ErrorUnavailable, Code: agent.CodeRuntimeInterrupted,
-			}
+			interrupted.Termination = recoveredRunTermination(snapshot.History, interruptedRunID)
 			if err := appendHistoryFact(&snapshot.History, snapshot.Session.ID, HistoryFact{Run: &interrupted}, agent.ActorIdentity{}); err != nil {
 				return false, agent.NewError(agent.ErrorInternal, "session.recover", "cannot append interrupted run", err)
 			}
@@ -901,6 +945,23 @@ func recoverAggregate(snapshot *Snapshot) (bool, error) {
 		}
 	}
 	return changed, nil
+}
+
+func recoveredRunTermination(history []HistoryFact, runID agent.RunID) *RunTermination {
+	for index := len(history) - 1; index >= 0; index-- {
+		fact := history[index]
+		if fact.RunLimitExceeded != nil && fact.RunLimitExceeded.RunID == runID {
+			code := agent.CodeRunModelAttemptLimitExceeded
+			if fact.RunLimitExceeded.Kind == RunLimitToolCalls {
+				code = agent.CodeRunToolCallLimitExceeded
+			}
+			return &RunTermination{Source: TerminationBudget, Kind: agent.ErrorUnavailable, Code: code}
+		}
+		if fact.RunBudgetExceeded != nil && fact.RunBudgetExceeded.RunID == runID {
+			return &RunTermination{Source: TerminationBudget, Kind: agent.ErrorUnavailable, Code: agent.CodeRunTokenBudgetExceeded}
+		}
+	}
+	return &RunTermination{Source: TerminationRuntime, Kind: agent.ErrorUnavailable, Code: agent.CodeRuntimeInterrupted}
 }
 
 func validateContext(contextView ContextView, sessionID agent.SessionID) error {
@@ -1050,6 +1111,9 @@ func validateHistoryConsistency(sessionID agent.SessionID, history []HistoryFact
 	attemptTerminals := make(map[agent.AttemptID]bool)
 	attemptUsage := make(map[agent.RunID]int64)
 	budgetSeen := make(map[agent.RunID]bool)
+	limitSeen := make(map[agent.RunID]bool)
+	attemptCounts := make(map[agent.RunID]int64)
+	toolCallCounts := make(map[agent.RunID]int64)
 	contributions := make(map[string]bool)
 	for _, fact := range history {
 		if err := fact.validatePayload(sessionID); err != nil {
@@ -1073,6 +1137,7 @@ func validateHistoryConsistency(sessionID agent.SessionID, history []HistoryFact
 				return historyConflict("initial tool call containment differs from its assistant message")
 			}
 			calls[fact.ToolCall.ID] = true
+			toolCallCounts[fact.ToolCall.RunID]++
 		}
 		if fact.ToolResult != nil {
 			if !calls[fact.ToolResult.CallID] || results[fact.ToolResult.CallID] {
@@ -1108,6 +1173,7 @@ func validateHistoryConsistency(sessionID agent.SessionID, history []HistoryFact
 					return historyConflict("initial model attempt does not match an active frozen run")
 				}
 				attemptStarts[attempt.AttemptID] = attempt
+				attemptCounts[attempt.RunID]++
 			} else {
 				started := attemptStarts[attempt.AttemptID]
 				if started == nil || attemptTerminals[attempt.AttemptID] {
@@ -1137,10 +1203,22 @@ func validateHistoryConsistency(sessionID agent.SessionID, history []HistoryFact
 		}
 		if fact.RunBudgetExceeded != nil {
 			budget := fact.RunBudgetExceeded
-			if runStarts[budget.RunID] == nil || runTerminals[budget.RunID] || budgetSeen[budget.RunID] || attemptUsage[budget.RunID] != budget.UsedTokens {
+			if runStarts[budget.RunID] == nil || runTerminals[budget.RunID] || budgetSeen[budget.RunID] || limitSeen[budget.RunID] || attemptUsage[budget.RunID] != budget.UsedTokens {
 				return historyConflict("initial run budget fact is inconsistent with durable attempts")
 			}
 			budgetSeen[budget.RunID] = true
+		}
+		if fact.RunLimitExceeded != nil {
+			limit := fact.RunLimitExceeded
+			used := attemptCounts[limit.RunID]
+			if limit.Kind == RunLimitToolCalls {
+				used = toolCallCounts[limit.RunID]
+			}
+			triggerExists := attemptStarts[limit.TriggerAttemptID] != nil || calls[limit.TriggerToolCallID]
+			if runStarts[limit.RunID] == nil || runTerminals[limit.RunID] || budgetSeen[limit.RunID] || limitSeen[limit.RunID] || triggerExists || used != limit.Used {
+				return historyConflict("initial run limit fact is inconsistent with durable history")
+			}
+			limitSeen[limit.RunID] = true
 		}
 	}
 	for _, entry := range journal {

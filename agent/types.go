@@ -319,6 +319,8 @@ const (
 	CodeLoopProtocolViolation             ErrorCode = "loop_protocol_violation"
 	CodeToolExecutionFailed               ErrorCode = "tool_execution_failed"
 	CodeRunTokenBudgetExceeded            ErrorCode = "run_token_budget_exceeded"
+	CodeRunModelAttemptLimitExceeded      ErrorCode = "run_model_attempt_limit_exceeded"
+	CodeRunToolCallLimitExceeded          ErrorCode = "run_tool_call_limit_exceeded"
 	CodeRunWaiting                        ErrorCode = "run_waiting"
 	CodeSessionOperationFailed            ErrorCode = "session_operation_failed"
 	CodeInputRejected                     ErrorCode = "input_rejected"

@@ -81,6 +81,8 @@ func factContainment(history []HistoryFact, fact HistoryFact) (agent.RunID, agen
 		return fact.ContextContribution.RunID, fact.ContextContribution.StepID
 	case fact.RunBudgetExceeded != nil:
 		return fact.RunBudgetExceeded.RunID, ""
+	case fact.RunLimitExceeded != nil:
+		return fact.RunLimitExceeded.RunID, fact.RunLimitExceeded.StepID
 	}
 	return "", ""
 }

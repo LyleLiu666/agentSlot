@@ -92,6 +92,12 @@ func (m *runtimeModule) Register(reg agentslot.Registrar) error {
 			if m.config.MaxTokensPerRun < 0 {
 				return nil, fmt.Errorf("standardagent: MaxTokensPerRun cannot be negative")
 			}
+			if m.config.MaxModelAttemptsPerRun < 0 {
+				return nil, fmt.Errorf("standardagent: MaxModelAttemptsPerRun cannot be negative")
+			}
+			if m.config.MaxToolCallsPerRun < 0 {
+				return nil, fmt.Errorf("standardagent: MaxToolCallsPerRun cannot be negative")
+			}
 			if m.config.MaxInlineToolResultBytes < 0 {
 				return nil, fmt.Errorf("standardagent: MaxInlineToolResultBytes cannot be negative")
 			}

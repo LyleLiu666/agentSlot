@@ -41,6 +41,8 @@ type activeRun struct {
 	prepareOnce     sync.Once
 	prepareRevision agent.Revision
 	usedTokens      int64
+	modelAttempts   int64
+	toolCalls       int64
 	controlActor    agent.ActorIdentity
 	// recoveredToolPreflights is non-nil only for the first prepared batch
 	// reconstructed during Runtime open. It reuses the unified journal plan;
@@ -78,11 +80,9 @@ func (r *runtimeInstance) restorePreparedRun(snapshot session.Snapshot, recovery
 	if len(calls) > 0 && len(completionEntries) > 0 {
 		return agent.NewError(agent.ErrorInternal, "standardagent.restore", "running Session has conflicting resumable work", nil)
 	}
-	if (len(calls) == 0 || !step.Valid()) && len(completionEntries) == 0 {
-		return agent.NewError(agent.ErrorInternal, "standardagent.restore", "running Session has no resumable prepared ToolCall", nil)
-	}
 	var started *session.RunFact
-	var usedTokens int64
+	var usedTokens, modelAttempts, toolCalls int64
+	var persistedTermination *session.RunTermination
 	for _, fact := range snapshot.History {
 		if fact.Run != nil && fact.Run.RunID == snapshot.ActiveRunID && fact.Run.Kind == session.RunStarted {
 			copy := *fact.Run
@@ -90,6 +90,18 @@ func (r *runtimeInstance) restorePreparedRun(snapshot session.Snapshot, recovery
 		}
 		if fact.ModelAttempt != nil && fact.ModelAttempt.RunID == snapshot.ActiveRunID && fact.ModelAttempt.Kind != session.AttemptStarted {
 			usedTokens += fact.ModelAttempt.Usage.TotalTokens
+		}
+		if fact.ModelAttempt != nil && fact.ModelAttempt.RunID == snapshot.ActiveRunID && fact.ModelAttempt.Kind == session.AttemptStarted {
+			modelAttempts++
+		}
+		if fact.ToolCall != nil && fact.ToolCall.RunID == snapshot.ActiveRunID {
+			toolCalls++
+		}
+		if fact.RunBudgetExceeded != nil && fact.RunBudgetExceeded.RunID == snapshot.ActiveRunID {
+			persistedTermination = budgetRunTermination()
+		}
+		if fact.RunLimitExceeded != nil && fact.RunLimitExceeded.RunID == snapshot.ActiveRunID {
+			persistedTermination = runLimitTermination(runLimitCode(fact.RunLimitExceeded.Kind))
 		}
 	}
 	if started == nil {
@@ -99,7 +111,20 @@ func (r *runtimeInstance) restorePreparedRun(snapshot session.Snapshot, recovery
 	run := &activeRun{
 		id: snapshot.ActiveRunID, config: cloneRuntimeConfig(started.ModelConfig), configRevision: started.ConfigRevision,
 		ctx: runContext, cancel: cancel, done: make(chan struct{}), prepared: make(chan struct{}), usedTokens: usedTokens,
+		modelAttempts: modelAttempts, toolCalls: toolCalls,
 		recoveredToolPreflights: extensionEntriesForRun(recovery.toolPreflight, snapshot.ActiveRunID),
+	}
+	if persistedTermination != nil {
+		if len(calls) > 0 || len(completionEntries) > 0 {
+			return agent.NewError(agent.ErrorInternal, "standardagent.restore", "limited Run still has resumable work", nil)
+		}
+		r.activateLocked(run)
+		run.signalPrepared(snapshot.Revision)
+		go r.finishRun(run, stepBudgetExceeded, persistedTermination)
+		return nil
+	}
+	if (len(calls) == 0 || !step.Valid()) && len(completionEntries) == 0 {
+		return agent.NewError(agent.ErrorInternal, "standardagent.restore", "running Session has no resumable prepared ToolCall", nil)
 	}
 	var completion *completionOccurrence
 	if len(completionEntries) > 0 {
@@ -504,6 +529,9 @@ func (r *runtimeInstance) requestModel(run *activeRun, step agent.StepID) (stepO
 			}
 			return stepBudgetExceeded, "", nil, budgetRunTermination()
 		}
+		if code, ok := runLimitErrorCode(err); ok {
+			return stepBudgetExceeded, "", nil, runLimitTermination(code)
+		}
 		if errors.Is(err, context.Canceled) {
 			return stepCanceled, "", nil, canceledRunTermination()
 		}
@@ -526,6 +554,9 @@ func (r *runtimeInstance) requestModel(run *activeRun, step agent.StepID) (stepO
 				}
 				return stepBudgetExceeded, "", nil, budgetRunTermination()
 			}
+			if code, ok := runLimitErrorCode(err); ok {
+				return stepBudgetExceeded, "", nil, runLimitTermination(code)
+			}
 			if errors.Is(err, context.Canceled) {
 				return stepCanceled, "", nil, canceledRunTermination()
 			}
@@ -547,6 +578,9 @@ func (r *runtimeInstance) requestModel(run *activeRun, step agent.StepID) (stepO
 				}
 				return stepBudgetExceeded, "", nil, budgetRunTermination()
 			}
+			if code, ok := runLimitErrorCode(event.Err); ok {
+				return stepBudgetExceeded, "", nil, runLimitTermination(code)
+			}
 			return stepFailed, "", nil, terminationFromError(session.TerminationModel, agent.CodeModelExecutionFailed, event.Err)
 		case model.EventComplete:
 			calls, canceled, err := r.commitCompletion(run, step, assistantMessageID, *event.Output)
@@ -554,6 +588,9 @@ func (r *runtimeInstance) requestModel(run *activeRun, step agent.StepID) (stepO
 				return stepCanceled, "", nil, canceledRunTermination()
 			}
 			if err != nil {
+				if code, ok := runLimitErrorCode(err); ok {
+					return stepBudgetExceeded, "", nil, runLimitTermination(code)
+				}
 				return stepFailed, "", nil, terminationFromError(session.TerminationSession, agent.CodeSessionOperationFailed, err)
 			}
 			if len(calls) > 0 {
@@ -610,13 +647,20 @@ func (a *runtimeAttemptRecorder) Started(ctx context.Context, started model.Atte
 	}
 	r := a.runtime
 	r.mu.Lock()
-	if r.active != a.run || r.closing {
+	if r.active != a.run || r.closing || a.run.cancelRequested {
 		r.mu.Unlock()
 		return context.Canceled
 	}
 	if started.ProviderKey != a.run.config.ProviderKey || started.ModelID != a.run.config.ModelID {
 		r.mu.Unlock()
 		return agent.NewError(agent.ErrorInvalidInput, "standardagent.model_attempt", "Executor attempt does not match the frozen Run model", nil)
+	}
+	if exceeded, err := r.recordModelAttemptLimitLocked(a.run, a.step, started.AttemptID); exceeded || err != nil {
+		r.mu.Unlock()
+		if err != nil {
+			return err
+		}
+		return modelAttemptLimitError()
 	}
 	identity := model.AttemptIdentity{
 		SessionID: r.id(), RunID: a.run.id, StepID: a.step, AttemptID: started.AttemptID,
@@ -638,6 +682,13 @@ func (a *runtimeAttemptRecorder) Started(ctx context.Context, started model.Atte
 		r.mu.Unlock()
 		return compensateAttemptStart(ctx, identity, accepted, context.Canceled)
 	}
+	if exceeded, err := r.recordModelAttemptLimitLocked(a.run, a.step, started.AttemptID); exceeded || err != nil {
+		r.mu.Unlock()
+		if err == nil {
+			err = modelAttemptLimitError()
+		}
+		return compensateAttemptStart(ctx, identity, accepted, err)
+	}
 	snapshot, err := r.viewLocked(context.Background())
 	if err != nil {
 		r.mu.Unlock()
@@ -651,6 +702,7 @@ func (a *runtimeAttemptRecorder) Started(ctx context.Context, started model.Atte
 		r.mu.Unlock()
 		return compensateAttemptStart(ctx, identity, accepted, err)
 	}
+	a.run.modelAttempts++
 	a.run.signalPrepared(r.revision())
 	r.observeModelAttempt(observe.TraceModelAttemptStarted, a.run, a.step, started.AttemptID)
 	r.components.observations.publishMetric(observe.MetricRecord{
@@ -663,6 +715,30 @@ func (a *runtimeAttemptRecorder) Started(ctx context.Context, started model.Atte
 	})
 	r.mu.Unlock()
 	return nil
+}
+
+// recordModelAttemptLimitLocked checks again at the durable attempt-start
+// boundary. The second check after observers prevents concurrent Executor
+// callbacks from admitting more physical attempts than configured.
+func (r *runtimeInstance) recordModelAttemptLimitLocked(run *activeRun, step agent.StepID, attemptID agent.AttemptID) (bool, error) {
+	maximum := r.components.config.MaxModelAttemptsPerRun
+	if maximum <= 0 || run.modelAttempts < maximum {
+		return false, nil
+	}
+	snapshot, err := r.viewLocked(context.Background())
+	if err != nil {
+		return true, err
+	}
+	fact := session.RunLimitExceededFact{
+		RunID: run.id, StepID: step, Kind: session.RunLimitModelAttempts,
+		Used: run.modelAttempts, Max: maximum, Requested: 1, TriggerAttemptID: attemptID,
+	}
+	return true, r.recordRunLimitExceededLocked(snapshot, fact)
+}
+
+func modelAttemptLimitError() error {
+	return agent.NewCodedError(agent.ErrorUnavailable, agent.CodeRunModelAttemptLimitExceeded,
+		"standardagent.model_attempt", "Run model attempt limit exceeded", nil)
 }
 
 func compensateAttemptStart(ctx context.Context, identity model.AttemptIdentity, accepted []model.AttemptObserver, cause error) error {
@@ -802,16 +878,30 @@ func (r *runtimeInstance) commitCompletion(run *activeRun, step agent.StepID, me
 			State: append(json.RawMessage(nil), output.Continuation...),
 		}
 	}
-	changes := []session.Change{{Kind: session.AppendMessage, Message: &assistant}}
 	calls := make([]agent.ToolCall, 0, len(output.ToolCalls))
-	preparedRevision := snapshot.Revision.Next()
-	nextExtensionSequence := session.ExtensionSequence(len(snapshot.ExtensionJournal) + 1)
 	for _, requested := range output.ToolCalls {
 		call := agent.ToolCall{
 			ID: agent.ToolCallID(r.nextID("call")), MessageID: assistant.ID, SessionID: r.id(),
 			RunID: run.id, StepID: step, CorrelationID: requested.CorrelationID,
 			Name: requested.Name, Arguments: append([]byte(nil), requested.Arguments...),
 		}
+		calls = append(calls, call)
+	}
+	if maximum := r.components.config.MaxToolCallsPerRun; maximum > 0 && int64(len(calls)) > maximum-run.toolCalls {
+		fact := session.RunLimitExceededFact{
+			RunID: run.id, StepID: step, Kind: session.RunLimitToolCalls,
+			Used: run.toolCalls, Max: maximum, Requested: int64(len(calls)), TriggerToolCallID: calls[0].ID,
+		}
+		if err := r.recordRunLimitExceededLocked(snapshot, fact); err != nil {
+			return nil, false, err
+		}
+		return nil, false, agent.NewCodedError(agent.ErrorUnavailable, agent.CodeRunToolCallLimitExceeded,
+			"standardagent.tool_calls", "Run tool call limit exceeded", nil)
+	}
+	changes := []session.Change{{Kind: session.AppendMessage, Message: &assistant}}
+	preparedRevision := snapshot.Revision.Next()
+	nextExtensionSequence := session.ExtensionSequence(len(snapshot.ExtensionJournal) + 1)
+	for _, call := range calls {
 		prepared := session.JournalEntry{RunID: run.id, StepID: step, ToolCall: &call, Status: session.JournalPrepared}
 		changes = append(changes,
 			session.Change{Kind: session.AppendToolCall, ToolCall: &call},
@@ -821,10 +911,31 @@ func (r *runtimeInstance) commitCompletion(run *activeRun, step agent.StepID, me
 		if err != nil {
 			return nil, false, err
 		}
-		calls = append(calls, call)
 	}
 	_, err = r.commitLocked(context.Background(), snapshot.Revision, "model-complete", changes)
+	if err == nil {
+		run.toolCalls += int64(len(calls))
+	}
 	return calls, false, err
+}
+
+func (r *runtimeInstance) recordRunLimitExceededLocked(snapshot session.Snapshot, fact session.RunLimitExceededFact) error {
+	_, err := r.commitLocked(context.Background(), snapshot.Revision, "run-limit", []session.Change{{
+		Kind: session.AppendRunLimitExceeded, RunLimitExceeded: &fact,
+	}})
+	return err
+}
+
+func runLimitCode(kind session.RunLimitKind) agent.ErrorCode {
+	if kind == session.RunLimitToolCalls {
+		return agent.CodeRunToolCallLimitExceeded
+	}
+	return agent.CodeRunModelAttemptLimitExceeded
+}
+
+func runLimitErrorCode(err error) (agent.ErrorCode, bool) {
+	code := agent.CodeOf(err)
+	return code, code == agent.CodeRunModelAttemptLimitExceeded || code == agent.CodeRunToolCallLimitExceeded
 }
 
 func (r *runtimeInstance) continueAfterCompletion(run *activeRun) (agent.StepID, bool, bool, error) {
@@ -1199,6 +1310,10 @@ func canceledRunTermination() *session.RunTermination {
 
 func budgetRunTermination() *session.RunTermination {
 	return fixedRunTermination(session.TerminationBudget, agent.ErrorUnavailable, agent.CodeRunTokenBudgetExceeded)
+}
+
+func runLimitTermination(code agent.ErrorCode) *session.RunTermination {
+	return fixedRunTermination(session.TerminationBudget, agent.ErrorUnavailable, code)
 }
 
 func terminationFromError(source session.TerminationSource, fallback agent.ErrorCode, err error) *session.RunTermination {

@@ -188,6 +188,7 @@ const (
 	FactModelConfigChanged  HistoryFactKind = "model_config_changed"
 	FactContextContribution HistoryFactKind = "context_contribution"
 	FactRunBudgetExceeded   HistoryFactKind = "run_budget_exceeded"
+	FactRunLimitExceeded    HistoryFactKind = "run_limit_exceeded"
 )
 
 // HistoryFact is one ordered, append-only fact in a complete Session History.
@@ -211,6 +212,7 @@ type HistoryFact struct {
 	ModelConfigChanged  *ModelConfigChange
 	ContextContribution *ContextContributionFact
 	RunBudgetExceeded   *RunBudgetExceededFact
+	RunLimitExceeded    *RunLimitExceededFact
 }
 
 // Validate checks the payload and its Session containment. Tool results do
@@ -232,7 +234,7 @@ func (f HistoryFact) validatePayload(sessionID agent.SessionID) error {
 	for _, present := range []bool{
 		f.Message != nil, f.ToolCall != nil, f.ToolResult != nil, f.Run != nil,
 		f.ModelAttempt != nil, f.ModelConfigChanged != nil,
-		f.ContextContribution != nil, f.RunBudgetExceeded != nil,
+		f.ContextContribution != nil, f.RunBudgetExceeded != nil, f.RunLimitExceeded != nil,
 	} {
 		if present {
 			count++
@@ -274,6 +276,10 @@ func (f HistoryFact) validatePayload(sessionID agent.SessionID) error {
 		if err := f.RunBudgetExceeded.Validate(); err != nil {
 			return err
 		}
+	case f.RunLimitExceeded != nil:
+		if err := f.RunLimitExceeded.Validate(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -296,6 +302,8 @@ func (f HistoryFact) payloadKind() HistoryFactKind {
 		return FactContextContribution
 	case f.RunBudgetExceeded != nil:
 		return FactRunBudgetExceeded
+	case f.RunLimitExceeded != nil:
+		return FactRunLimitExceeded
 	default:
 		return ""
 	}
@@ -383,6 +391,54 @@ type RunBudgetExceededFact struct {
 func (f RunBudgetExceededFact) Validate() error {
 	if !f.RunID.Valid() || f.MaxTokens <= 0 || f.UsedTokens < f.MaxTokens {
 		return fmt.Errorf("session: invalid run budget fact")
+	}
+	return nil
+}
+
+// RunLimitKind names a countable, provider-neutral unit that may be bounded
+// for one Run. A zero Runtime limit disables enforcement; persisted facts only
+// describe a positive limit that rejected the next operation.
+type RunLimitKind string
+
+const (
+	RunLimitModelAttempts RunLimitKind = "model_attempts"
+	RunLimitToolCalls     RunLimitKind = "tool_calls"
+)
+
+func (k RunLimitKind) Valid() bool {
+	return k == RunLimitModelAttempts || k == RunLimitToolCalls
+}
+
+// RunLimitExceededFact records the exact durable count before an operation
+// was rejected. Requested is kept separate so an oversized ToolCall batch can
+// be rejected atomically without pretending that part of the batch ran.
+type RunLimitExceededFact struct {
+	RunID             agent.RunID
+	StepID            agent.StepID
+	Kind              RunLimitKind
+	Used              int64
+	Max               int64
+	Requested         int64
+	TriggerAttemptID  agent.AttemptID
+	TriggerToolCallID agent.ToolCallID
+}
+
+func (f RunLimitExceededFact) Validate() error {
+	if !f.RunID.Valid() || !f.StepID.Valid() || !f.Kind.Valid() || f.Used < 0 || f.Max <= 0 || f.Requested <= 0 {
+		return fmt.Errorf("session: invalid run limit fact")
+	}
+	if f.Used < f.Max && f.Requested <= f.Max-f.Used {
+		return fmt.Errorf("session: run limit fact does not exceed its maximum")
+	}
+	switch f.Kind {
+	case RunLimitModelAttempts:
+		if !f.TriggerAttemptID.Valid() || f.TriggerToolCallID != "" {
+			return fmt.Errorf("session: model attempt limit requires only an attempt trigger")
+		}
+	case RunLimitToolCalls:
+		if !f.TriggerToolCallID.Valid() || f.TriggerAttemptID != "" {
+			return fmt.Errorf("session: tool call limit requires only a tool call trigger")
+		}
 	}
 	return nil
 }
@@ -802,6 +858,7 @@ const (
 	AppendModelAttempt        ChangeKind = "append_model_attempt"
 	AppendContextContribution ChangeKind = "append_context_contribution"
 	AppendRunBudgetExceeded   ChangeKind = "append_run_budget_exceeded"
+	AppendRunLimitExceeded    ChangeKind = "append_run_limit_exceeded"
 	AppendSessionEvent        ChangeKind = "append_session_event"
 	EnqueueMessage            ChangeKind = "enqueue_message"
 	ClaimQueue                ChangeKind = "claim_queue"
@@ -827,6 +884,7 @@ type Change struct {
 	ModelAttempt          *ModelAttemptFact
 	ContextContribution   *ContextContributionFact
 	RunBudgetExceeded     *RunBudgetExceededFact
+	RunLimitExceeded      *RunLimitExceededFact
 	SessionEvent          *SessionEvent
 	QueueItem             *QueueItem
 	QueueClaim            *QueueClaim
@@ -895,6 +953,13 @@ func (c Change) Validate(sessionID agent.SessionID) error {
 			return fmt.Errorf("session: appended run budget fact is missing")
 		}
 		if err := c.RunBudgetExceeded.Validate(); err != nil {
+			return err
+		}
+	case AppendRunLimitExceeded:
+		if c.RunLimitExceeded == nil {
+			return fmt.Errorf("session: appended run limit fact is missing")
+		}
+		if err := c.RunLimitExceeded.Validate(); err != nil {
 			return err
 		}
 	case AppendSessionEvent:
@@ -973,6 +1038,7 @@ func (c Change) payloadCount() int {
 		c.ModelAttempt != nil,
 		c.ContextContribution != nil,
 		c.RunBudgetExceeded != nil,
+		c.RunLimitExceeded != nil,
 		c.SessionEvent != nil,
 		c.QueueItem != nil,
 		c.QueueClaim != nil,

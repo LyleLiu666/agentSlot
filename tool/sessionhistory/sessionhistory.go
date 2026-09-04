@@ -218,6 +218,7 @@ type safeFact struct {
 	Run      *safeRun                `json:"run,omitempty"`
 	Model    *safeModelChange        `json:"model,omitempty"`
 	Budget   *safeBudget             `json:"budget,omitempty"`
+	Limit    *safeLimit              `json:"limit,omitempty"`
 }
 
 type safePart struct {
@@ -263,6 +264,13 @@ type safeModelChange struct {
 type safeBudget struct {
 	UsedTokens int64 `json:"used_tokens"`
 	MaxTokens  int64 `json:"max_tokens"`
+}
+
+type safeLimit struct {
+	Kind      session.RunLimitKind `json:"kind"`
+	Used      int64                `json:"used"`
+	Max       int64                `json:"max"`
+	Requested int64                `json:"requested"`
 }
 
 type factUnit struct {
@@ -363,6 +371,12 @@ func projectFact(fact session.HistoryFact) (safeFact, bool) {
 		return projected, true
 	case fact.RunBudgetExceeded != nil:
 		projected.Budget = &safeBudget{UsedTokens: fact.RunBudgetExceeded.UsedTokens, MaxTokens: fact.RunBudgetExceeded.MaxTokens}
+		return projected, true
+	case fact.RunLimitExceeded != nil:
+		projected.Limit = &safeLimit{
+			Kind: fact.RunLimitExceeded.Kind, Used: fact.RunLimitExceeded.Used,
+			Max: fact.RunLimitExceeded.Max, Requested: fact.RunLimitExceeded.Requested,
+		}
 		return projected, true
 	default:
 		// Attempt identity, continuation bytes, Context contributions, FactID,

@@ -112,6 +112,10 @@ func cloneHistoryFact(source HistoryFact) HistoryFact {
 		budget := *source.RunBudgetExceeded
 		copy.RunBudgetExceeded = &budget
 	}
+	if source.RunLimitExceeded != nil {
+		limit := *source.RunLimitExceeded
+		copy.RunLimitExceeded = &limit
+	}
 	return copy
 }
 
