@@ -387,10 +387,16 @@ operation is recorded as an append-only `RunLimitExceededFact`; no keyword,
 tool-name, or model-generated "progress" heuristic participates in enforcement.
 When a product needs an assistant response before that hard boundary, it may
 set `FinalResponseAttemptReserve` to a positive value smaller than
-`MaxModelAttemptsPerRun`. Requests made after the reserved boundary expose no
-Tools, while keeping the same Run, context, physical-Attempt accounting, and
-hard limit. The reserve is disabled by default and does not claim that the
-underlying task succeeded; product-level verification remains independent.
+`MaxModelAttemptsPerRun` and provide a non-blank `FinalResponseInstruction`.
+Requests made after the reserved boundary append that request-local instruction
+to the SystemPrompt and expose no Tools, while keeping the same Run, durable
+history, context, physical-Attempt accounting, and hard limit. A Provider that
+still returns structured ToolCalls violates the request and fails the Run
+without dispatching them. A successful reserved response records
+`CompletionMode=attempt_limit_finalization` on the terminal Run fact and
+`RunResult`; it therefore remains distinguishable from a natural completion.
+The reserve is disabled by default and does not claim that the underlying task
+succeeded; product-level verification remains independent.
 `interaction.command` is an optional `Many` Slot for structured commands that
 register only with the Gateway. Channels render the Gateway's UI-neutral
 command directory as slash commands, menus, buttons, forms, or command palettes.

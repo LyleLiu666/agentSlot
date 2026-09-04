@@ -459,6 +459,19 @@ func (k RunFactKind) Valid() bool {
 	return k == RunStarted || k == RunCompleted || k == RunCanceled || k == RunFailed || k == RunInterrupted
 }
 
+// RunCompletionMode qualifies how a successful Run reached its final
+// assistant response. Empty means an ordinary model-selected completion and
+// preserves the meaning of histories written before this field existed.
+type RunCompletionMode string
+
+const (
+	RunCompletionAttemptLimitFinalization RunCompletionMode = "attempt_limit_finalization"
+)
+
+func (m RunCompletionMode) Valid() bool {
+	return m == "" || m == RunCompletionAttemptLimitFinalization
+}
+
 // MaxRunTerminationMessageBytes bounds the optional, already-sanitized line
 // that can be stored on a non-successful Run terminal fact.
 const MaxRunTerminationMessageBytes = 1024
@@ -526,7 +539,8 @@ type RunFact struct {
 	Kind           RunFactKind
 	ModelConfig    SessionModelConfig
 	ConfigRevision agent.Revision
-	Termination    *RunTermination `json:",omitempty"`
+	CompletionMode RunCompletionMode `json:",omitempty"`
+	Termination    *RunTermination   `json:",omitempty"`
 }
 
 func (f RunFact) Validate(sessionID agent.SessionID) error {
@@ -535,6 +549,12 @@ func (f RunFact) Validate(sessionID agent.SessionID) error {
 	}
 	if err := f.ModelConfig.Validate(); err != nil {
 		return fmt.Errorf("session: run fact model config is invalid: %w", err)
+	}
+	if !f.CompletionMode.Valid() {
+		return fmt.Errorf("session: invalid run completion mode %q", f.CompletionMode)
+	}
+	if f.Kind != RunCompleted && f.CompletionMode != "" {
+		return fmt.Errorf("session: only a completed run can contain a completion mode")
 	}
 	if f.Kind == RunStarted || f.Kind == RunCompleted {
 		if f.Termination != nil {
