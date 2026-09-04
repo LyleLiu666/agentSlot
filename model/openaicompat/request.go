@@ -25,6 +25,7 @@ type chatRequest struct {
 	Model           string        `json:"model"`
 	Messages        []chatMessage `json:"messages"`
 	Tools           []chatTool    `json:"tools,omitempty"`
+	ToolChoice      string        `json:"tool_choice,omitempty"`
 	Stream          bool          `json:"stream"`
 	StreamOptions   streamOptions `json:"stream_options"`
 	Temperature     *float64      `json:"temperature,omitempty"`
@@ -97,6 +98,9 @@ func buildRequest(ctx context.Context, request model.ModelRequest, capabilities 
 		StreamOptions: streamOptions{IncludeUsage: true},
 		Temperature:   cloneFloat(request.Config.Parameters.Temperature),
 		MaxTokens:     cloneInt(request.Config.Parameters.MaxTokens),
+	}
+	if request.DisableToolCalls {
+		wire.ToolChoice = "none"
 	}
 	if request.Config.Reasoning != model.ReasoningDefault {
 		wire.ReasoningEffort = string(request.Config.Reasoning)

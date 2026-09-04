@@ -520,6 +520,9 @@ bounded safe diagnostics. The `model` package includes an explicitly installed d
 Completions-compatible Executor with physical Attempt IDs, bounded output,
 retry/reset handling, durable started/terminal Attempt facts, Provider-reported
 token usage, and marked local estimates when a failed request has no usage. If a
+`ModelRequest` sets `DisableToolCalls`, adapters must use the Provider's native
+tool-choice control while retaining any definitions needed to replay prior tool
+history; dropping history or relying on prompt wording is not equivalent. If a
 Provider returns a recognized structured error message, the adapter may record
 only that bounded, single-line, sanitized message next to the stable safe error
 code. Arbitrary response bodies, credentials, headers, and request content are

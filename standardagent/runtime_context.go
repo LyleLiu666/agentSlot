@@ -209,14 +209,16 @@ func (r *runtimeInstance) assembleModelRequest(run *activeRun, step agent.StepID
 	}
 	inputs = append(inputs, cloneRuntimeInputs(dynamic)...)
 	tools := r.components.dispatcher.definitions()
+	disableToolCalls := false
 	if reserve := r.components.config.FinalResponseAttemptReserve; reserve > 0 &&
 		r.components.config.MaxModelAttemptsPerRun-run.modelAttempts <= reserve {
 		tools = nil
+		disableToolCalls = true
 	}
 	return model.ModelRequest{
 		SessionID: r.id(), RunID: run.id, StepID: step,
 		Config: cloneRuntimeConfig(run.config), ConfigRevision: run.configRevision,
-		Inputs: inputs, Tools: tools,
+		Inputs: inputs, Tools: tools, DisableToolCalls: disableToolCalls,
 	}
 }
 

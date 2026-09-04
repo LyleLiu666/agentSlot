@@ -127,6 +127,10 @@ type ModelRequest struct {
 	ConfigRevision agent.Revision
 	Inputs         []Input
 	Tools          []tool.Definition
+	// DisableToolCalls keeps Tool definitions available for replaying prior
+	// calls while requiring this logical request to produce no new ToolCall.
+	// Provider adapters map it to their native tool-choice control.
+	DisableToolCalls bool
 }
 
 // Input is one ordered model-facing projection item. It preserves canonical
